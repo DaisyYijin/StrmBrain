@@ -1,0 +1,29 @@
+services:
+  strmhub:
+    # 方式一：使用 GitHub Actions 自动构建的镜像（推荐，无需本地构建）
+    image: ghcr.io/daisyyijin/strmhub:latest
+
+    # 方式二：本地构建（注释掉 image，取消注释 build）
+    # build: .
+
+    container_name: strmhub
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 数据持久化（账号、配置、Cookie 等）
+      - strmhub_data:/app/data
+      # 如需映射本地媒体目录（STRM 文件输出目录），取消注释：
+      # - /path/to/your/media:/media
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - AUTH_ENABLED=true
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      - SECRET_KEY=
+      - CORS_ORIGINS=
+      - TZ=Asia/Shanghai
+
+volumes:
+  strmhub_data:
