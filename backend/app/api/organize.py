@@ -238,6 +238,16 @@ async def full_sync(payload: FullSyncRequest):
     _logger = get_logger()
     _logger.info(f"[sync] 全量同步请求: local_media_dir='{payload.local_media_dir}', source_cid='{payload.source_cid}'")
 
+    # 提前创建本地媒体目录，避免同步过程中才发现路径问题
+    from pathlib import Path
+    try:
+        media_dir = Path(payload.local_media_dir.strip())
+        media_dir.mkdir(parents=True, exist_ok=True)
+        _logger.info(f"[sync] 本地媒体目录已就绪: {media_dir.resolve()}")
+    except Exception as e:
+        _logger.error(f"[sync] 创建本地媒体目录失败: {payload.local_media_dir} - {e}")
+        return ApiResponse(code=400, message=f"无法创建本地媒体目录 '{payload.local_media_dir}'：{e}")
+
     try:
         from app.core.progress import progress_manager
         _loop = asyncio.get_running_loop()

@@ -42,3 +42,6 @@ Thumbs.db
 *.rar
 *.zip
 *.7z
+
+# 参考工具（不纳入项目仓库）
+embyExternalUrl-main/

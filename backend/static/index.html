@@ -528,6 +528,24 @@
             height: calc(100vh - 220px);
             min-height: 300px;
         }
+
+        /* 迷你日志面板（同步/整理页面内联） */
+        .mini-log-panel {
+            background: #1e1e1e;
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: Consolas, Monaco, 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+        }
+        .mini-log-line {
+            white-space: pre-wrap;
+            word-break: break-all;
+            padding: 1px 0;
+            color: #d4d4d4;
+        }
         .log-line {
             white-space: pre-wrap;
             word-break: break-all;
@@ -2009,7 +2027,7 @@
             
             <!-- 顶部横条 -->
             <header class="topbar" :class="{ expanded: sidebarCollapsed }">
-                <div class="topbar-item" :class="{ active: tab === 'logs' }" @click="openLogs" title="实时日志">
+                <div class="topbar-item" :class="{ active: tab === 'logs' }" @click="openLogs" @contextmenu.prevent="openLogWindow" title="实时日志（右键新窗口打开）">
                     <svg viewBox="0 0 24 24"><path d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h12v2H3v-2zm0 4h18v2H3v-2zm0 4h12v2H3v-2z"/></svg>
                     <span class="topbar-text">实时日志</span>
                 </div>
@@ -2664,17 +2682,17 @@
                                     <!-- 示例文件名 -->
                                     <div style="display:flex; align-items:flex-start; gap:8px;">
                                         <span style="font-size:12px; color:#909399; flex-shrink:0; min-width:70px; padding-top:2px;">原始文件：</span>
-                                        <code style="word-break:break-all;">电影/动画电影/你的名字.2016.2160p.mkv</code>
+                                        <code style="word-break:break-all; overflow-wrap:anywhere; flex:1; font-size:12px;">电影/动画电影/你的名字.2016.2160p.mkv</code>
                                     </div>
                                     <!-- STRM 文件名 -->
                                     <div style="display:flex; align-items:flex-start; gap:8px;">
                                         <span style="font-size:12px; color:#909399; flex-shrink:0; min-width:70px; padding-top:2px;">STRM 文件：</span>
-                                        <code style="word-break:break-all;">{{ strmExample.filename }}</code>
+                                        <code style="word-break:break-all; overflow-wrap:anywhere; flex:1; font-size:12px;">{{ strmExample.filename }}</code>
                                     </div>
                                     <!-- STRM 内容 -->
                                     <div style="display:flex; align-items:flex-start; gap:8px;">
                                         <span style="font-size:12px; color:#909399; flex-shrink:0; min-width:70px; padding-top:2px;">文件内容：</span>
-                                        <code style="word-break:break-all; color:#409eff; background:#ecf5ff;">{{ strmExample.content }}</code>
+                                        <code style="word-break:break-all; overflow-wrap:anywhere; flex:1; font-size:12px; color:#409eff; background:#ecf5ff; padding:4px 6px; border-radius:4px;">{{ strmExample.content }}</code>
                                     </div>
                                 </div>
                             </div>
@@ -3012,8 +3030,14 @@
                                 {{ organize.running ? '整理中...' : '开始整理' }}
                             </button>
                         </div>
-                        <div v-if="organize.running" style="margin-top:12px; color:#909399; font-size:13px;">
-                            正在扫描和整理文件，请耐心等待...
+                        <div v-if="organize.running" style="margin-top:12px;">
+                            <div style="color:#909399; font-size:13px; margin-bottom:8px;">正在扫描和整理文件，请耐心等待...</div>
+                            <div class="mini-log-panel">
+                                <div v-for="entry in organizeLogs" :key="entry.seq" class="mini-log-line" :class="'log-line-log-' + (entry.level || 'INFO').toLowerCase()">
+                                    <span class="log-source-tag" :class="'log-source-' + (entry.source || 'app')">{{ sourceLabel(entry.source) }}</span>{{ entry.line }}
+                                </div>
+                                <div v-if="organizeLogs.length === 0" style="color:#666;padding:8px 0;">等待日志...</div>
+                            </div>
                         </div>
                       </div>
                     </div>
@@ -3531,8 +3555,14 @@
                                 {{ organize.syncing ? '同步中...' : '开始全量同步' }}
                             </button>
                         </div>
-                        <div v-if="organize.syncing && syncTab === 'full'" style="margin-top:12px; color:#909399; font-size:13px;">
-                            正在扫描和同步文件，请耐心等待...
+                        <div v-if="organize.syncing && syncTab === 'full'" style="margin-top:12px;">
+                            <div style="color:#909399; font-size:13px; margin-bottom:8px;">正在扫描和同步文件，请耐心等待...</div>
+                            <div class="mini-log-panel">
+                                <div v-for="entry in syncLogs" :key="entry.seq" class="mini-log-line" :class="'log-line-log-' + (entry.level || 'INFO').toLowerCase()">
+                                    <span class="log-source-tag" :class="'log-source-' + (entry.source || 'app')">{{ sourceLabel(entry.source) }}</span>{{ entry.line }}
+                                </div>
+                                <div v-if="syncLogs.length === 0" style="color:#666;padding:8px 0;">等待日志...</div>
+                            </div>
                         </div>
                     </div>
 
@@ -5579,6 +5609,15 @@ av:
                     return logs.entries.filter(e => e.level === logs.levelFilter);
                 });
 
+                // 同步相关日志（最近20条，倒序）
+                const syncLogs = computed(() => {
+                    return logs.entries.filter(e => e.source === 'sync' || e.source === '115').slice(0, 20);
+                });
+                // 整理相关日志（最近20条，倒序）
+                const organizeLogs = computed(() => {
+                    return logs.entries.filter(e => e.source === 'organize' || e.source === 'tmdb' || e.source === 'media').slice(0, 20);
+                });
+
                 // 本地账号管理（测试阶段不启用登录验证）
                 const localAccount = reactive({
                     show: false, username: '', oldPassword: '',
@@ -6833,16 +6872,38 @@ av:
 
                 const openLogs = () => {
                     tab.value = 'logs';
-                    // 首次进入或重新进入时重置并拉取
-                    logs.lastSeq = 0;
-                    logs.entries = [];
-                    fetchLogs();
-                    if (logs.timer) clearInterval(logs.timer);
-                    logs.timer = setInterval(fetchLogs, 2000);
+                    // 不重置已有日志，仅确保轮询运行
+                    if (!logs.timer) {
+                        fetchLogs();
+                        logs.timer = setInterval(fetchLogs, 2000);
+                    }
                 };
 
                 const closeLogs = () => {
                     if (logs.timer) { clearInterval(logs.timer); logs.timer = null; }
+                };
+
+                const openLogWindow = () => {
+                    const w = window.open('', 'strmhub_logs', 'width=800,height=600,scrollbars=yes,resizable=yes');
+                    if (!w) { showToast('弹窗被拦截，请允许弹窗后重试'); return; }
+                    const poll = () => {
+                        fetch('/api/logs').then(r => r.json()).then(data => {
+                            if (data.code === 0 && data.data) {
+                                const entries = data.data.entries || [];
+                                const sources = data.data.sources || {};
+                                const html = entries.map(e => {
+                                    const color = e.level === 'ERROR' ? '#f56c6c' : e.level === 'WARNING' ? '#e6a23c' : '#d4d4d4';
+                                    const src = sources[e.source] || e.source || 'APP';
+                                    return `<div style="padding:2px 0;border-bottom:1px solid #333;"><span style="color:#666;font-size:11px;background:#3a3a3a;padding:0 4px;border-radius:2px;margin-right:4px;">${src}</span><span style="color:${color};font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;">${e.line}</span></div>`;
+                                }).join('');
+                                w.document.body.innerHTML = `<div style="background:#1e1e1e;color:#d4d4d4;padding:12px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6;height:100vh;overflow-y:auto;box-sizing:border-box;">${html || '<div style="color:#666;padding:20px;">暂无日志</div>'}</div>`;
+                                w.document.title = '实时日志 - STRMhub';
+                            }
+                        }).catch(() => {});
+                    };
+                    poll();
+                    const timer = setInterval(poll, 2000);
+                    w.addEventListener('beforeunload', () => clearInterval(timer));
                 };
 
                 // 本地账号管理
@@ -7000,6 +7061,10 @@ av:
                     } finally {
                         _loadingConfig = false;
                     }
+
+                    // 启动实时日志轮询（页面加载即开始，不依赖切到日志页）
+                    fetchLogs();
+                    logs.timer = setInterval(fetchLogs, 2000);
 
                     // 连接 WebSocket 进度通道
                     connectWebSocket();
@@ -7537,7 +7602,7 @@ av:
                     tab, configTab, sidebarCollapsed,
                     accounts, loginApps, qr, qrStatusClass, files, toast,
                     version, logs, logViewer, localAccount, accountMenu,
-                    openLogs, closeLogs, clearLogs, toggleLevelFilter, sourceLabel, filteredLogs, openLocalAccount, closeLocalAccount, saveLocalAccount,
+                    openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount,
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
                     hasValidAccount, openLoginModal, closeLoginModal,
                     getQRCode, checkAccount, deleteAccount, appLabel,
