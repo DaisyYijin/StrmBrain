@@ -11,7 +11,7 @@ from pathlib import Path
 from app.api import (v115_router, accounts_router, settings_router,
                      system_router, dashboard_router, organize_router,
                      tools_router, wechat_router,
-                     ai_router, apikeys_router, watcher_router,
+                     ai_router, watcher_router,
                      emby_webhook_router)
 from app.config import HOST, PORT, CORS_ORIGINS, AUTH_ENABLED
 from app.core.auth import verify_token
@@ -125,18 +125,6 @@ async def auth_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        # 先尝试 API Key 认证（sk- 开头）
-        if token.startswith("sk-"):
-            try:
-                from app.core.api_key import validate_api_key
-                if validate_api_key(token):
-                    return await call_next(request)
-            except Exception:
-                pass
-            return JSONResponse(
-                status_code=401,
-                content={"code": 401, "message": "API Key无效或已禁用", "data": None},
-            )
         # JWT token 认证
         try:
             verify_token(token)
@@ -146,20 +134,6 @@ async def auth_middleware(request: Request, call_next):
                 status_code=401,
                 content={"code": 401, "message": "认证失败，请重新登录", "data": None},
             )
-
-    # 支持 X-API-Key 头
-    api_key_header = request.headers.get("X-API-Key", "")
-    if api_key_header.startswith("sk-"):
-        try:
-            from app.core.api_key import validate_api_key
-            if validate_api_key(api_key_header):
-                return await call_next(request)
-        except Exception:
-            pass
-        return JSONResponse(
-            status_code=401,
-            content={"code": 401, "message": "API Key无效或已禁用", "data": None},
-        )
 
     return JSONResponse(
         status_code=401,
@@ -207,7 +181,6 @@ app.include_router(organize_router)
 app.include_router(tools_router)
 app.include_router(wechat_router)
 app.include_router(ai_router)
-app.include_router(apikeys_router)
 app.include_router(watcher_router)
 app.include_router(emby_webhook_router)
 

@@ -1900,21 +1900,6 @@
         .channel-type-badge.webhook { background: #ede7f6; color: #673ab7; }
         .channel-type-badge.wechat_work { background: #e8f5e9; color: #07c160; }
 
-        /* ===== API Key 列表 ===== */
-        .apikey-item {
-            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-            border: 1px solid #ebeef5; border-radius: 6px; margin-bottom: 8px;
-        }
-        .apikey-prefix {
-            font-family: 'Courier New', monospace; font-size: 13px; color: #606266;
-            background: #f5f7fa; padding: 4px 8px; border-radius: 4px;
-        }
-        .apikey-new-display {
-            font-family: 'Courier New', monospace; font-size: 13px; color: #e6a23c;
-            background: #fdf6ec; padding: 8px 12px; border-radius: 6px; word-break: break-all;
-            margin: 8px 0; border: 1px dashed #e6a23c;
-        }
-
         /* ===== 文件监控路径 ===== */
         .watcher-path-item {
             display: flex; align-items: center; gap: 12px; padding: 12px 16px;
@@ -2517,7 +2502,6 @@
                         <div class="config-tab" :class="{ active: configTab === 'strm' }" @click="configTab = 'strm'">STRM 配置</div>
                         <div class="config-tab" :class="{ active: configTab === 'emby_sync' }" @click="configTab = 'emby_sync'">入库刷新</div>
                         <div class="config-tab" :class="{ active: configTab === 'emby_notify' }" @click="configTab = 'emby_notify'">入库通知</div>
-                        <div class="config-tab" :class="{ active: configTab === 'apikeys' }" @click="configTab = 'apikeys'">API密钥</div>
                     </div>
 
                     <!-- 账号登录 -->
@@ -2812,49 +2796,6 @@
                     </div>
                     <!-- /EMBY 入库通知 -->
 
-                    <!-- ===== API密钥 ===== -->
-                    <div v-show="configTab === 'apikeys'">
-                        <div class="feature-card">
-                            <div class="feature-card-header">
-                                <div class="feature-card-title">API密钥管理</div>
-                                <button class="btn btn-small" @click="loadApiKeys" :disabled="apiKeys.loading" style="border:1px solid #dcdfe6;">刷新</button>
-                            </div>
-                            <p style="font-size:13px; color:#909399; margin-bottom:16px;">API密钥用于外部脚本或程序调用本系统接口时的认证，格式为 sk- 开头。</p>
-                            <!-- 新建密钥 -->
-                            <div style="display:flex; gap:8px; margin-bottom:16px;">
-                                <input type="text" v-model="apiKeys.newName" placeholder="密钥名称（如：脚本调用）" style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:14px;">
-                                <button class="btn btn-primary btn-small" @click="createApiKey" :disabled="apiKeys.creating || !apiKeys.newName.trim()">
-                                    {{ apiKeys.creating ? '创建中...' : '创建密钥' }}
-                                </button>
-                            </div>
-                            <!-- 新密钥展示 -->
-                            <div v-if="apiKeys.newKey" class="apikey-new-display">
-                                <div style="margin-bottom:8px; font-weight:bold;">新密钥（仅显示一次，请立即复制保存）：</div>
-                                {{ apiKeys.newKey.key }}
-                                <div style="margin-top:8px;">
-                                    <button class="btn btn-primary btn-small" @click="copyNewApiKey">复制密钥</button>
-                                    <button class="btn btn-small" @click="apiKeys.newKey = null" style="margin-left:8px; border:1px solid #dcdfe6;">关闭</button>
-                                </div>
-                            </div>
-                            <!-- 密钥列表 -->
-                            <div v-if="apiKeys.list.length === 0 && !apiKeys.loading" class="feature-empty">
-                                暂无API密钥
-                            </div>
-                            <div v-else>
-                                <div v-for="key in apiKeys.list" :key="key.id" class="apikey-item">
-                                    <span class="apikey-prefix">{{ key.key_prefix }}</span>
-                                    <span style="flex:1; font-size:14px; color:#303133;">{{ key.name }}</span>
-                                    <span style="font-size:12px; color:#909399;">创建: {{ formatApiKeyTime(key.created_at) }}</span>
-                                    <span v-if="key.last_used_at > 0" style="font-size:12px; color:#909399;">最后使用: {{ formatApiKeyTime(key.last_used_at) }}</span>
-                                    <label class="mini-toggle">
-                                        <input type="checkbox" :checked="key.is_active" @change="toggleApiKeyStatus(key)">
-                                        <span class="mini-slider"></span>
-                                    </label>
-                                    <button class="btn btn-danger btn-small" @click="deleteApiKey(key.id)">删除</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- 通知配置（独立菜单） -->
@@ -7053,7 +6994,6 @@ av:
                         await checkFfprobeStatus();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
-                        if (configTab.value === 'apikeys') await loadApiKeys();
                         if (syncTab.value === 'watcher') await loadWatcherPaths();
                     } catch (e) {
                         console.error('初始化数据加载异常:', e);
@@ -7446,106 +7386,6 @@ av:
                     aiConfig.testing = false;
                 };
 
-                // 6. API密钥管理
-                const apiKeys = reactive({
-                    list: [],
-                    loading: false,
-                    creating: false,
-                    newKey: null,
-                    newName: '',
-                });
-
-                const loadApiKeys = async () => {
-                    apiKeys.loading = true;
-                    try {
-                        const res = await api('/api/api-keys/list');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            apiKeys.list = data.data.keys || data.data || [];
-                        }
-                    } catch (e) {
-                        console.warn('[app] 加载API密钥失败:', e);
-                    }
-                    apiKeys.loading = false;
-                };
-
-                const createApiKey = async () => {
-                    if (!apiKeys.newName.trim()) {
-                        showToast('请输入密钥名称');
-                        return;
-                    }
-                    apiKeys.creating = true;
-                    try {
-                        const res = await api('/api/api-keys/create', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ name: apiKeys.newName })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            apiKeys.newKey = data.data;
-                            apiKeys.newName = '';
-                            showToast('密钥已创建');
-                            loadApiKeys();
-                        } else {
-                            showToast(data.message || '创建失败');
-                        }
-                    } catch (e) {
-                        showToast('创建失败');
-                    }
-                    apiKeys.creating = false;
-                };
-
-                const deleteApiKey = async (id) => {
-                    if (!confirm('确定要删除此API密钥吗？')) return;
-                    try {
-                        const res = await api(`/api/api-keys/${id}`, { method: 'DELETE' });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('密钥已删除');
-                            loadApiKeys();
-                        } else {
-                            showToast(data.message || '删除失败');
-                        }
-                    } catch (e) {
-                        showToast('删除失败');
-                    }
-                };
-
-                const toggleApiKeyStatus = async (key) => {
-                    try {
-                        const res = await api(`/api/api-keys/${key.id}/status`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ is_active: !key.is_active })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('状态已更新');
-                            loadApiKeys();
-                        } else {
-                            showToast(data.message || '操作失败');
-                        }
-                    } catch (e) {
-                        showToast('操作失败');
-                    }
-                };
-
-                const copyNewApiKey = async () => {
-                    if (apiKeys.newKey && apiKeys.newKey.key) {
-                        try {
-                            await navigator.clipboard.writeText(apiKeys.newKey.key);
-                            showToast('密钥已复制到剪贴板');
-                        } catch (e) {
-                            showToast('复制失败');
-                        }
-                    }
-                };
-
-                const formatApiKeyTime = (ts) => {
-                    return formatTimestamp(ts);
-                };
-
                 // 7. 文件监控
                 const watcher = reactive({
                     paths: [],
@@ -7681,9 +7521,6 @@ av:
 
                 // 切换核心配置子标签时加载数据
                 Vue.watch(configTab, (newTab) => {
-                    if (newTab === 'apikeys') {
-                        loadApiKeys();
-                    }
                     if (newTab === 'emby_notify') {
                         loadEmbyNotifySettings();
                     }
@@ -7756,7 +7593,6 @@ av:
                     apiInterval, loadApiInterval, saveApiInterval,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
-                    apiKeys, loadApiKeys, createApiKey, deleteApiKey, toggleApiKeyStatus, copyNewApiKey, formatApiKeyTime,
                     watcher, loadWatcherPaths, startWatching, stopWatching, stopAllWatching, addWatcherExt, removeWatcherExt,
                     formatTimestamp, formatBytes,
                     // 认证 & 网络 & 加载状态
