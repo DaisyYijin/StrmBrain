@@ -57,3 +57,5 @@ embyExternalUrl-main/
 
 # 临时文件
 forum-post.*
+wiki.html
+.reasonix/
