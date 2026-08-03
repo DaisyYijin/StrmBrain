@@ -2,8 +2,9 @@
 API 路由 - 系统信息（版本号、实时日志、本地账号、本地目录浏览、登录认证）
 """
 import os
+import time
 from pathlib import Path
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, Request
 from pydantic import BaseModel
 import bcrypt
 
@@ -20,6 +21,34 @@ logger = get_logger("app.api.system")
 
 router = APIRouter(prefix="/api", tags=["system"])
 
+# ===== 登录速率限制 =====
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SECONDS = 300  # 5 分钟锁定
+_login_attempts: dict[str, list[float]] = {}  # IP -> [timestamp, ...]
+
+
+def _check_login_rate_limit(client_ip: str) -> tuple[bool, str]:
+    """检查登录速率限制，返回 (是否允许, 提示消息)"""
+    now = time.time()
+    cutoff = now - _LOGIN_LOCKOUT_SECONDS
+    # 清理过期记录
+    if client_ip in _login_attempts:
+        _login_attempts[client_ip] = [t for t in _login_attempts[client_ip] if t > cutoff]
+    else:
+        _login_attempts[client_ip] = []
+    attempts = _login_attempts[client_ip]
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        remaining = int(attempts[-1] + _LOGIN_LOCKOUT_SECONDS - now)
+        return False, f"登录失败次数过多，请 {remaining} 秒后重试"
+    return True, ""
+
+
+def _record_login_failure(client_ip: str) -> None:
+    """记录一次登录失败"""
+    if client_ip not in _login_attempts:
+        _login_attempts[client_ip] = []
+    _login_attempts[client_ip].append(time.time())
+
 
 class LocalAccountIn(BaseModel):
     username: str
@@ -34,19 +63,35 @@ class LoginIn(BaseModel):
 
 @router.get("/version", response_model=ApiResponse)
 async def get_version():
-    """获取版本号"""
-    return ApiResponse(data={"version": VERSION, "auth_enabled": is_auth_enabled()})
+    """获取版本号及更新检查信息"""
+    from app.services.version_service import get_version_info
+    info = get_version_info()
+    return ApiResponse(data={
+        "version": VERSION,
+        "auth_enabled": is_auth_enabled(),
+        "latest_version": info.get("latest_version"),
+        "has_update": info.get("has_update", False),
+        "release_url": info.get("release_url"),
+        "release_notes": info.get("release_notes"),
+        "checked_at": info.get("checked_at"),
+        "error": info.get("error"),
+    })
 
 
 @router.post("/login", response_model=ApiResponse)
-async def login(payload: LoginIn):
+async def login(payload: LoginIn, request: Request):
     """登录认证，返回 JWT token"""
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, msg = _check_login_rate_limit(client_ip)
+    if not allowed:
+        return ApiResponse(code=429, message=msg)
     user = authenticate_user(payload.username, payload.password)
     if not user:
-        logger.warning(f"登录失败: username={payload.username}")
+        _record_login_failure(client_ip)
+        logger.warning(f"登录失败: username={payload.username}, ip={client_ip}")
         return ApiResponse(code=401, message="用户名或密码错误")
     token = create_access_token(user)
-    logger.info(f"登录成功: username={payload.username}")
+    logger.info(f"登录成功: username={payload.username}, ip={client_ip}")
     return ApiResponse(data={"token": token, "username": user["sub"]})
 
 
@@ -128,6 +173,7 @@ async def browse_local_dirs(path: str = Query(default="/")):
     """
     浏览本地文件系统目录，返回子目录列表。
     用于前端本地目录选择器。
+    过滤系统敏感目录，防止路径遍历风险。
     """
     # 规范化路径
     if not path or path == "":
@@ -137,11 +183,27 @@ async def browse_local_dirs(path: str = Query(default="/")):
     except Exception:
         return ApiResponse(code=400, message="路径无效")
 
+    # 系统敏感目录黑名单（Windows/Linux 均覆盖）
+    _SENSITIVE_DIRS = {
+        "windows": {"windows", "system32", "syswow64", "system volume information", "$recycle.bin"},
+        "linux": {"proc", "sys", "dev", "boot", "etc", "root", "var/log", "var/lib/docker"},
+    }
+
+    def _is_sensitive(p: Path) -> bool:
+        name_lower = p.name.lower()
+        full_lower = str(p).lower().replace("\\", "/")
+        for s in _SENSITIVE_DIRS["windows"]:
+            if name_lower == s:
+                return True
+        for s in _SENSITIVE_DIRS["linux"]:
+            if full_lower.endswith("/" + s) or full_lower == s or ("/" + s + "/") in full_lower:
+                return True
+        return False
+
     # 路径不存在时，逐级向上查找最近的存在目录
     original = target
     while not target.exists():
         if str(target) == target.anchor or target.parent == target:
-            # 已到根目录仍不存在
             return ApiResponse(code=404, message=f"路径不存在: {original}")
         target = target.parent
 
@@ -151,7 +213,7 @@ async def browse_local_dirs(path: str = Query(default="/")):
     try:
         dirs = []
         for entry in sorted(target.iterdir(), key=lambda e: e.name.lower()):
-            if entry.is_dir() and not entry.name.startswith("."):
+            if entry.is_dir() and not entry.name.startswith(".") and not _is_sensitive(entry):
                 dirs.append({
                     "name": entry.name,
                     "path": str(entry),

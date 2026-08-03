@@ -23,6 +23,7 @@ class ProgressManager:
     """
 
     _instance: Optional["ProgressManager"] = None
+    _MAX_CONNECTIONS: int = 50  # 最大并发 WebSocket 连接数
 
     def __new__(cls):
         if cls._instance is None:
@@ -37,23 +38,37 @@ class ProgressManager:
     def connections(self):
         return self._connections
 
-    async def connect(self, websocket: WebSocket):
-        """接受新的 WebSocket 连接"""
+    async def connect(self, websocket: WebSocket) -> bool:
+        """接受新的 WebSocket 连接，超过最大连接数时拒绝。返回是否成功。"""
+        if len(self._connections) >= self._MAX_CONNECTIONS:
+            logger.warning(f"[progress] WebSocket 连接数已达上限 {_MAX_CONNECTIONS}，拒绝新连接")
+            await websocket.close(code=1013, reason="连接数过多")  # 1013 = Try Again Later
+            return False
         await websocket.accept()
+        first = len(self._connections) == 0
         self._connections.append(websocket)
-        logger.info(f"[progress] WebSocket 已连接，当前连接数: {len(self._connections)}")
+        # 首次连接记录一条日志；后续连接变化降为 debug，避免频繁刷屏
+        if first:
+            logger.info(f"[progress] 实时进度通道就绪（首个页面已连接）")
+        else:
+            logger.debug(f"[progress] WebSocket 已连接，当前连接数: {len(self._connections)}")
         # 如果有正在进行的任务，立即推送当前状态
         if self._current_task:
             try:
                 await websocket.send_text(json.dumps(self._current_task, ensure_ascii=False))
             except Exception:
                 pass
+        return True
 
     def disconnect(self, websocket: WebSocket):
         """断开 WebSocket 连接"""
         if websocket in self._connections:
             self._connections.remove(websocket)
-        logger.info(f"[progress] WebSocket 已断开，当前连接数: {len(self._connections)}")
+        # 全部断开时记录一条日志；其余变化降为 debug
+        if len(self._connections) == 0:
+            logger.info("[progress] 所有页面已断开连接，实时进度通道关闭")
+        else:
+            logger.debug(f"[progress] WebSocket 已断开，当前连接数: {len(self._connections)}")
 
     async def broadcast(self, data: dict):
         """向所有连接广播消息"""
@@ -140,6 +155,7 @@ class ProgressManager:
         try:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
+            logger.debug("[progress] 延迟清除任务被取消")
             return
         async with self._task_lock:
             self._current_task = None

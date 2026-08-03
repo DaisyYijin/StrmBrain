@@ -81,7 +81,7 @@ def write_json(filename: str, data: Any) -> bool:
             backup.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             return True
         except Exception as e:
-            logger.error(f"写入 {filename} 失败: {e}")
+            logger.warning(f"写入 {filename} 失败: {e}")
             return False
 
 

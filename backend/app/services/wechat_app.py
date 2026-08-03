@@ -91,7 +91,7 @@ class WeChatAppService:
                     logger.warning(f"企业微信获取 access_token 失败: {data.get('errmsg')}")
                     return None
         except Exception as e:
-            logger.error(f"企业微信获取 access_token 异常: {e}")
+            logger.warning(f"企业微信获取 access_token 异常: {e}")
             return None
 
     @classmethod
@@ -151,7 +151,7 @@ class WeChatAppService:
                         cls._token_cache = {}
                     return False
         except Exception as e:
-            logger.error(f"企业微信应用消息发送异常: {e}")
+            logger.warning(f"企业微信应用消息发送异常: {e}")
             return False
 
     # ===== 命令处理（双向互动） =====
@@ -356,7 +356,7 @@ class WeChatAppService:
             if notify_cfg.get("notify_on_organize", True):
                 await NotificationService.notify_organize_complete(result)
         except Exception as e:
-            logger.error(f"企业微信触发整理失败: {e}")
+            logger.warning(f"企业微信触发整理失败: {e}")
             await cls.send_text(f"❌ 整理失败: {e}", from_user)
 
     @classmethod
@@ -445,7 +445,7 @@ class WeChatAppService:
             if notify_cfg.get("notify_on_sync", True):
                 await NotificationService.notify_sync_complete("full", result, local_dir)
         except Exception as e:
-            logger.error(f"企业微信触发全量同步失败: {e}")
+            logger.warning(f"企业微信触发全量同步失败: {e}")
             await cls.send_text(f"❌ 全量同步失败: {e}", from_user)
 
     @classmethod
@@ -524,7 +524,7 @@ class WeChatAppService:
             if notify_cfg.get("notify_on_sync", True):
                 await NotificationService.notify_sync_complete("incremental", result, local_media_dir)
         except Exception as e:
-            logger.error(f"企业微信触发增量同步失败: {e}")
+            logger.warning(f"企业微信触发增量同步失败: {e}")
             await cls.send_text(f"❌ 增量同步失败: {e}", from_user)
 
 

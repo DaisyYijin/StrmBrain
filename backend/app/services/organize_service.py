@@ -1102,7 +1102,10 @@ class OrganizeService:
                 logger.info(f"[organize] 冗余文件: {f['name']}")
                 to_redundant.append({"file": f, "reason": "冗余文件（sample/预告等）"})
             else:
-                category, tmdb_info, media_type = await cls._classify_file(f["name"], category_helper, category_roots, ai_mode)
+                category, tmdb_info, media_type = await cls._classify_file(
+                    f["name"], category_helper, category_roots, ai_mode,
+                    parent_path=f.get("parent_path", ""),
+                )
                 if category is None:
                     logger.warning(f"[organize] 无法识别: {f['name']}")
                     to_unrecognized.append({"file": f, "reason": "无法识别影视类型"})
@@ -1202,7 +1205,7 @@ class OrganizeService:
                 logger.info(f"[organize] 创建分类目录: {category} ({len(items)} 个文件)")
                 sub_cid = Client115Service.ensure_path(cookies, path_parts, target_cid)
                 if not sub_cid:
-                    logger.error(f"[organize] 创建分类目录失败: {category}")
+                    logger.warning(f"[organize] 创建分类目录失败: {category}")
                     for item in items:
                         result["errors"].append({
                             "name": item["file"]["name"],
@@ -1747,7 +1750,7 @@ class OrganizeService:
 
             return True, f"策略 '{new_strategy.get('_name', '')}' 检查通过", old_files_to_replace
         except Exception as e:
-            logger.error(f"洗版检查失败: {e}")
+            logger.warning(f"洗版检查失败: {e}")
             return True, f"洗版检查异常: {e}", []
 
     @classmethod
@@ -1922,6 +1925,41 @@ class OrganizeService:
             logger.warning(f"[organize] AI 辅助识别异常: {e}")
             return None
 
+    @staticmethod
+    def _extract_parent_title(parent_path: str) -> Optional[str]:
+        """
+        从父目录路径中提取有效的搜索标题（向上遍历，跳过纯季号/技术标记目录）。
+        例如 parent_path="A-愛你 (2025)/Season 01" → "A-愛你 (2025)"
+        返回第一个有实质内容的目录名，找不到返回 None。
+        """
+        if not parent_path:
+            return None
+        parts = [p.strip() for p in parent_path.split("/") if p.strip()]
+        # 从最近一级（最深层）向上遍历
+        for part in reversed(parts):
+            # 跳过纯季号目录：Season N / 第N季 / S0N
+            if extract_season_only(part) is not None:
+                continue
+            # 跳过纯集号目录
+            if re.match(r'^[eE][pP]?\d{1,3}$', part):
+                continue
+            # 跳过纯数字目录
+            if re.match(r'^\d+$', part):
+                continue
+            # 跳过仅含技术标记的目录（如 2160p, WEB-DL 等纯资源标签）
+            cleaned = re.sub(
+                r'[._\s]?(1080i|1080p|720i|720p|480i|480p|2160i|2160p|4k|bluray|blu-ray|webrip|web-dl|web|hd|h264|h265|x264|x265|hevc|aac|dts|hdr|atmos|remux|uhd|hdtv|dvd|bdrip|brrip)[._\s]?',
+                '', part, flags=re.IGNORECASE
+            ).strip()
+            cleaned = re.sub(r'[._\-\s]', '', cleaned)
+            if not cleaned:
+                continue
+            # 跳过用户自定义根目录名（电影/电视剧/AV 等）
+            if part in ('电影', '电视剧', 'AV', 'Movies', 'TV', 'TV Shows'):
+                continue
+            return part
+        return None
+
     @classmethod
     async def _classify_file(
         cls,
@@ -1929,6 +1967,7 @@ class OrganizeService:
         category_helper: CategoryHelper,
         category_roots: dict = None,
         ai_mode: str = "off",
+        parent_path: str = "",
     ) -> tuple:
         """
         分类文件：通过 TMDB 搜索影视元数据，再按 YAML 分类配置匹配。
@@ -1937,6 +1976,7 @@ class OrganizeService:
         category_str 为分类路径（如 "电影/动画电影"），无法识别返回 (None, None, None)。
         category_roots: 自定义根目录名称 {"movie":"电影", "tv":"电视剧", "av":"AV"}
         ai_mode: off=关闭AI, assist=TMDB失败时辅助AI, force=强制使用AI
+        parent_path: 文件所在父目录路径（如 "A-愛你 (2025)/Season 01"），用于回退识别
         """
         # 根目录名称（支持用户自定义）
         roots = category_roots or {}
@@ -1968,7 +2008,20 @@ class OrganizeService:
                 elif media_type == "tv":
                     sub_category = category_helper.get_tv_category(tmdb_info)
                     return (f"{tv_root}/{sub_category}" if sub_category else tv_root, tmdb_info, "tv")
-            # AI 也失败，回退到内置分类
+            # AI 也失败 → 尝试用父目录名回退搜索
+            parent_title = cls._extract_parent_title(parent_path)
+            if parent_title:
+                logger.info(f"[organize] 强制AI失败 '{name}'，尝试父目录名: '{parent_title}'")
+                tmdb_info = await TmdbService.search_media(parent_title, None)
+                if tmdb_info:
+                    logger.info(f"[organize] 父目录名搜索成功: '{parent_title}' -> {tmdb_info.get('title') or tmdb_info.get('name', '')}")
+                    if "release_date" in tmdb_info and tmdb_info.get("release_date"):
+                        sub_category = category_helper.get_movie_category(tmdb_info)
+                        return (f"{movie_root}/{sub_category}" if sub_category else movie_root, tmdb_info, "movie")
+                    elif "first_air_date" in tmdb_info and tmdb_info.get("first_air_date"):
+                        sub_category = category_helper.get_tv_category(tmdb_info)
+                        return (f"{tv_root}/{sub_category}" if sub_category else tv_root, tmdb_info, "tv")
+            # 回退到内置分类
             logger.warning(f"[organize] 强制AI模式识别失败: '{name}'，回退到简单分类")
             if builtin == "movie":
                 return (movie_root, None, "movie")
@@ -1987,6 +2040,15 @@ class OrganizeService:
 
         # 通过 TMDB 搜索元数据
         tmdb_info = await TmdbService.search_media(name, media_type)
+
+        if not tmdb_info:
+            # TMDB 未找到 → 尝试用父目录名回退搜索
+            parent_title = cls._extract_parent_title(parent_path)
+            if parent_title:
+                logger.info(f"[organize] 文件名搜索失败 '{name}'，尝试父目录名: '{parent_title}'")
+                tmdb_info = await TmdbService.search_media(parent_title, media_type)
+                if tmdb_info:
+                    logger.info(f"[organize] 父目录名搜索成功: '{parent_title}' -> {tmdb_info.get('title') or tmdb_info.get('name', '')}")
 
         if not tmdb_info:
             # TMDB 未找到

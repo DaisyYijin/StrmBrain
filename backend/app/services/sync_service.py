@@ -876,5 +876,5 @@ class SyncService:
             )
             return result
         except Exception as e:
-            logger.error(f"[sync-upload] 自动上传失败: {e}")
+            logger.warning(f"[sync-upload] 自动上传失败: {e}")
             return None

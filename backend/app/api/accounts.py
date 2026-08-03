@@ -1,8 +1,9 @@
 """
 API 路由 - 账号管理
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import require_auth
 from app.core.json_storage import (
     read_accounts, find_account, upsert_account, delete_account as _delete_account,
     find_account_by_user_id,
@@ -10,7 +11,7 @@ from app.core.json_storage import (
 from app.services import Client115Service
 from app.schemas import ApiResponse, AccountOut, AccountCreate
 
-router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+router = APIRouter(prefix="/api/accounts", tags=["accounts"], dependencies=[Depends(require_auth)])
 
 
 @router.get("", response_model=ApiResponse)

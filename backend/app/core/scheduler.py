@@ -135,7 +135,7 @@ async def _run_scheduled_sync(config: dict):
             logger=logger,
         )
     except Exception as e:
-        logger.error(f"定时整理失败（继续执行增量同步）: {e}")
+        logger.warning(f"定时整理失败（继续执行增量同步）: {e}")
 
     # ========== 第二步：执行增量同步 ==========
     logger.info(f"开始执行定时增量同步: account={account.get('id')}, source={source_cid}")
@@ -190,7 +190,7 @@ async def _run_scheduled_sync(config: dict):
             await NotificationService.notify_sync_complete("incremental", sync_result, local_media_dir)
 
     except Exception as e:
-        logger.error(f"定时增量同步失败: {e}")
+        logger.warning(f"定时增量同步失败: {e}")
         # 根据配置发送异常通知
         from app.core.db_helper import read_setting
         notify_cfg = read_setting("emby_notify") or {}

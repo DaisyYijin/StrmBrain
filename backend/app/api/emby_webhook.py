@@ -190,7 +190,7 @@ async def emby_webhook(
         await NotificationService.notify("Emby 入库通知", content)
         logger.info(f"[emby-webhook] 入库通知已发送: {title_text}")
     except Exception as e:
-        logger.error(f"[emby-webhook] 发送通知失败: {e}")
+        logger.warning(f"[emby-webhook] 发送通知失败: {e}")
 
     return JSONResponse(
         content={"code": 0, "message": "通知已发送", "data": None}

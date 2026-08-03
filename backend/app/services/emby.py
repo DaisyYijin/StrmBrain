@@ -32,7 +32,7 @@ class EmbyClient:
                     return r.json()
                 return None
         except Exception as e:
-            logger.warning(f"请求失败 {path}: {e}")
+            logger.warning(f"请求失败 {path}: {e}", exc_info=True)
             return None
 
     async def system_info(self) -> Optional[dict]:
@@ -577,5 +577,5 @@ async def trigger_emby_refresh(path: str = "") -> bool:
             logger.warning("[emby] 媒体库刷新失败")
         return ok
     except Exception as e:
-        logger.error(f"触发 Emby 刷新异常: {e}")
+        logger.warning(f"触发 Emby 刷新异常: {e}")
         return False

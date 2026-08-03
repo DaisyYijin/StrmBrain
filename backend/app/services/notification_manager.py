@@ -292,7 +292,7 @@ class TelegramHandler(BaseChannelHandler):
                 logger.warning(f"Telegram 通知发送失败: HTTP {resp.status_code}")
                 return False
         except Exception as e:
-            logger.error(f"Telegram 通知发送异常: {e}")
+            logger.warning(f"Telegram 通知发送异常: {e}")
             return False
 
     @staticmethod
@@ -367,7 +367,7 @@ class BarkHandler(BaseChannelHandler):
                 logger.warning(f"Bark 通知发送失败: HTTP {resp.status_code}")
                 return False
         except Exception as e:
-            logger.error(f"Bark 通知发送异常: {e}")
+            logger.warning(f"Bark 通知发送异常: {e}")
             return False
 
 
@@ -413,7 +413,7 @@ class ServerChanHandler(BaseChannelHandler):
                 logger.warning(f"Server酱 通知发送失败: HTTP {resp.status_code}")
                 return False
         except Exception as e:
-            logger.error(f"Server酱 通知发送异常: {e}")
+            logger.warning(f"Server酱 通知发送异常: {e}")
             return False
 
 
@@ -459,7 +459,7 @@ class MeoWHandler(BaseChannelHandler):
                 logger.warning(f"MeoW 通知发送失败: HTTP {resp.status_code}")
                 return False
         except Exception as e:
-            logger.error(f"MeoW 通知发送异常: {e}")
+            logger.warning(f"MeoW 通知发送异常: {e}")
             return False
 
 
@@ -591,7 +591,7 @@ class WebhookHandler(BaseChannelHandler):
                 )
                 return False
         except Exception as e:
-            logger.error(f"Webhook 通知发送异常: {e}")
+            logger.warning(f"Webhook 通知发送异常: {e}")
             return False
 
 
@@ -616,7 +616,7 @@ class WeChatWorkHandler(BaseChannelHandler):
             markdown: str = f"### {title}\n{content}"
             return await WeChatAppService.send_markdown(markdown)
         except Exception as e:
-            logger.error(f"企业微信通知发送异常: {e}")
+            logger.warning(f"企业微信通知发送异常: {e}")
             return False
 
 
@@ -1071,10 +1071,10 @@ class NotificationManager:
                 timeout=NOTIFY_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            logger.error(f"渠道 '{channel_name}' 发送超时（{NOTIFY_TIMEOUT}s）")
+            logger.warning(f"渠道 '{channel_name}' 发送超时（{NOTIFY_TIMEOUT}s）")
             return False
         except Exception as e:
-            logger.error(f"渠道 '{channel_name}' 发送失败: {e}")
+            logger.warning(f"渠道 '{channel_name}' 发送失败: {e}")
             return False
 
     async def send_notification(
@@ -1168,7 +1168,7 @@ class NotificationManager:
             channel_id: int = channel.get("id", 0)
             channel_name: str = channel.get("name", "")
             if isinstance(result, Exception):
-                logger.error(f"渠道 '{channel_name}' 发送异常: {result}")
+                logger.warning(f"渠道 '{channel_name}' 发送异常: {result}")
                 results.append(
                     {
                         "channel_id": channel_id,

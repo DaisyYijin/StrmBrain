@@ -80,7 +80,7 @@ class NotificationService:
                     logger.warning(f"Telegram 通知发送失败: HTTP {response.status_code}")
                     return False
         except Exception as e:
-            logger.error(f"Telegram 通知发送异常: {e}")
+            logger.warning(f"Telegram 通知发送异常: {e}")
             return False
 
     # ===== QQ 机器人（基于 go-cqhttp / NapCat HTTP API）=====
@@ -126,7 +126,7 @@ class NotificationService:
                     logger.warning(f"QQ 机器人通知发送失败: HTTP {response.status_code}")
                     return False
         except Exception as e:
-            logger.error(f"QQ 机器人通知发送异常: {e}")
+            logger.warning(f"QQ 机器人通知发送异常: {e}")
             return False
 
     # ===== 统一发送（多渠道）=====

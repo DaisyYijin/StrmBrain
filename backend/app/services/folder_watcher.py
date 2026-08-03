@@ -236,13 +236,13 @@ class FolderWatcher:
             True 启动成功，False 启动失败（依赖缺失或路径无效）
         """
         if not _WATCHDOG_AVAILABLE:
-            logger.error("watchdog 未安装，无法启动文件监控")
+            logger.warning("watchdog 未安装，无法启动文件监控")
             return False
         if self._running:
             logger.warning(f"监控已在运行: {self.watch_path}")
             return True
         if not os.path.isdir(self.watch_path):
-            logger.error(f"监控目录不存在: {self.watch_path}")
+            logger.warning(f"监控目录不存在: {self.watch_path}")
             return False
 
         self._running = True
@@ -271,7 +271,7 @@ class FolderWatcher:
                 time.sleep(self._cleanup_interval)
                 self._cleanup_cache()
         except Exception as e:
-            logger.error(f"文件监控线程异常 ({self.watch_path}): {e}", exc_info=True)
+            logger.warning(f"文件监控线程异常 ({self.watch_path}): {e}", exc_info=True)
         finally:
             if observer is not None:
                 try:
@@ -342,7 +342,7 @@ class FolderWatcherManager:
         if callback is not None:
             self._register_all(watcher, callback)
         if not watcher.start():
-            logger.error(f"启动监控失败: {abs_path}")
+            logger.warning(f"启动监控失败: {abs_path}")
             return None
 
         with self._lock:

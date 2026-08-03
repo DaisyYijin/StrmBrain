@@ -12,8 +12,9 @@ from app.api import (v115_router, accounts_router, settings_router,
                      system_router, dashboard_router, organize_router,
                      tools_router, wechat_router,
                      ai_router, watcher_router,
-                     emby_webhook_router, clouddownload_router)
-from app.config import HOST, PORT, CORS_ORIGINS, AUTH_ENABLED
+                     emby_webhook_router, clouddownload_router,
+                     backup_router, notification_router, tasks_router)
+from app.config import HOST, PORT, CORS_ORIGINS, AUTH_ENABLED, VERSION
 from app.core.auth import verify_token
 from app.core.logbuffer import setup_logging, get_logger
 from app.core.progress import progress_manager
@@ -31,7 +32,6 @@ _PUBLIC_EXACT = frozenset({
 _PUBLIC_PREFIXES = (
     "/api/115/url/",   # 302 下载重定向（Emby 直接访问）
     "/ws/progress",    # WebSocket 进度通道
-    "/",
 )
 
 
@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger = get_logger()
     from app.core.scheduler import init_scheduler, shutdown_scheduler
+    _version_task = None
     await init_scheduler()
 
     # 初始化新功能模块
@@ -57,17 +58,48 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"文件监控管理器初始化失败: {e}")
 
+    # 初始化通知管理器
+    try:
+        from app.services.notification_manager import init_notification_manager
+        init_notification_manager()
+        logger.info("通知管理器已初始化")
+    except Exception as e:
+        logger.warning(f"通知管理器初始化失败: {e}")
+
+    # 启动版本检查后台任务
+    try:
+        import asyncio
+        from app.services.version_service import start_version_check_loop
+        _version_task = asyncio.create_task(start_version_check_loop())
+        _version_task.add_done_callback(
+            lambda t: t.exception() and logger.warning(f"版本检查后台任务异常退出: {t.exception()}")
+        )
+        logger.info("版本检查后台任务已启动")
+    except Exception as e:
+        logger.warning(f"版本检查后台任务启动失败: {e}", exc_info=True)
+
     logger.info(f"STRMhub started (AUTH_ENABLED={AUTH_ENABLED})")
     yield
     await shutdown_scheduler()
+
+    # 停止版本检查后台任务
+    try:
+        if _version_task and not _version_task.done():
+            _version_task.cancel()
+            try:
+                await _version_task
+            except asyncio.CancelledError:
+                pass
+    except Exception as e:
+        logger.warning(f"停止版本检查任务时异常: {e}")
 
     # 停止所有文件监控
     try:
         from app.services.folder_watcher import global_watcher_manager
         if global_watcher_manager:
             global_watcher_manager.stop_all()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"停止文件监控时异常: {e}", exc_info=True)
 
     logger.info("Application closed")
 
@@ -75,7 +107,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="STRMhub",
     description="115 网盘 STRM 生成工具",
-    version="0.1.0",
+    version=VERSION,
     lifespan=lifespan
 )
 
@@ -161,7 +193,9 @@ async def health():
 @app.websocket("/ws/progress")
 async def ws_progress(ws: WebSocket):
     """WebSocket 端点：实时推送整理/同步任务进度"""
-    await progress_manager.connect(ws)
+    connected = await progress_manager.connect(ws)
+    if not connected:
+        return
     try:
         while True:
             await ws.receive_text()
@@ -184,6 +218,9 @@ app.include_router(ai_router)
 app.include_router(watcher_router)
 app.include_router(emby_webhook_router)
 app.include_router(clouddownload_router)
+app.include_router(backup_router)
+app.include_router(notification_router)
+app.include_router(tasks_router)
 
 
 # 静态文件（前端）- 必须放在最后
@@ -193,7 +230,11 @@ frontend_path = Path(__file__).parent.parent / "static"
 @app.get("/")
 async def index():
     """首页"""
-    return FileResponse(frontend_path / "index.html")
+    resp = FileResponse(frontend_path / "index.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 if __name__ == "__main__":

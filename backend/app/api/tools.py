@@ -6,9 +6,6 @@ API 路由 - 特色工具
 4. 替换 STRM 字符串
 5. Emby 影视缺集管理
 """
-import os
-import re
-import json
 from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel

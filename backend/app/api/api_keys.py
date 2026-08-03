@@ -63,7 +63,7 @@ async def ai_extract(payload: AIExtractIn):
             result = await client.extract_movie_name(payload.filename)
         return ApiResponse(data=result)
     except Exception as e:
-        logger.error(f"AI提取失败: {e}")
+        logger.warning(f"AI提取失败: {e}")
         return ApiResponse(code=500, message=str(e))
 
 

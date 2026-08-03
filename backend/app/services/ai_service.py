@@ -144,13 +144,13 @@ class AIService:
                     return None
                 return resp.json()
         except httpx.TimeoutException:
-            logger.error(f"AI 请求超时 ({self.timeout}s): url={url}")
+            logger.warning(f"AI 请求超时 ({self.timeout}s): url={url}")
             return None
         except httpx.ConnectError as e:
-            logger.error(f"AI 连接失败: {e}")
+            logger.warning(f"AI 连接失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"AI 请求异常: {type(e).__name__}: {e}")
+            logger.warning(f"AI 请求异常: {type(e).__name__}: {e}")
             return None
 
     # ===== 响应解析 =====

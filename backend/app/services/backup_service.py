@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, CONFIG_DIR
 from app.core.json_storage import read_setting, save_setting
 from app.core.logbuffer import get_logger
 
@@ -131,12 +131,22 @@ class BackupService:
         self._write_records(data)
 
     @staticmethod
-    def _scan_json_files() -> list[Path]:
-        """扫描 data/ 目录下所有 .json 文件（不含 backups 子目录）"""
-        json_files: list[Path] = []
+    def _scan_json_files() -> list[tuple[str, Path]]:
+        """
+        扫描 data/ 和 config/ 目录下所有 .json 文件（不含 backups 子目录）。
+        返回 [(存储相对路径, 文件绝对路径), ...]
+        存储相对路径格式: data/xxx.json 或 config/xxx.json
+        """
+        json_files: list[tuple[str, Path]] = []
+        # 扫描 data/ 目录（顶层）
         for item in DATA_DIR.iterdir():
             if item.is_file() and item.suffix == ".json":
-                json_files.append(item)
+                json_files.append((f"data/{item.name}", item))
+        # 扫描 config/ 目录（顶层）
+        if CONFIG_DIR.exists():
+            for item in CONFIG_DIR.iterdir():
+                if item.is_file() and item.suffix == ".json":
+                    json_files.append((f"config/{item.name}", item))
         return json_files
 
     @staticmethod
@@ -235,10 +245,10 @@ class BackupService:
 
                 # 读取文件内容
                 file_contents: list[tuple[str, bytes]] = []
-                for i, fpath in enumerate(json_files_paths):
+                for i, (rel_name, fpath) in enumerate(json_files_paths):
                     try:
                         content = fpath.read_bytes()
-                        file_contents.append((fpath.name, content))
+                        file_contents.append((rel_name, content))
                         self._update_status(
                             count=i + 1,
                             desc=f"正在读取 {fpath.name}",
@@ -286,7 +296,7 @@ class BackupService:
 
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {e}"
-                logger.error(f"备份失败: {error_msg}")
+                logger.warning(f"备份失败: {error_msg}")
                 duration = round(time.time() - start_time, 2)
                 self._update_record(
                     record_id,
@@ -361,9 +371,9 @@ class BackupService:
                     pre_start = time.time()
                     try:
                         pre_contents = []
-                        for fpath in current_files:
+                        for rel_name, fpath in current_files:
                             try:
-                                pre_contents.append((fpath.name, fpath.read_bytes()))
+                                pre_contents.append((rel_name, fpath.read_bytes()))
                             except Exception as e:
                                 logger.warning(f"安全备份读取 {fpath.name} 失败: {e}")
 
@@ -381,7 +391,7 @@ class BackupService:
                         pre_backup_id = pre_record_id
                         logger.info(f"恢复前安全备份完成: id={pre_record_id}")
                     except Exception as e:
-                        logger.error(f"恢复前安全备份失败: {e}")
+                        logger.warning(f"恢复前安全备份失败: {e}")
                         self._update_record(
                             pre_record_id,
                             status="failed",
@@ -402,7 +412,17 @@ class BackupService:
                     for i, name in enumerate(json_entries):
                         try:
                             content = zf.read(name)
-                            target_path = DATA_DIR / Path(name).name
+                            # 根据备份时的相对路径前缀决定恢复到哪个目录
+                            name_stripped = name.replace("\\", "/")
+                            if name_stripped.startswith("config/"):
+                                target_dir = CONFIG_DIR
+                                target_path = target_dir / Path(name).name
+                            else:
+                                # 兼容旧备份（无前缀，默认 data/）和带 data/ 前缀的
+                                target_dir = DATA_DIR
+                                target_path = target_dir / Path(name).name
+
+                            target_dir.mkdir(parents=True, exist_ok=True)
 
                             # 原子写入：先写临时文件再重命名
                             tmp_fd, tmp_path = tempfile.mkstemp(
@@ -429,7 +449,7 @@ class BackupService:
                                 desc=f"正在恢复 {Path(name).name}",
                             )
                         except Exception as e:
-                            logger.error(f"恢复文件 {name} 失败: {e}")
+                            logger.warning(f"恢复文件 {name} 失败: {e}")
 
                 duration = round(
                     time.time() - self._running_status.get("start_time", time.time()), 2
@@ -447,7 +467,7 @@ class BackupService:
 
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {e}"
-                logger.error(f"恢复失败: {error_msg}")
+                logger.warning(f"恢复失败: {error_msg}")
                 self._set_finished(error_msg=error_msg)
                 return {
                     "success": False,

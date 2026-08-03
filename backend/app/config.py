@@ -22,7 +22,10 @@ LOG_DIR = BASE_DIR / "log"
 LOG_DIR.mkdir(exist_ok=True)
 
 # 版本号
-VERSION = os.getenv("VERSION", "0.1.0")
+VERSION = os.getenv("VERSION", "1.0.0")
+
+# GitHub 仓库（用于版本更新检查）
+GITHUB_REPO = "DaisyYijin/STRMhub"
 
 # 服务器
 HOST = os.getenv("HOST", "0.0.0.0")

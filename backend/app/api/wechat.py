@@ -90,7 +90,7 @@ async def wechat_message(
             return PlainTextResponse("success")
         encrypted = encrypt_elem.text
     except Exception as e:
-        logger.error(f"企业微信回调 XML 解析失败: {e}")
+        logger.warning(f"企业微信回调 XML 解析失败: {e}")
         return PlainTextResponse("success")
 
     # 验签

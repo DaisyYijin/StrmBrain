@@ -120,7 +120,7 @@ async def get_download_url(
 
     # cookies 失效检测
     if account.get("status") == 0:
-        raise HTTPException(status_code=401, detail="账号 cookies 已失效，请重新登录")
+        raise HTTPException(status_code=503, detail="账号 cookies 已失效，请重新登录")
 
     cookies = account.get("cookies", "")
     url = Client115Service.get_download_url(cookies, pickcode, account.get("id", 0))

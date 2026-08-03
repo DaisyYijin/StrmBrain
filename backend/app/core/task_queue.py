@@ -441,7 +441,7 @@ class TaskQueuePerType:
                 await asyncio.to_thread(task.callback, *task.args, **task.kwargs)
             logger.info(f"任务执行完成: {task.id} ({task.name})")
         except Exception as e:
-            logger.error(
+            logger.warning(
                 f"任务执行失败 [{task.id}] ({task.name}): {e}",
                 exc_info=True,
             )
@@ -611,6 +611,21 @@ class TaskQueueManager:
                 for task_type, queue in self.queues.items()
             },
         }
+
+    def get_queue_status(self, task_type: str) -> dict[str, Any]:
+        """
+        获取指定任务类型的队列状态。
+
+        Args:
+            task_type: 任务类型字符串。
+
+        Returns:
+            该队列的状态字典；若类型不存在则返回空字典。
+        """
+        queue = self.queues.get(task_type)
+        if queue is None:
+            return {}
+        return queue.get_status()
 
     async def shutdown(self) -> None:
         """

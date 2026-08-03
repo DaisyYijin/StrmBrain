@@ -129,6 +129,44 @@
         }
         .topbar.expanded { left: 64px; }
 
+        /* 顶栏版本号 */
+        .topbar-version {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            padding-left: 4px;
+        }
+        .version-tag {
+            font-size: 12px;
+            font-weight: 400;
+            color: #909399;
+            background: #f4f4f5;
+            padding: 2px 10px;
+            border-radius: 4px;
+        }
+        .version-update-badge {
+            font-size: 12px;
+            color: #fff;
+            background: #f56c6c;
+            padding: 2px 10px;
+            border-radius: 4px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            transition: background-color 0.15s;
+        }
+        .version-update-badge:hover { background: #f23c3c; }
+        .version-update-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background: #fff;
+            border-radius: 50%;
+        }
+
         .topbar-item {
             display: flex;
             align-items: center;
@@ -2048,13 +2086,21 @@
             
             <!-- 顶部横条 -->
             <header class="topbar" :class="{ expanded: sidebarCollapsed }">
+                <!-- 顶栏版本号（实时日志左侧） -->
+                <div class="topbar-version" v-if="versionInfo.current">
+                    <span class="version-tag" :title="'当前版本: v' + versionInfo.current">v{{ versionInfo.current }}</span>
+                    <a v-if="versionInfo.hasUpdate && versionInfo.releaseUrl"
+                       :href="versionInfo.releaseUrl"
+                       target="_blank"
+                       class="version-update-badge"
+                       :title="versionInfo.releaseNotes ? versionInfo.releaseNotes.slice(0, 200) : '点击查看新版本'">
+                        <span class="version-update-dot"></span>
+                        新版本 v{{ versionInfo.latest }}
+                    </a>
+                </div>
                 <div class="topbar-item" :class="{ active: tab === 'logs' }" @click="openLogs" @contextmenu.prevent="openLogWindow" title="实时日志（右键新窗口打开）">
                     <svg viewBox="0 0 24 24"><path d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h12v2H3v-2zm0 4h18v2H3v-2zm0 4h12v2H3v-2z"/></svg>
                     <span class="topbar-text">实时日志</span>
-                    <span class="ws-indicator topbar-ws-indicator" :title="wsStatusText">
-                        <span class="ws-dot" :class="wsStatusClass"></span>
-                        <span>{{ wsStatusText }}</span>
-                    </span>
                 </div>
                 <div class="account-dropdown-wrap topbar-item" @click.stop="toggleAccountMenu">
                     <svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
@@ -4288,7 +4334,13 @@
                 <!-- ===== 实时日志 ===== -->
                 <div v-show="tab === 'logs'">
                     <div class="page-header" style="margin-bottom: 16px;">
-                        <h2 style="margin:0; font-size:20px; color:#303133;">实时日志</h2>
+                        <h2 style="margin:0; font-size:20px; color:#303133; display:flex; align-items:center; gap:10px;">
+                            实时日志
+                            <span class="ws-indicator topbar-ws-indicator" :title="wsStatusText">
+                                <span class="ws-dot" :class="wsStatusClass"></span>
+                                <span>{{ wsStatusText }}</span>
+                            </span>
+                        </h2>
                         <p style="margin:6px 0 0; font-size:13px; color:#909399;">实时查看系统运行日志，支持按级别过滤。</p>
                     </div>
                     <div class="log-toolbar">
@@ -4495,6 +4547,35 @@
                 const online = ref(navigator.onLine);
                 const wsStatus = ref('disconnected'); // connected / connecting / disconnected
 
+                // 版本信息
+                const versionInfo = reactive({
+                    current: '',
+                    latest: null,
+                    hasUpdate: false,
+                    releaseUrl: '',
+                    releaseNotes: null,
+                    checking: false,
+                });
+
+                // 版本检查（/api/version 为公开接口，页面加载即检查，不依赖登录）
+                const fetchVersionInfo = async () => {
+                    try {
+                        const resp = await fetch('/api/version');
+                        const json = await resp.json();
+                        if (json.data) {
+                            const d = json.data;
+                            versionInfo.current = d.version || '';
+                            versionInfo.latest = d.latest_version || null;
+                            versionInfo.hasUpdate = d.has_update || false;
+                            versionInfo.releaseUrl = d.release_url || '';
+                            versionInfo.releaseNotes = d.release_notes || null;
+                        }
+                    } catch (e) {
+                        // 静默失败
+                    }
+                };
+                fetchVersionInfo();
+
                 const wsStatusClass = computed(() => wsStatus.value);
                 const wsStatusText = computed(() => {
                     if (wsStatus.value === 'connected') return '已连接';
@@ -4561,19 +4642,49 @@
                     }
                 };
 
+                // ===== 资源清理 =====
+                let _versionTimer = null;
+                let _docClickHandler = null;
+                let _onlineHandler = null;
+                let _offlineHandler = null;
+
+                const cleanupResources = () => {
+                    // 清理日志轮询
+                    if (logs.timer) { clearInterval(logs.timer); logs.timer = null; }
+                    // 清理日志弹窗轮询
+                    if (_logWindowTimer) { clearInterval(_logWindowTimer); _logWindowTimer = null; }
+                    // 清理版本信息轮询
+                    if (_versionTimer) { clearInterval(_versionTimer); _versionTimer = null; }
+                    // 清理 WebSocket 及重连定时器
+                    if (_wsReconnectTimer) { clearInterval(_wsReconnectTimer); _wsReconnectTimer = null; }
+                    if (_ws) { try { _ws.close(); } catch (e) { /* 忽略 */ } _ws = null; }
+                    // 清理防抖保存定时器
+                    Object.keys(_saveTimers).forEach(k => { clearTimeout(_saveTimers[k]); delete _saveTimers[k]; });
+                    // 移除事件监听
+                    if (_docClickHandler) { document.removeEventListener('click', _docClickHandler); _docClickHandler = null; }
+                    if (_onlineHandler) { window.removeEventListener('online', _onlineHandler); _onlineHandler = null; }
+                    if (_offlineHandler) { window.removeEventListener('offline', _offlineHandler); _offlineHandler = null; }
+                    // 停止下载轮询
+                    stopDownloadPolling();
+                };
+
                 // ===== 登出 =====
                 const doLogout = () => {
+                    cleanupResources();
                     authToken.value = '';
                     localStorage.removeItem('strmhub_token');
                     authRequired.value = true;
                     loginForm.username = '';
                     loginForm.password = '';
+                    wsStatus.value = 'disconnected';
                     showToast('已退出登录');
                 };
 
                 // ===== 网络状态监听 =====
-                window.addEventListener('online', () => { online.value = true; });
-                window.addEventListener('offline', () => { online.value = false; });
+                _onlineHandler = () => { online.value = true; };
+                _offlineHandler = () => { online.value = false; };
+                window.addEventListener('online', _onlineHandler);
+                window.addEventListener('offline', _offlineHandler);
 
                 // TMDB 配置
                 const tmdb = reactive({
@@ -7330,13 +7441,21 @@ av:
                     if (logs.timer) { clearInterval(logs.timer); logs.timer = null; }
                 };
 
+                const escapeHtml = (s) => {
+                    if (s == null) return '';
+                    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+                };
+                let _logWindowTimer = null;
                 const openLogWindow = () => {
+                    // 清理上一次弹窗的定时器
+                    if (_logWindowTimer) { clearInterval(_logWindowTimer); _logWindowTimer = null; }
                     const w = window.open('', 'strmhub_logs', 'width=800,height=600,scrollbars=yes,resizable=yes');
                     if (!w) { showToast('弹窗被拦截，请允许弹窗后重试'); return; }
                     // 写入基础 HTML 骨架，避免 about:blank 空白
                     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>实时日志 - STRMhub</title><style>*{margin:0;padding:0;}html,body{height:100%;}body{background:#1e1e1e;}</style></head><body></body></html>');
                     w.document.close();
                     const poll = () => {
+                        if (w.closed) { clearInterval(_logWindowTimer); _logWindowTimer = null; return; }
                         const headers = {};
                         if (authToken.value) {
                             headers['Authorization'] = 'Bearer ' + authToken.value;
@@ -7347,8 +7466,9 @@ av:
                                 const sources = data.data.sources || {};
                                 const html = entries.map(e => {
                                     const color = e.level === 'ERROR' ? '#f56c6c' : e.level === 'WARNING' ? '#e6a23c' : '#d4d4d4';
-                                    const src = sources[e.source] || e.source || 'APP';
-                                    return `<div style="padding:2px 0;border-bottom:1px solid #333;"><span style="color:#666;font-size:11px;background:#3a3a3a;padding:0 4px;border-radius:2px;margin-right:4px;">${src}</span><span style="color:${color};font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;">${e.line}</span></div>`;
+                                    const src = escapeHtml(sources[e.source] || e.source || 'APP');
+                                    const line = escapeHtml(e.line);
+                                    return `<div style="padding:2px 0;border-bottom:1px solid #333;"><span style="color:#666;font-size:11px;background:#3a3a3a;padding:0 4px;border-radius:2px;margin-right:4px;">${src}</span><span style="color:${color};font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;">${line}</span></div>`;
                                 }).join('');
                                 w.document.body.innerHTML = `<div style="background:#1e1e1e;color:#d4d4d4;padding:12px;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6;height:100vh;overflow-y:auto;box-sizing:border-box;">${html || '<div style="color:#666;padding:20px;">暂无日志</div>'}</div>`;
                                 w.document.title = '实时日志 - STRMhub';
@@ -7356,8 +7476,8 @@ av:
                         }).catch(() => {});
                     };
                     poll();
-                    const timer = setInterval(poll, 2000);
-                    w.addEventListener('beforeunload', () => clearInterval(timer));
+                    _logWindowTimer = setInterval(poll, 2000);
+                    w.addEventListener('beforeunload', () => { if (_logWindowTimer) { clearInterval(_logWindowTimer); _logWindowTimer = null; } });
                 };
 
                 // 本地账号管理
@@ -7519,7 +7639,12 @@ av:
 
                     // 启动实时日志轮询（页面加载即开始，不依赖切到日志页）
                     fetchLogs();
-                    logs.timer = setInterval(fetchLogs, 2000);
+                    if (!logs.timer) logs.timer = setInterval(fetchLogs, 2000);
+
+                    // 获取版本信息
+                    fetchVersionInfo();
+                    if (_versionTimer) clearInterval(_versionTimer);
+                    _versionTimer = setInterval(fetchVersionInfo, 300000); // 每5分钟刷新一次
 
                     // 连接 WebSocket 进度通道
                     connectWebSocket();
@@ -7548,18 +7673,23 @@ av:
                     await loadEmby();
                     loadDashboard();
 
-                    // 若刷新后仍在日志页，自动开始拉取
+                    // 若刷新后仍在日志页，确保轮询已启动（init 已启动则不重复）
                     if (tab.value === 'logs') {
                         fetchLogs();
-                        logs.timer = setInterval(fetchLogs, 2000);
+                        if (!logs.timer) logs.timer = setInterval(fetchLogs, 2000);
                     }
-                    document.addEventListener('click', closeSelects);
+                    if (!_docClickHandler) {
+                        _docClickHandler = closeSelects;
+                        document.addEventListener('click', _docClickHandler);
+                    }
 
                     initLoading.value = false;
                 };
 
                 onMounted(() => {
                     initApp();
+                    // 页面关闭时清理资源
+                    window.addEventListener('beforeunload', cleanupResources);
                 });
 
                 // 切换到二级分类 Tab 时刷新 CodeMirror
@@ -8449,7 +8579,7 @@ av:
                     tab, configTab, sidebarCollapsed,
                     accounts, loginApps, qr, qrStatusClass, files, toast,
                     version, logs, logViewer, localAccount, accountMenu,
-                    openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, onKeywordInput, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount,
+                    openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, onKeywordInput, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount, fetchVersionInfo,
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
                     hasValidAccount, openLoginModal, closeLoginModal,
                     getQRCode, checkAccount, deleteAccount, appLabel,
@@ -8511,6 +8641,7 @@ av:
                     initLoading, initLoadingText,
                     authRequired, authToken, loginForm, doLogin, doLogout,
                     online, wsStatus, wsStatusClass, wsStatusText,
+                    versionInfo,
                     // 转存下载
                     clouddownload, addTask,
                     formatDownloadSize,

@@ -75,7 +75,7 @@ class WXBizMsgCrypt:
 
             return xml_content, from_corp_id
         except Exception as e:
-            logger.error(f"消息解密失败: {e}")
+            logger.warning(f"消息解密失败: {e}")
             return None
 
     def encrypt(self, reply_msg: str) -> Optional[str]:
@@ -106,7 +106,7 @@ class WXBizMsgCrypt:
 
             return base64.b64encode(encrypted).decode("utf-8")
         except Exception as e:
-            logger.error(f"消息加密失败: {e}")
+            logger.warning(f"消息加密失败: {e}")
             return None
 
     def generate_encrypted_reply(self, reply_msg: str) -> Optional[str]:
@@ -124,7 +124,7 @@ class WXBizMsgCrypt:
             root = ET.fromstring(xml_str)
             return {child.tag: child.text or "" for child in root}
         except Exception as e:
-            logger.error(f"XML 解析失败: {e}")
+            logger.warning(f"XML 解析失败: {e}")
             return {}
 
 

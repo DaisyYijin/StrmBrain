@@ -249,7 +249,7 @@ async def full_sync(payload: FullSyncRequest):
         media_dir.mkdir(parents=True, exist_ok=True)
         _logger.info(f"[sync] 本地媒体目录已就绪: {media_dir.resolve()}")
     except Exception as e:
-        _logger.error(f"[sync] 创建本地媒体目录失败: {payload.local_media_dir} - {e}")
+        _logger.warning(f"[sync] 创建本地媒体目录失败: {payload.local_media_dir} - {e}")
         return ApiResponse(code=400, message=f"无法创建本地媒体目录 '{payload.local_media_dir}'：{e}")
 
     try:
