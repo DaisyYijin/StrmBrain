@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>STRMhub</title>
+    <link rel="icon" type="image/png" href="/logo.png">
+    <link rel="shortcut icon" type="image/png" href="/logo.png">
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
@@ -57,6 +59,14 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .sidebar-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            object-fit: contain;
             flex-shrink: 0;
         }
 
@@ -2042,6 +2052,7 @@
             <!-- PC 左侧边栏 -->
             <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
                 <div class="sidebar-header">
+                    <img src="/logo.png" class="sidebar-logo" alt="STRMhub">
                     <span class="logo-text">STRMhub</span>
                     <span class="ws-indicator" v-if="!sidebarCollapsed" :title="wsStatusText">
                         <span class="ws-dot" :class="wsStatusClass"></span>

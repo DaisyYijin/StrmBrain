@@ -237,6 +237,15 @@ async def index():
     return resp
 
 
+@app.get("/logo.png")
+async def logo():
+    """Logo 图片"""
+    logo_file = frontend_path / "logo.png"
+    if logo_file.exists():
+        return FileResponse(logo_file, media_type="image/png")
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=HOST, port=PORT)
