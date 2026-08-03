@@ -78,6 +78,22 @@ async def get_version():
     })
 
 
+@router.post("/version/check", response_model=ApiResponse)
+async def check_version():
+    """主动触发版本检查（请求 GitHub Releases API）"""
+    from app.services.version_service import check_latest_version
+    info = await check_latest_version()
+    return ApiResponse(data={
+        "version": VERSION,
+        "latest_version": info.get("latest_version"),
+        "has_update": info.get("has_update", False),
+        "release_url": info.get("release_url"),
+        "release_notes": info.get("release_notes"),
+        "checked_at": info.get("checked_at"),
+        "error": info.get("error"),
+    })
+
+
 @router.post("/login", response_model=ApiResponse)
 async def login(payload: LoginIn, request: Request):
     """登录认证，返回 JWT token"""

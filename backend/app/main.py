@@ -23,6 +23,7 @@ from app.core.progress import progress_manager
 _PUBLIC_EXACT = frozenset({
     "/api/health",
     "/api/version",
+    "/api/version/check",
     "/api/login",
     "/api/wechat/callback",  # 企微回调（GET 验证 + POST 消息）
     "/api/emby/webhook",     # Emby Webhook（POST 入库事件）
