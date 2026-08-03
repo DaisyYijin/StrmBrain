@@ -63,9 +63,9 @@
         }
 
         .sidebar-logo {
-            width: 28px;
-            height: 28px;
-            border-radius: 4px;
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
             object-fit: contain;
             flex-shrink: 0;
         }
@@ -2053,7 +2053,6 @@
             <aside class="sidebar" :class="{ collapsed: sidebarCollapsed }">
                 <div class="sidebar-header">
                     <img src="/logo.png" class="sidebar-logo" alt="STRMhub">
-                    <span class="logo-text">STRMhub</span>
                     <span class="ws-indicator" v-if="!sidebarCollapsed" :title="wsStatusText">
                         <span class="ws-dot" :class="wsStatusClass"></span>
                         <span>{{ wsStatusText }}</span>
