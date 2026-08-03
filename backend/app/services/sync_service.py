@@ -197,11 +197,15 @@ class SyncService:
         local_root = Path(local_media_dir)
 
         if not local_root.exists():
-            logger.warning(f"[sync] 增量同步跳过：本地媒体目录不存在 {local_media_dir}")
-            return {
-                "total": 0, "synced": [], "skipped": 0,
-                "errors": [{"name": "", "error": "本地媒体目录不存在"}],
-            }
+            try:
+                local_root.mkdir(parents=True, exist_ok=True)
+                logger.info(f"[sync] 增量同步：本地媒体目录不存在，已自动创建 {local_media_dir}")
+            except Exception as e:
+                logger.warning(f"[sync] 增量同步跳过：无法创建本地媒体目录 {local_media_dir} - {e}")
+                return {
+                    "total": 0, "synced": [], "skipped": 0,
+                    "errors": [{"name": "", "error": f"无法创建本地媒体目录: {e}"}],
+                }
 
         # 预加载 STRM 设置
         strm_settings = cls._load_strm_settings()
@@ -725,11 +729,15 @@ class SyncService:
 
         local_root = Path(local_media_dir)
         if not local_root.exists():
-            logger.warning(f"[sync-upload] 本地媒体目录不存在: {local_media_dir}")
-            return {
-                "total": 0, "uploaded": [], "skipped": 0,
-                "errors": [{"name": "", "error": "本地媒体目录不存在"}],
-            }
+            try:
+                local_root.mkdir(parents=True, exist_ok=True)
+                logger.info(f"[sync-upload] 本地媒体目录不存在，已自动创建: {local_media_dir}")
+            except Exception as e:
+                logger.warning(f"[sync-upload] 无法创建本地媒体目录: {local_media_dir} - {e}")
+                return {
+                    "total": 0, "uploaded": [], "skipped": 0,
+                    "errors": [{"name": "", "error": f"无法创建本地媒体目录: {e}"}],
+                }
 
         # 1. 扫描本地匹配文件
         local_files: list[Path] = []

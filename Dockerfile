@@ -36,7 +36,7 @@ COPY --from=builder /install /usr/local
 COPY backend/ ./
 
 # 创建数据目录
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/config /app/log /media
 
 # 环境变量默认值
 ENV HOST=0.0.0.0 \

@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STRMhub Wiki — 115 网盘 STRM 生成与影视整理工具</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg-soft: #161a23;
+    --bg-card: #1b2029;
+    --border: #2a3040;
+    --text: #d7dce4;
+    --text-dim: #8b93a3;
+    --accent: #3b82f6;
+    --accent-soft: rgba(59, 130, 246, .12);
+    --green: #34d399;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --purple: #a78bfa;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+    --sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.75;
+    font-size: 15px;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2e3545; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ===== 布局 ===== */
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar {
+    width: 280px; flex-shrink: 0;
+    background: var(--bg-soft);
+    border-right: 1px solid var(--border);
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    padding: 20px 0 40px;
+  }
+  .sidebar .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 22px 18px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .sidebar .brand img { width: 34px; height: 34px; border-radius: 8px; }
+  .sidebar .brand b { font-size: 17px; letter-spacing: .5px; }
+  .sidebar .brand small { display: block; color: var(--text-dim); font-size: 11px; font-weight: normal; }
+  .sidebar nav a {
+    display: block; color: var(--text-dim);
+    text-decoration: none; font-size: 13.5px;
+    padding: 6px 22px; border-left: 3px solid transparent;
+    transition: all .15s;
+  }
+  .sidebar nav a:hover { color: var(--text); background: rgba(255,255,255,.03); }
+  .sidebar nav a.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+  .sidebar .nav-group {
+    font-size: 11px; color: #565f70; text-transform: uppercase; letter-spacing: 1px;
+    padding: 14px 22px 4px;
+  }
+
+  .main { flex: 1; min-width: 0; max-width: 960px; margin: 0 auto; padding: 0 40px 80px; }
+
+  /* ===== Hero ===== */
+  .hero {
+    padding: 56px 0 36px;
+    border-bottom: 1px solid var(--border); margin-bottom: 44px;
+  }
+  .hero .logo { width: 72px; height: 72px; border-radius: 16px; margin-bottom: 18px; }
+  .hero h1 { font-size: 32px; letter-spacing: .5px; }
+  .hero h1 .sub { color: var(--accent); }
+  .hero p.tagline { color: var(--text-dim); margin-top: 10px; font-size: 15.5px; max-width: 640px; }
+  .hero .badges { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge {
+    font-size: 12px; padding: 4px 12px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid rgba(59,130,246,.3);
+  }
+  .badge.green { background: rgba(52,211,153,.1); color: var(--green); border-color: rgba(52,211,153,.3); }
+  .badge.purple { background: rgba(167,139,250,.1); color: var(--purple); border-color: rgba(167,139,250,.3); }
+
+  /* ===== 章节 ===== */
+  section { margin-bottom: 52px; }
+  h2 {
+    font-size: 22px; margin-bottom: 18px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .anchor { color: var(--accent); font-size: 18px; }
+  h3 { font-size: 16.5px; margin: 28px 0 12px; color: #eef1f6; }
+  h3::before { content: "▸ "; color: var(--accent); }
+  p { margin-bottom: 12px; }
+  ul, ol { margin: 0 0 14px 22px; }
+  li { margin-bottom: 6px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: var(--mono); font-size: 13px;
+    background: rgba(255,255,255,.07); padding: 2px 6px; border-radius: 4px;
+    color: #9fd0ff;
+  }
+  .dim { color: var(--text-dim); }
+
+  /* ===== 卡片 ===== */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin: 18px 0; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    transition: transform .15s, border-color .15s;
+  }
+  .card:hover { transform: translateY(-2px); border-color: #3a4458; }
+  .card .icon { font-size: 22px; }
+  .card h4 { font-size: 15px; margin: 8px 0 6px; }
+  .card p { font-size: 13px; color: var(--text-dim); margin: 0; }
+
+  /* ===== 代码块 ===== */
+  pre {
+    background: #0b0e14; border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px;
+    overflow-x: auto; margin: 12px 0 18px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.7;
+  }
+  pre .c { color: #5c6474; }
+  pre .k { color: #c792ea; }
+  pre .s { color: #a5d6a5; }
+  pre .n { color: #82aaff; }
+  pre .e { color: #f78c6c; }
+
+  /* ===== 表格 ===== */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; margin: 14px 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 560px; }
+  th {
+    background: var(--bg-soft); text-align: left;
+    padding: 10px 14px; font-weight: 600; color: #b9c1d0;
+    border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  .method {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+    padding: 2px 8px; border-radius: 5px; white-space: nowrap;
+  }
+  .m-get  { background: rgba(52,211,153,.12);  color: var(--green); }
+  .m-post { background: rgba(59,130,246,.12);  color: var(--accent); }
+  .m-del  { background: rgba(248,113,113,.12); color: var(--red); }
+  .m-ws   { background: rgba(167,139,250,.12); color: var(--purple); }
+  .m-any  { background: rgba(251,191,36,.12);  color: var(--amber); }
+  .path { font-family: var(--mono); font-size: 12.5px; color: #9fd0ff; white-space: nowrap; }
+  .pub { font-size: 11px; color: var(--red); border: 1px solid rgba(248,113,113,.4); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ===== 提示框 ===== */
+  .note, .warn, .tip {
+    border-radius: 10px; padding: 12px 16px; margin: 14px 0;
+    font-size: 13.5px; border: 1px solid;
+  }
+  .note { background: rgba(59,130,246,.08);  border-color: rgba(59,130,246,.35); }
+  .warn { background: rgba(251,191,36,.07);  border-color: rgba(251,191,36,.35); }
+  .tip  { background: rgba(52,211,153,.07);  border-color: rgba(52,211,153,.35); }
+  .note b, .warn b, .tip b { margin-right: 4px; }
+
+  /* ===== 目录树 ===== */
+  .tree {
+    font-family: var(--mono); font-size: 13px;
+    background: #0b0e14; border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; line-height: 1.9; overflow-x: auto;
+  }
+  .tree .dir { color: var(--accent); }
+  .tree .cmt { color: #5c6474; }
+
+  /* ===== 步骤 ===== */
+  .steps { counter-reset: step; margin: 14px 0; }
+  .step { display: flex; gap: 14px; margin-bottom: 16px; }
+  .step .num {
+    counter-increment: step; flex-shrink: 0;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid rgba(59,130,246,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+  }
+  .step .num::before { content: counter(step); }
+  .step .body { padding-top: 2px; }
+
+  /* ===== 页脚 ===== */
+  footer {
+    border-top: 1px solid var(--border); padding-top: 22px;
+    color: var(--text-dim); font-size: 13px;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 900px) {
+    .layout { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
+    .sidebar nav a { padding: 8px 22px; }
+    .main { padding: 0 20px 60px; }
+    .hero h1 { font-size: 26px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ===================== 侧边栏 ===================== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="LOGO.png" alt="STRMhub">
+      <div>
+        <b>STRMhub Wiki</b>
+        <small>115 网盘 STRM 生成与影视整理</small>
+      </div>
+    </div>
+    <nav id="nav">
+      <a href="#overview">📖 项目简介</a>
+      <a href="#features">✨ 核心功能</a>
+      <div class="nav-group">开始使用</div>
+      <a href="#quickstart">🚀 快速部署</a>
+      <a href="#usage">🧭 使用流程</a>
+      <a href="#config">⚙️ 配置说明</a>
+      <div class="nav-group">深入</div>
+      <a href="#architecture">🏗️ 架构与目录</a>
+      <a href="#api">🔌 API 参考</a>
+      <a href="#storage">💾 数据存储</a>
+      <a href="#notify">🔔 通知与集成</a>
+      <div class="nav-group">其他</div>
+      <a href="#faq">❓ 常见问题</a>
+      <a href="#links">🔗 相关链接</a>
+    </nav>
+  </aside>
+
+  <!-- ===================== 主内容 ===================== -->
+  <main class="main">
+
+    <!-- Hero -->
+    <div class="hero">
+      <img class="logo" src="LOGO.png" alt="STRMhub Logo">
+      <h1>STRMhub <span class="sub">Wiki</span></h1>
+      <p class="tagline">
+        115 网盘 STRM 生成与影视整理工具：转存下载、自动分类整理、STRM 同步归档，
+        基于 Emby 302 重定向实现云盘原画直连播放 —— 不占本地硬盘，直接用网盘带宽看原盘。
+      </p>
+      <div class="badges">
+        <span class="badge">Python 3.12 + FastAPI</span>
+        <span class="badge">Vue 3 单页前端</span>
+        <span class="badge green">Docker amd64 / arm64</span>
+        <span class="badge purple">Emby 302 直连播放</span>
+      </div>
+    </div>
+
+    <!-- 项目简介 -->
+    <section id="overview">
+      <h2><span class="anchor">#</span> 项目简介</h2>
+      <p>
+        <strong>STRMhub</strong> 是一个面向 115 网盘的影视资源管理工具，解决「网盘资源如何接入
+        Emby 媒体库并以原画质直连播放」的完整链路问题。核心思路：
+      </p>
+      <div class="cards">
+        <div class="card">
+          <div class="icon">⬇️</div>
+          <h4>转存下载</h4>
+          <p>115 分享链接转存 + 磁力 / HTTP / FTP / 电驴离线下载，合并为单一输入框，自动识别链接类型。</p>
+        </div>
+        <div class="card">
+          <div class="icon">🗂️</div>
+          <h4>影视整理</h4>
+          <p>TMDB 匹配 + AI 辅助识别，按电影 / 电视剧 / AV 自动分类、重命名、洗版去重。</p>
+        </div>
+        <div class="card">
+          <div class="icon">📄</div>
+          <h4>STRM 同步</h4>
+          <p>为视频生成 .strm 索引文件，图片 / NFO / 字幕直下本地；增量同步仅处理差异文件。</p>
+        </div>
+        <div class="card">
+          <div class="icon">▶️</div>
+          <h4>Emby 播放</h4>
+          <p>STRM 指向本服务 302 跳转接口，播放时实时获取 115 直链，云盘原画不占本地空间。</p>
+        </div>
+      </div>
+      <div class="note"><b>ℹ️</b>默认访问 <code>http://服务器IP:8000</code>，默认账号 <code>admin</code> / <code>admin123</code>，首次登录后请立即修改。</div>
+    </section>
+
+    <!-- 核心功能 -->
+    <section id="features">
+      <h2><span class="anchor">#</span> 核心功能</h2>
+
+      <h3>转存下载</h3>
+      <ul>
+        <li>合并离线下载与分享转存为单一输入框，<strong>自动识别链接类型</strong>：115 分享链接获取文件列表后转存，磁力 / HTTP / FTP / 电驴链接直接添加为离线下载任务。</li>
+        <li>转存 / 下载完成后<strong>自动触发影视整理</strong>。</li>
+      </ul>
+
+      <h3>影视整理</h3>
+      <ul>
+        <li>扫描 115 网盘源目录，通过 <strong>TMDB 匹配</strong>影视信息，按电影 / 电视剧 / AV 自动分类移动。</li>
+        <li>支持二级分类自定义根目录（MoviePilot 式 YAML 分类规则）、重命名规则（完整 / 常规 / 精简三档预设）。</li>
+        <li>洗版策略：<strong>SHA1 去重</strong> + 分辨率 / 编码 / HDR 等多维比较（YAML 可配置）。</li>
+        <li><strong>AI 辅助识别</strong>：TMDB 匹配失败时调用 OpenAI 兼容 API 从文件名提取标题重新搜索。</li>
+        <li>整理完成后非视频文件自动归入冗余目录，源目录自动清理空文件夹。</li>
+      </ul>
+
+      <h3>同步归档</h3>
+      <ul>
+        <li><strong>全量同步</strong>：扫描网盘目录，视频生成 <code>.strm</code> 文件（内容指向本服务 302 跳转接口），图片 / NFO / 字幕等元数据直接下载到本地。</li>
+        <li><strong>增量同步</strong>：通过清单文件（<code>file_id + SHA1</code>）对比网盘与本地差异，仅处理新增 / 变更 / 移动 / 删除的文件，支持 Cron 定时执行。</li>
+        <li><strong>上传同步</strong>：将 Emby 刮削产生的 NFO / 图片 / 字幕上传回 115 网盘。</li>
+      </ul>
+
+      <h3>Emby 集成</h3>
+      <ul>
+        <li>STRM 文件通过本服务 <code>302 重定向</code>实时获取 115 直链，播放时直接使用网盘带宽，无需下载到本地。</li>
+        <li>同步完成后自动触发 Emby 媒体库刷新；支持入库 Webhook 通知。</li>
+      </ul>
+
+      <h3>特色工具</h3>
+      <ul>
+        <li><strong>媒体库封面生成</strong>：为 Emby 所有媒体库自动生成拼图封面（anime / starfield / featured / random 四种样式）。</li>
+        <li><strong>115 文件夹清空</strong>：定时清理网盘指定文件夹；支持清空回收站。</li>
+        <li><strong>STRM 批量替换</strong>：批量替换 STRM 文件内的 URL 字符串（迁移服务器时非常有用）。</li>
+        <li><strong>缺集检测</strong>：对比 TMDB 查找剧集缺失情况。</li>
+        <li><strong>目录监控</strong>：watchdog 递归监控本地目录变化。</li>
+      </ul>
+    </section>
+
+    <!-- 快速部署 -->
+    <section id="quickstart">
+      <h2><span class="anchor">#</span> 快速部署</h2>
+
+      <h3>方式一：Docker Compose（推荐）</h3>
+      <p>新建 <code>docker-compose.yml</code>：</p>
+<pre><span class="c"># docker-compose.yml</span>
+services:
+  strmhub:
+    <span class="c"># 方式一：使用 GitHub Actions 自动构建的镜像（推荐，无需本地构建）</span>
+    image: <span class="s">ghcr.io/daisyyijin/strmhub:latest</span>
+    <span class="c"># 方式二：本地构建（注释掉 image，取消注释 build）</span>
+    <span class="c"># build: .</span>
+    container_name: strmhub
+    restart: unless-stopped
+    ports:
+      - <span class="s">"8000:8000"</span>
+    volumes:
+      - <span class="e">strmhub_data</span>:/app/data       <span class="c"># 账号、Cookie、同步清单、备份</span>
+      - <span class="e">strmhub_config</span>:/app/config     <span class="c"># 设置、管理员账号、同步计划</span>
+      - <span class="e">strmhub_log</span>:/app/log         <span class="c"># 运行日志</span>
+      - <span class="e">strmhub_media</span>:/media         <span class="c"># STRM 文件输出目录（Emby 读取）</span>
+    environment:
+      - <span class="n">TZ</span>=Asia/Shanghai
+
+volumes:
+  strmhub_data:
+  strmhub_config:
+  strmhub_log:
+  strmhub_media:</pre>
+<pre>$ docker compose up -d</pre>
+      <p>启动后访问 <code>http://服务器IP:8000</code>。镜像由 GitHub Actions 自动构建，支持 <strong>amd64 / arm64</strong> 双架构。</p>
+
+      <h3>方式二：Windows 本地运行</h3>
+      <p>项目自带 <code>start.bat</code> 一键启动脚本：自动定位 Python 3.12 环境，缺少依赖时用清华镜像源安装
+        <code>requirements.txt</code>，随后启动 uvicorn 并自动打开浏览器。</p>
+      <p>也可以手动运行：</p>
+<pre>cd backend
+pip install -r requirements.txt
+python main.py</pre>
+
+      <h3>健康检查</h3>
+      <p>镜像内置 <code>HEALTHCHECK</code>，探测公开接口 <code>GET /api/health</code>；手动验证服务可用：
+        <code>GET http://服务器IP:8000/api/health</code>。</p>
+    </section>
+
+    <!-- 使用流程 -->
+    <section id="usage">
+      <h2><span class="anchor">#</span> 使用流程</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="num"></div>
+          <div class="body">
+            <b>核心配置</b> — 扫码登录 115 账号；配置 Emby 地址 / API Key、TMDB API Key（可选镜像域名）、STRM 服务器地址。
+          </div>
+        </div>
+        <div class="step">
+          <div class="num"></div>
+          <div class="body">
+            <b>转存下载</b> — 粘贴 115 分享链接或磁力 / HTTP / FTP / 电驴链接，自动转存到网盘并触发整理。
+          </div>
+        </div>
+        <div class="step">
+          <div class="num"></div>
+          <div class="body">
+            <b>整理功能</b> — 配置整理目录、分类规则（二级分类 YAML）、重命名规则（完整 / 常规 / 精简）、洗版策略。
+          </div>
+        </div>
+        <div class="step">
+          <div class="num"></div>
+          <div class="body">
+            <b>同步归档</b> — 执行全量同步生成 STRM 文件到 <code>/media</code>，设置增量同步 Cron 定时计划，配置上传同步。
+          </div>
+        </div>
+        <div class="step">
+          <div class="num"></div>
+          <div class="body">
+            <b>通知配置</b> — 按需配置企业微信 / Telegram / QQ / Bark / Server酱 / Webhook 通知渠道与事件规则。
+          </div>
+        </div>
+      </div>
+      <div class="tip"><b>💡</b>STRM 目录接入 Emby 后，播放时本服务通过 302 跳转把请求转给 115 直链 —— 媒体服务器只看到「一个 URL」，播放带宽全部走网盘，本地零存储成本。</div>
+    </section>
+
+    <!-- 配置说明 -->
+    <section id="config">
+      <h2><span class="anchor">#</span> 配置说明</h2>
+
+      <h3>环境变量</h3>
+      <p>复制 <code>backend/.env.example</code> 为 <code>.env</code>（或在 docker-compose 的 <code>environment</code> 中覆盖）：</p>
+      <div class="table-wrap">
+        <table>
+          <tr><th>变量</th><th>默认值</th><th>说明</th></tr>
+          <tr><td><code>HOST</code></td><td><code>0.0.0.0</code></td><td>监听地址</td></tr>
+          <tr><td><code>PORT</code></td><td><code>8000</code></td><td>监听端口</td></tr>
+          <tr><td><code>SECRET_KEY</code></td><td>（空）</td><td>JWT 签名密钥；留空则首次启动自动生成并持久化到 <code>data/.secret_key</code></td></tr>
+          <tr><td><code>AUTH_ENABLED</code></td><td><code>true</code></td><td>是否启用登录验证（设为 false 可关闭）</td></tr>
+          <tr><td><code>ADMIN_USERNAME</code></td><td><code>admin</code></td><td>管理员账号</td></tr>
+          <tr><td><code>ADMIN_PASSWORD</code></td><td><code>admin123</code></td><td>管理员密码（请修改）</td></tr>
+          <tr><td><code>CORS_ORIGINS</code></td><td>（空）</td><td>允许的跨域源，逗号分隔；留空则不启用 CORS（前后端同源无需配置）</td></tr>
+          <tr><td><code>VERSION</code></td><td><code>0.1.0</code></td><td>显示版本号</td></tr>
+          <tr><td><code>TZ</code></td><td><code>Asia/Shanghai</code></td><td>容器时区（docker-compose 中设置）</td></tr>
+        </table>
+      </div>
+
+      <h3>页面配置（Web UI）</h3>
+      <div class="table-wrap">
+        <table>
+          <tr><th>配置项</th><th>说明</th></tr>
+          <tr><td>115 账号</td><td>扫码登录或手动添加 Cookie（自动校验有效性），支持多账号</td></tr>
+          <tr><td>Emby</td><td>服务器地址 + API Key；支持连接测试、入库刷新触发、通知开关</td></tr>
+          <tr><td>TMDB</td><td>API Key、语言、镜像域名（可配），带连接测试</td></tr>
+          <tr><td>STRM</td><td>对外访问地址（302 跳转的基准 URL）、输出目录</td></tr>
+          <tr><td>115 API 间隔</td><td>调用 115 接口的限流间隔，防止风控</td></tr>
+          <tr><td>AI 识别</td><td>OpenAI 兼容 API（如 SiliconFlow）：Base URL、Key、模型，用于文件名元数据提取</td></tr>
+          <tr><td>通知</td><td>企业微信 / Telegram / QQ 通知开关与凭据</td></tr>
+        </table>
+      </div>
+
+      <div class="warn"><b>⚠️</b>登录接口自带 IP 限流（5 次 / 5 分钟）；JWT Token 有效期 7 天，密钥务必妥善保存，丢失后所有登录态失效。</div>
+    </section>
+
+    <!-- 架构 -->
+    <section id="architecture">
+      <h2><span class="anchor">#</span> 架构与目录</h2>
+
+      <h3>技术栈</h3>
+      <p>Python 3.12 + FastAPI（后端）· Vue 3 (CDN) 单页应用（前端）· JSON 文件存储（无数据库）·
+        APScheduler（定时任务）· watchdog（目录监控）· Pillow（拼图封面）· p115client（115 网盘 SDK）。
+        部署形态为 Docker，支持 amd64 / arm64。</p>
+
+      <h3>项目结构</h3>
+      <div class="tree">
+┌─ <span class="dir">backend/</span>
+│  ├─ <span class="dir">app/</span>              <span class="cmt"># 后端主程序</span>
+│  │  ├─ <span class="dir">api/</span>          <span class="cmt"># 路由：system / v115 / accounts / organize / tools / tasks ...</span>
+│  │  ├─ <span class="dir">core/</span>         <span class="cmt"># auth(JWT+bcrypt) / cache / json_storage / scheduler / task_queue ...</span>
+│  │  ├─ <span class="dir">services/</span>      <span class="cmt"># client_115 / organize_service / sync_service / tmdb_service / emby ...</span>
+│  │  ├─ <span class="dir">models/ schemas/</span> <span class="cmt"># Pydantic 数据模型</span>
+│  │  ├─ <span class="dir">config.py</span>      <span class="cmt"># 配置常量（环境变量优先）</span>
+│  │  └─ <span class="dir">main.py</span>        <span class="cmt"># FastAPI 入口：路由挂载 + JWT 中间件 + WS 进度推送</span>
+│  ├─ <span class="dir">static/</span>          <span class="cmt"># index.html（Vue3 SPA，7 个功能页 Tab）+ logo</span>
+│  ├─ <span class="dir">data/</span>            <span class="cmt"># JSON 数据 / cookies / manifests / backups / .secret_key</span>
+│  ├─ <span class="dir">config/ log/ bin/</span> <span class="cmt"># 配置 / 日志 / ffprobe.exe</span>
+│  ├─ <span class="dir">requirements.txt .env.example</span>
+│  └─ <span class="dir">main.py</span>          <span class="cmt"># uvicorn 启动入口（python main.py）</span>
+├─ <span class="dir">docker-compose.yml</span>   <span class="cmt"># 一键编排（4 个持久化卷）</span>
+├─ <span class="dir">Dockerfile</span>           <span class="cmt"># 两阶段构建，HEALTHCHECK /api/health</span>
+├─ <span class="dir">start.bat</span>            <span class="cmt"># Windows 一键启动</span>
+├─ <span class="dir">.github/workflows/</span>  <span class="cmt"># docker-publish.yml 自动构建镜像</span>
+└─ <span class="dir">LOGO.png README.md</span>
+      </div>
+
+      <h3>关键服务模块</h3>
+      <div class="table-wrap">
+        <table>
+          <tr><th>模块</th><th>职责</th></tr>
+          <tr><td><code>client_115.py</code></td><td>115 网盘封装：扫码登录、文件列表、下载直链（10 分钟缓存）、离线下载、分享转存、删除 / 清空 / 回收站；线程池 + 限流重试</td></tr>
+          <tr><td><code>organize_service.py</code></td><td>影视整理核心：AV 番号识别、冗余检测、资源信息解析（文件名 + ffprobe）、洗版比较、重命名模板、TMDB 匹配分类</td></tr>
+          <tr><td><code>sync_service.py</code></td><td>全量 / 增量 / 上传同步；manifest 清单对比（file_id + SHA1）</td></tr>
+          <tr><td><code>tmdb_service.py</code></td><td>TMDB 搜索 / 详情，镜像域名可配，LRU + TTL 缓存</td></tr>
+          <tr><td><code>emby.py</code></td><td>Emby 客户端：统计、媒体库操作、刷新、图片上传、缺封面扫描</td></tr>
+          <tr><td><code>media_probe.py</code></td><td>ffprobe 只下载视频头部几 MB 探测分辨率 / 编码 / HDR</td></tr>
+          <tr><td><code>category_helper.py</code></td><td>MoviePilot 式 YAML 二级分类引擎</td></tr>
+          <tr><td><code>cover_gen.py</code></td><td>Pillow 拼图封面生成（4 种样式）</td></tr>
+          <tr><td><code>ai_service.py</code></td><td>OpenAI 兼容 API 从文件名提取元数据</td></tr>
+          <tr><td><code>notification_manager.py</code></td><td>多渠道通知：telegram / bark / serverchan / meow / webhook / wechat_work</td></tr>
+          <tr><td><code>wechat_app.py</code> / <code>wechat_crypto.py</code></td><td>企业微信自建应用：token 缓存、消息发送、文本指令、AES-256-CBC 加解密</td></tr>
+          <tr><td><code>backup_service.py</code></td><td>data/ JSON 打包 zip 备份 / 恢复 / 清理</td></tr>
+          <tr><td><code>folder_watcher.py</code></td><td>watchdog 递归目录监控（全局单例）</td></tr>
+          <tr><td><code>version_service.py</code></td><td>GitHub Releases 版本检查（后台循环）</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <!-- API 参考 -->
+    <section id="api">
+      <h2><span class="anchor">#</span> API 参考</h2>
+      <p>除标注 <span class="pub">公开</span> 的接口外，其余接口均需请求头 <code>Authorization: Bearer &lt;token&gt;</code>
+        （登录后获取）。实时进度通过 <span class="method m-ws">WS</span> <code>/ws/progress</code> 推送。</p>
+
+      <h3>系统</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/health</td><td>健康检查 <span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/version</td><td>版本号 + GitHub 更新检查 <span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/login</td><td>登录（IP 限流 5 次 / 5 分钟）<span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/auth/check</td><td>校验当前 Token</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/logs</td><td>增量读取运行日志</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/logs/clear</td><td>清空日志</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/local-account</td><td>读取本地管理账号</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/local-account</td><td>设置 / 修改管理账号（改密码需验旧密码）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/local/browse</td><td>本地目录浏览（过滤系统敏感目录）</td></tr>
+      </table></div>
+
+      <h3>115 账号与网盘</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/115/apps</td><td>登录设备类型列表 <span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/115/qrcode</td><td>获取扫码二维码 <span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/115/qrcode/status</td><td>轮询扫码状态（成功后自动存账号）<span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/115/files</td><td>网盘文件列表（account_id / cid / offset / limit）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/115/url/{filename}</td><td>302 下载重定向，Emby 直接访问 <span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/accounts</td><td>账号列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/accounts</td><td>手动添加账号（校验 Cookie）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/accounts/{id}</td><td>账号详情</td></tr>
+        <tr><td><span class="method m-del">DELETE</span></td><td class="path">/api/accounts/{id}</td><td>删除账号</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/accounts/{id}/check</td><td>检测并刷新账号状态</td></tr>
+      </table></div>
+
+      <h3>离线下载 / 分享转存</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/add</td><td>添加离线下载（磁力 / HTTP / FTP）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/list</td><td>任务列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/del</td><td>删除任务</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/clear</td><td>清空任务</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/check_status</td><td>检查任务状态</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/config/save</td><td>保存离线下载配置</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/clouddownload/config/load</td><td>读取离线下载配置</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/share/snap</td><td>分享链接文件列表预览</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/clouddownload/share/receive</td><td>分享链接转存</td></tr>
+      </table></div>
+
+      <h3>影视整理</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/run</td><td>执行整理（支持 dry_run 试运行）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/config/save</td><td>保存整理配置（分类 / 目录 / 重命名 / 洗版 4 个独立文件）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/organize/config/load</td><td>读取整理配置</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/organize/ffprobe/status</td><td>ffprobe 可用性检查</td></tr>
+      </table></div>
+
+      <h3>同步归档</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/sync/full</td><td>全量同步（生成 STRM + 下载元数据）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/sync/incremental</td><td>增量同步（清单对比）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/sync/upload</td><td>上传同步（NFO / 图片回传网盘）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/organize/sync/schedule</td><td>读取同步定时计划</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/organize/sync/schedule</td><td>保存 Cron 定时计划</td></tr>
+      </table></div>
+
+      <h3>仪表盘</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/overview</td><td>Emby 概览 + 115 容量</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/library-stats</td><td>媒体库统计</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/genre-stats</td><td>类型统计</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/latest</td><td>最新入库</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/libraries</td><td>媒体库列表</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/recently-played</td><td>最近播放</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/popular</td><td>热门</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/upcoming</td><td>即将上映</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/play-trend</td><td>播放趋势</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/storage-stats</td><td>存储统计</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/library-detail/{item_id}</td><td>媒体库详情</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/dashboard/emby/server-status</td><td>服务器状态</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/dashboard/emby/invalidate-cache</td><td>清空仪表盘缓存（LRU + TTL）</td></tr>
+      </table></div>
+
+      <h3>设置</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/emby</td><td>Emby 配置读写</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/settings/emby/test</td><td>Emby 连接测试</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/tmdb</td><td>TMDB 配置读写</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/strm</td><td>STRM 配置读写</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/emby-sync</td><td>Emby 入库刷新配置</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/emby-notify</td><td>Emby 通知配置</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/api-interval</td><td>115 API 调用间隔</td></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/settings/notification</td><td>通知设置（企微 / TG / QQ）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/settings/notification/test</td><td>发送测试通知</td></tr>
+      </table></div>
+
+      <h3>AI 识别</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span> / <span class="method m-post">POST</span></td><td class="path">/api/ai/settings</td><td>AI 配置读写</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/ai/extract</td><td>从文件名提取电影 / 剧集信息</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/ai/test</td><td>AI 连接测试</td></tr>
+      </table></div>
+
+      <h3>特色工具</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/scan</td><td>扫描缺封面的媒体</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/run</td><td>逐条 TMDB 下载封面上传</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tools/cover-gen/libraries</td><td>媒体库列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/library/scan</td><td>单库缺封面扫描</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/library/generate</td><td>单库生成拼图封面</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/library/preview</td><td>封面预览（返回 JPEG）</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tools/cover-gen/library/styles</td><td>拼图样式列表</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tools/cover-gen/library/style-preview/{style}</td><td>样式预览</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/library/generate-all</td><td>遍历所有库生成</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/cover-gen/library/preview-first</td><td>首张封面预览</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/clear-folder/scan</td><td>扫描待清空文件夹</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/clear-folder/run</td><td>执行清空</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/clear-recycle/run</td><td>清空回收站</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/strm-replace/scan</td><td>扫描 STRM 内 URL</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/strm-replace/run</td><td>批量替换 STRM 内 URL 字符串</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tools/missing-ep/scan</td><td>对比 TMDB 查找缺集</td></tr>
+      </table></div>
+
+      <h3>任务与监控</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tasks/status</td><td>任务状态总览</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tasks/status/{task_type}</td><td>单类型任务状态</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/tasks/types</td><td>任务类型列表（strm_sync / scrape / upload / download）</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tasks/cancel</td><td>取消任务</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tasks/check</td><td>检查任务</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tasks/pause-all</td><td>暂停全部</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/tasks/resume-all</td><td>恢复全部</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/watcher/paths</td><td>监控目录列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/watcher/start</td><td>开始监控</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/watcher/stop</td><td>停止监控</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/watcher/stop-all</td><td>停止全部监控</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/watcher/status</td><td>监控状态</td></tr>
+      </table></div>
+
+      <h3>备份</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/backup/list</td><td>备份列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/backup/start</td><td>创建备份</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/backup/status</td><td>备份状态</td></tr>
+        <tr><td><span class="method m-del">DELETE</span></td><td class="path">/api/backup/{backup_id}</td><td>删除备份</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/backup/cleanup</td><td>清理旧备份</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/backup/restore</td><td>恢复备份</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/backup/restore/upload</td><td>上传 zip 恢复</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/backup/test</td><td>备份功能测试</td></tr>
+      </table></div>
+
+      <h3>通知（新渠道）</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/notification/channels</td><td>渠道列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/notification/channels</td><td>新增渠道</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/notification/rules</td><td>事件规则列表</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/notification/rules</td><td>新增规则</td></tr>
+        <tr><td><span class="method m-post">POST</span></td><td class="path">/api/notification/test</td><td>发送测试通知</td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/notification/event-types</td><td>事件类型列表</td></tr>
+      </table></div>
+
+      <h3>外部回调（公开）</h3>
+      <div class="table-wrap"><table>
+        <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+        <tr><td><span class="method m-any">GET/POST</span></td><td class="path">/api/wechat/callback</td><td>企业微信回调（URL 验证 + 消息接收，AES 加解密）<span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/wechat/callback-url</td><td>获取回调地址</td></tr>
+        <tr><td><span class="method m-any">GET/POST</span></td><td class="path">/api/emby/webhook</td><td>Emby Webhook（兼容多格式 payload，token 可选验证）<span class="pub">公开</span></td></tr>
+        <tr><td><span class="method m-get">GET</span></td><td class="path">/api/emby/webhook-url</td><td>获取 Webhook 地址</td></tr>
+      </table></div>
+    </section>
+
+    <!-- 数据存储 -->
+    <section id="storage">
+      <h2><span class="anchor">#</span> 数据存储</h2>
+      <p>项目不使用数据库，全部数据以 JSON 文件落盘（写入时原子替换并保留 <code>.bak</code>，读取损坏时自动回滚）。</p>
+      <div class="table-wrap"><table>
+        <tr><th>文件</th><th>用途</th></tr>
+        <tr><td><code>data/accounts.json</code></td><td>115 账号列表（Cookie、容量、头像）</td></tr>
+        <tr><td><code>data/settings.json</code></td><td>全局设置（emby / tmdb / strm / ai / notification 等）</td></tr>
+        <tr><td><code>data/local_account.json</code></td><td>本地管理账号 bcrypt 哈希</td></tr>
+        <tr><td><code>data/manifests/manifest_*.json</code></td><td>增量同步清单（file_id + SHA1）</td></tr>
+        <tr><td><code>data/cookies/</code></td><td>115 Cookie 持久化</td></tr>
+        <tr><td><code>data/backups/</code></td><td>备份 zip 包</td></tr>
+        <tr><td><code>data/.secret_key</code></td><td>自动生成的 JWT 密钥</td></tr>
+        <tr><td><code>classify_config.json</code></td><td>二级分类规则（YAML）</td></tr>
+        <tr><td><code>organize_dirs.json</code></td><td>整理目录配置</td></tr>
+        <tr><td><code>wash_config.json</code></td><td>洗版策略配置</td></tr>
+        <tr><td><code>rename_rules.json</code></td><td>重命名规则</td></tr>
+        <tr><td><code>sync_schedule.json</code></td><td>增量同步 Cron 计划</td></tr>
+      </table></div>
+      <div class="tip"><b>💡</b>Docker 部署时 <code>data/</code>、<code>config/</code>、<code>log/</code> 分别挂载独立命名卷 —— 升级容器不丢任何数据。建议定期使用「备份」功能打包导出。</div>
+    </section>
+
+    <!-- 通知与集成 -->
+    <section id="notify">
+      <h2><span class="anchor">#</span> 通知与集成</h2>
+
+      <h3>通知渠道</h3>
+      <ul>
+        <li><strong>新渠道（notification_manager）</strong>：Telegram、Bark、Server酱、Meow、Webhook、企业微信，支持事件规则（哪些事件发到哪个渠道）+ 模板渲染。</li>
+        <li><strong>旧渠道（settings 页）</strong>：企业微信、Telegram、QQ，带「发送测试」按钮。</li>
+      </ul>
+
+      <h3>企业微信自建应用</h3>
+      <p>支持 URL 验证与消息推送（AES-256-CBC 加密），配置回调地址后可在企业微信里直接发文本指令控制：
+        <code>handle_command</code> 模块解析指令并执行（如触发整理 / 同步）。</p>
+
+      <h3>Emby Webhook</h3>
+      <p>兼容多格式 payload（Emby 新旧版本），Token 可选校验，仅处理<strong>入库事件</strong>并触发通知，可配合入库刷新链路使用。</p>
+
+      <h3>WebSocket 进度</h3>
+      <p><code>WS /ws/progress</code> 实时推送任务进度（整理 / 同步 / 下载等），前端进度条与日志面板均基于此实现。</p>
+    </section>
+
+    <!-- FAQ -->
+    <section id="faq">
+      <h2><span class="anchor">#</span> 常见问题</h2>
+
+      <h3>播放时是走网盘带宽还是本地带宽？</h3>
+      <p>走<strong>网盘带宽</strong>。STRM 文件内容是本服务的一个 URL，Emby 请求该 URL 时服务端 302 跳转到 115 直链（直链有 10 分钟缓存），客户端直接从 115 拉流 —— 本地只保存 KB 级的 STRM 索引文件。</p>
+
+      <h3>全量同步和增量同步有什么区别？</h3>
+      <p>全量同步会完整扫描网盘目录并生成 / 校验全部 STRM；增量同步依据清单（<code>file_id + SHA1</code>）只处理新增、变更、移动、删除的文件，速度快、请求量小，适合定时执行。</p>
+
+      <h3>登录后提示密码错误 / 忘记密码怎么办？</h3>
+      <p>登录接口有 IP 限流（5 次 / 5 分钟），等待后重试。忘记密码可重置环境变量 <code>ADMIN_PASSWORD</code> 重启容器；或在服务器上删除 / 修改 <code>local_account.json</code> 后重启。</p>
+
+      <h3>115 账号被风控怎么办？</h3>
+      <p>在「核心配置 → 115 API 间隔」中调大请求间隔；尽量使用增量同步代替全量同步；多个任务并行时系统会自动排队（任务队列按类型串行 + 限流重试）。</p>
+
+      <h3>如何迁移服务器？</h3>
+      <p>备份 <code>data/</code> 与 <code>config/</code> 目录（或使用备份功能导出 zip），新服务器恢复后若 STRM 内的服务器地址变了，用「特色工具 → STRM 批量替换」一键替换 URL 前缀。</p>
+
+      <h3>如何升级版本？</h3>
+      <p>Docker：<code>docker compose pull &amp;&amp; docker compose up -d</code>。数据在命名卷中不受影响；登录页 / 系统页可查看版本号与 GitHub 更新提示。</p>
+    </section>
+
+    <!-- 链接 -->
+    <section id="links">
+      <h2><span class="anchor">#</span> 相关链接</h2>
+      <ul>
+        <li>项目仓库：<code>github.com/DaisyYijin/STRMhub</code>（镜像发布：<code>ghcr.io/daisyyijin/strmhub</code>）</li>
+        <li>本仓库 README：<a href="README.md">README.md</a></li>
+        <li>前端页面入口：<code>backend/static/index.html</code>（Web UI 即部署后的首页）</li>
+        <li>本 Wiki：<a href="wiki.html">wiki.html</a>（当前页面，单文件、可离线打开）</li>
+      </ul>
+    </section>
+
+    <footer>
+      <span>STRMhub Wiki · 基于仓库源码整理</span>
+      <span>Python 3.12 · FastAPI · Vue 3 · Docker</span>
+    </footer>
+  </main>
+</div>
+
+<script>
+  // 侧边栏滚动高亮
+  const nav = document.getElementById('nav');
+  const links = [...nav.querySelectorAll('a')];
+  const sections = links.map(a => document.querySelector(a.getAttribute('href')));
+
+  function onScroll() {
+    const pos = window.scrollY + 120;
+    let current = links[0];
+    sections.forEach((sec, i) => { if (sec && sec.offsetTop <= pos) current = links[i]; });
+    links.forEach(a => a.classList.remove('active'));
+    if (current) current.classList.add('active');
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
+</body>
+</html>
