@@ -34,6 +34,12 @@ def _extract_search_title(name: str) -> tuple[str, Optional[str]]:
     base = re.sub(r'\.[^.]+$', '', name)
     # 去除方括号内容（发布组 [CheeseAni]、集号 [01]、技术信息 [CR-WebRip 1080p HEVC AAC SRT]、字幕 [简繁内封] 等）
     base = re.sub(r'\[[^\]]*\]', ' ', base)
+    # 去除中文方括号【】内容（如【合集】、【国语版】等，通常为标记而非标题）
+    base = re.sub(r'【[^】]*】', ' ', base)
+    # 去除圆括号内容中的网址水印（如 (www.btsj6.com) ）
+    base = re.sub(r'\([^)]*www\.[^)]*\)', ' ', base)
+    # 去除 @水印@ 格式（如 @电影天堂@www.dygod.net ）
+    base = re.sub(r'@[^@\s]*@', ' ', base)
     # 去除发布组（末尾 -WORD 格式，如 -KIN, -NTb, -RARBG）
     # 仅当末尾 - 后跟 2~20 个字母数字时去除（避免误伤 Spider-Man 等标题）
     base = re.sub(r'-[A-Za-z0-9]{2,20}$', '', base)
@@ -46,9 +52,11 @@ def _extract_search_title(name: str) -> tuple[str, Optional[str]]:
     tags_list = [
         # 编解码器+声道组合（如 DDP5.1, EAC3.7.1, AC3.5.1 等）
         r'(?:ddp|dd\+|dd|eac3|ac3|dts|truehd|aac)[._\s]?\d[.\s]\d',
-        r'2160p', r'1080p', r'720p', r'480p', r'4k',
+        r'2160p', r'1080p', r'1080i', r'720p', r'720i', r'480p', r'480i', r'4k',
         r'bluray', r'blu-ray', r'webrip', r'web-dl', r'web', r'webdl',
-        r'h\.?264', r'h\.?265', r'x264', r'x265', r'hevc', r'av1', r'vc1',
+        r'h\.?264', r'h\.?265', r'x264', r'x265', r'hevc', r'av1', r'vc-?1',
+        r'dts-?hd', r'dts-?ma',
+        r'avc', r'dovi', r'doVi',
         r'10bit', r'8bit',
         r'aac', r'dts', r'truehd', r'eac3', r'ac3', r'flac', r'lpcm', r'atmos',
         r'ddp', r'dd\+', r'dd',
@@ -57,48 +65,81 @@ def _extract_search_title(name: str) -> tuple[str, Optional[str]]:
         r'nf', r'dsnp', r'amzn', r'hmax', r'atvp', r'pcok', r'stan', r'hulu', r'ma',
         r'cr', r'bili', r'bilibili', r'viu',
         r'uhd', r'hdtv', r'dvd', r'dvdrip', r'bdrip', r'brrip',
+        r'bd',
+        # HD 前缀（放在 uhd/hdtv 之后避免部分匹配）
+        r'hd',
+        # 中文字幕/语言标记
+        r'chs', r'cht', r'chc', r'gb', r'big5',
+        r'简体', r'繁体', r'简繁', r'繁简', r'内封字幕', r'内嵌字幕', r'外挂字幕',
+        r'内封', r'内嵌', r'外挂', r'双语', r'中字', r'中英',
         r'multi', r'hybrid', r'repack', r'proper', r'retail',
         r'complete', r'season[._\s]*complete',
         r'srt', r'ass', r'ssa', r'pgs', r'vobsub',
         r'\d{2,3}fps',
+        # 版本标记（v2, v3 等）
+        r'v\d+',
     ]
     # 标签前后不能紧邻字母（避免 ma 匹配 Man、dd 匹配 Adding、cr 匹配 scratch 等）
     tags_pattern = r'[._\s]?(?<![a-zA-Z])(?:' + r'|'.join(tags_list) + r')(?![a-zA-Z])[._\s]?'
+    # 用空格替换而非删除，避免相邻标签粘连导致后续无法匹配
     for _ in range(5):
-        new_base = re.sub(tags_pattern, '', base, flags=re.IGNORECASE)
+        new_base = re.sub(tags_pattern, ' ', base, flags=re.IGNORECASE)
         if new_base == base:
             break
         base = new_base
     # 第二轮：音频声道标签（5.1, 7.1 等）
-    # 在第一轮已移除分辨率标签后进行，不会再误匹配 2002.1080p 中的片段
-    # 前后不能紧邻数字（避免匹配年份中的数字），但允许字母（DDP 移除后 5.1 可能紧邻字母）
     audio_tags = [r'5[.\s]1', r'7[.\s]1', r'2[.\s]0', r'2[.\s]1', r'1[.\s]0']
     audio_pattern = r'[._\s]?(?<![0-9])(?:' + r'|'.join(audio_tags) + r')(?![a-zA-Z])[._\s]?'
     for _ in range(3):
-        new_base = re.sub(audio_pattern, '', base, flags=re.IGNORECASE)
+        new_base = re.sub(audio_pattern, ' ', base, flags=re.IGNORECASE)
         if new_base == base:
             break
         base = new_base
-    # 去 SxxExx
-    base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}[._\s]?', '', base)
+    # 去 SxxExx（含范围标记如 S01E01-E12）
+    base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', ' ', base)
     # 去单独的 Sxx（季号，无集号）
     base = re.sub(r'(?:^|[._\s])[sS]\d{1,2}(?![eE]\d)(?:[._\s]|$)', ' ', base)
     # 去 Season N（英文季号写法）
     base = re.sub(r'[._\s]?[sS]eason\s*\d{1,2}[._\s]?', ' ', base)
     # 去年份
-    base = re.sub(r'[（(]?\s*(19|20)\d{2}\s*[）)]?', '', base)
+    base = re.sub(r'[（(]?\s*(19|20)\d{2}\s*[）)]?', ' ', base)
     # 去中文集数/季数标记
-    base = re.sub(r'第\d{1,3}[集话]', '', base)
-    base = re.sub(r'第\d{1,2}季', '', base)
+    base = re.sub(r'第\d{1,3}[集话]', ' ', base)
+    base = re.sub(r'第\d{1,2}季', ' ', base)
+    # 去「全N集」「全N话」标记
+    base = re.sub(r'全\d{1,3}[集话部]', ' ', base)
     # 替换分隔符为空格
     title = re.sub(r'[._]', ' ', base).strip()
     # 清理全角标点（日文/中文问号、感叹号等）
     title = re.sub(r'[？！：；]', '', title)
+    # 清理网站水印（BT世界网、BT之家、高清MP4、电影天堂 等常见下载站名称）
+    title = re.sub(r'BT[\u4e00-\u9fff]*网?', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'高清MP4', '', title, flags=re.IGNORECASE)
+    # 清理网址残留（www.xxx.com 等，连同域名后缀一起清除）
+    title = re.sub(r'www\s+\S*', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\b(?:com|net|org|cn|cc|tv|io|me|info)\b', '', title, flags=re.IGNORECASE)
+    # 清理「版)」残留（来自「(2024版)」去年份后残留）
+    title = re.sub(r'版\)', '', title)
+    # 清理 H.264 拆分后残留的单独字母 H（仅当两侧为空格或边界时）
+    title = re.sub(r'(?:^|\s)[Hh](?:\s|$)', ' ', title)
     # 清理可能残留的首尾空格和多余空格
     title = re.sub(r'\s+', ' ', title).strip()
     # 去除首尾的逗号、句号等残留标点
     title = re.sub(r'^[,\s]+|[,\s]+$', '', title).strip()
     return title, year
+
+
+def _extract_chinese_title(title: str) -> str:
+    """
+    从混合标题中提取最长的连续中文片段（用于 TMDB 搜索回退）。
+    例如 'Spirited Away 千与千寻' -> '千与千寻'
+         '一家之主 HD1080PCHS BT世界网' -> '一家之主'
+    """
+    # 找所有连续中文片段（含·间隔号），取最长的一个
+    segments = re.findall(r'[\u4e00-\u9fff·]+', title)
+    if not segments:
+        return ''
+    return max(segments, key=len)
 
 
 class TmdbService:
@@ -209,7 +250,33 @@ class TmdbService:
             while len(_search_cache) > _SEARCH_CACHE_MAX_SIZE:
                 _search_cache.popitem(last=False)
         else:
-            logger.warning(f"TMDB 搜索无结果: '{title}' (year={year})")
+            # 回退：用纯中文标题重试（文件名可能残留水印/技术标记干扰搜索）
+            chinese_title = _extract_chinese_title(title)
+            if chinese_title and chinese_title != title:
+                logger.info(f"TMDB 回退搜索: 用纯中文标题 '{chinese_title}' 重试 (原 title='{title}')")
+                try:
+                    if media_type == "tv":
+                        info = await cls._search_tv(chinese_title, year)
+                        if not info:
+                            info = await cls._search_movie(chinese_title, year)
+                    elif media_type == "movie":
+                        info = await cls._search_movie(chinese_title, year)
+                        if not info:
+                            info = await cls._search_tv(chinese_title, year)
+                    else:
+                        info = await cls._search_movie(chinese_title, year)
+                        if not info:
+                            info = await cls._search_tv(chinese_title, year)
+                except Exception as e2:
+                    logger.warning(f"TMDB 回退搜索失败 '{chinese_title}': {e2}")
+
+                if info:
+                    logger.info(f"TMDB 回退搜索成功: '{chinese_title}' -> id={info.get('id')}, title={info.get('title') or info.get('name')}")
+                    _search_cache[cache_key] = (info, time.time())
+                    while len(_search_cache) > _SEARCH_CACHE_MAX_SIZE:
+                        _search_cache.popitem(last=False)
+                else:
+                    logger.warning(f"TMDB 搜索无结果: '{title}' (回退 '{chinese_title}' 也无结果, year={year})")
         return info
 
     @classmethod

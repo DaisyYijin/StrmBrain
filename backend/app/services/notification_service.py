@@ -175,9 +175,26 @@ class NotificationService:
             f"> 成功: **{success}** | 冗余: **{redundant}** | 无法识别: **{unrecognized}** | 失败: **{failed}**\n"
         )
 
+        # 电视剧整理汇总
+        tv_summary = result.get("tv_summary", [])
+        if tv_summary:
+            content += "\n> ---\n> **电视剧整理汇总**\n"
+            for s in tv_summary[:20]:
+                path = s.get("path", "")
+                ep_range = s.get("episode_range", "")
+                ep_count = s.get("episode_count", 0)
+                renamed = s.get("renamed_count", 0)
+                content += f"> {path} {ep_range}（{ep_count}集，重命名{renamed}个）\n"
+                sample_orig = s.get("sample_original", "")
+                sample_new = s.get("sample_renamed", "")
+                if sample_new and sample_orig:
+                    content += f">   {sample_orig} → {sample_new}\n"
+            if len(tv_summary) > 20:
+                content += f"> ... 还有 {len(tv_summary) - 20} 部剧\n"
+
         details = result.get("organized", [])
         if details:
-            content += "\n> ---\n"
+            content += "\n> ---\n> **整理明细**\n"
             for d in details[:10]:
                 name = d.get("name", "未知")
                 to = d.get("to", "")

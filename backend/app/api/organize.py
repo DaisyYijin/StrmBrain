@@ -11,18 +11,18 @@ from typing import Optional, List
 
 from app.core.json_storage import find_account, get_first_valid_account
 from app.schemas import ApiResponse
-from app.config import DATA_DIR
+from app.config import DATA_DIR, CONFIG_DIR
 from app.services.organize_service import OrganizeService
 from app.services.sync_service import SyncService
 from app.services.media_probe import is_ffprobe_available
 
 router = APIRouter(prefix="/api/organize", tags=["organize"])
 
-# 整理配置持久化 —— 每类配置独立文件
-ORGANIZE_DIRS_FILE = DATA_DIR / "organize_dirs.json"
-CLASSIFY_CONFIG_FILE = DATA_DIR / "classify_config.json"
-WASH_CONFIG_FILE = DATA_DIR / "wash_config.json"
-RENAME_RULES_FILE = DATA_DIR / "rename_rules.json"
+# 整理配置持久化 —— 每类配置独立文件（存放在 config/ 目录）
+ORGANIZE_DIRS_FILE = CONFIG_DIR / "organize_dirs.json"
+CLASSIFY_CONFIG_FILE = CONFIG_DIR / "classify_config.json"
+WASH_CONFIG_FILE = CONFIG_DIR / "wash_config.json"
+RENAME_RULES_FILE = CONFIG_DIR / "rename_rules.json"
 
 # type → 文件路径 映射
 _CONFIG_FILE_MAP = {
@@ -36,7 +36,7 @@ _CONFIG_FILE_MAP = {
 class RenameRules(BaseModel):
     movie_folder: str = "{first_letter}-{title}-{year}"
     movie_file: str = "{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}"
-    tv_folder: str = "{title} ({year})"
+    tv_folder: str = "{first_letter}-{title} ({year})"
     season_folder: str = "Season {season_num:02d}"
     episode_file: str = "{title} - S{season_num:02d}<E{episode_num:02d}>< - {episode_name}><.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}"
 
@@ -71,6 +71,7 @@ class OrganizeRequest(BaseModel):
     unrecognized_cid: str = ""
     unrecognized_path: str = ""
     classify_config: str = ""  # YAML 格式的分类配置字符串
+    category_roots: Optional[dict] = None  # 自定义根目录名称 {"movie":"电影", "tv":"电视剧", "av":"AV"}
     rename_rules: RenameRules = RenameRules()
     wash_config: WashConfig = WashConfig()
     use_ffprobe: bool = False  # 是否用 ffprobe 探测文件内容补充资源信息
@@ -78,6 +79,7 @@ class OrganizeRequest(BaseModel):
     prefer_filename: bool = False  # True=文件名优先，仅补充缺失字段；False=ffprobe优先，探测值覆盖文件名值
     min_organize_size_mb: int = 0  # 小于此大小的视频不整理（MB），0=不限制
     organize_blacklist: str = ""  # 整理黑名单，每行一个正则，文件名匹配则跳过
+    ai_mode: str = "off"  # off=关闭AI, assist=TMDB失败时辅助AI, force=强制使用AI
     dry_run: bool = False  # True=仅预览，不实际移动文件
 
 
@@ -143,7 +145,7 @@ async def run_organize(payload: OrganizeRequest):
     # 从 sync_schedule.json 读取全量同步目录作为整理目标
     target_cid = ""
     target_path = ""
-    sync_schedule_file = DATA_DIR / "sync_schedule.json"
+    sync_schedule_file = CONFIG_DIR / "sync_schedule.json"
     if sync_schedule_file.exists():
         try:
             import json as _json
@@ -176,6 +178,7 @@ async def run_organize(payload: OrganizeRequest):
             redundant_cid=payload.redundant_cid,
             unrecognized_cid=payload.unrecognized_cid,
             classify_config=payload.classify_config,
+            category_roots=payload.category_roots,
             rename_rules=payload.rename_rules.model_dump(),
             wash_config=payload.wash_config.model_dump(),
             use_ffprobe=payload.use_ffprobe,
@@ -183,6 +186,7 @@ async def run_organize(payload: OrganizeRequest):
             prefer_filename=payload.prefer_filename,
             min_organize_size_mb=payload.min_organize_size_mb,
             organize_blacklist=payload.organize_blacklist,
+            ai_mode=payload.ai_mode,
             dry_run=payload.dry_run,
             progress_callback=_progress_cb,
         )
@@ -521,6 +525,7 @@ class SaveOrganizeConfigRequest(BaseModel):
     unrecognized_cid: str = ""
     unrecognized_path: str = ""
     classify_config: str = ""
+    category_roots: Optional[dict] = None  # 自定义根目录名称
     rename_rules: Optional[RenameRules] = None
     wash_config: Optional[WashConfig] = None
     use_ffprobe: bool = False  # 是否用 ffprobe 探测文件内容补充资源信息
@@ -528,6 +533,7 @@ class SaveOrganizeConfigRequest(BaseModel):
     prefer_filename: bool = False  # True=文件名优先，仅补充缺失字段；False=ffprobe优先，探测值覆盖文件名值
     min_organize_size_mb: int = 0  # 小于此大小的视频不整理（MB），0=不限制
     organize_blacklist: str = ""  # 整理黑名单，每行一个正则，文件名匹配则跳过
+    ai_mode: str = "off"  # off=关闭AI, assist=TMDB失败时辅助AI, force=强制使用AI
 
 
 @router.post("/config/save", response_model=ApiResponse)
@@ -553,6 +559,7 @@ async def save_organize_config(payload: SaveOrganizeConfigRequest):
                 "prefer_filename": payload.prefer_filename,
                 "min_organize_size_mb": payload.min_organize_size_mb,
                 "organize_blacklist": payload.organize_blacklist,
+                "ai_mode": payload.ai_mode,
                 "updated_at": ts,
             }
             ORGANIZE_DIRS_FILE.write_text(
@@ -564,6 +571,7 @@ async def save_organize_config(payload: SaveOrganizeConfigRequest):
         if payload.type in ("classify", "all"):
             data = {
                 "classify_config": payload.classify_config,
+                "category_roots": payload.category_roots or {"movie": "电影", "tv": "电视剧", "av": "AV"},
                 "updated_at": ts,
             }
             CLASSIFY_CONFIG_FILE.write_text(

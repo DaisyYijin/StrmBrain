@@ -453,7 +453,8 @@ def init_ai_client() -> Optional[AIService]:
     }
 
     Returns:
-        初始化后的 AIService 实例，未配置或未启用时返回 None。
+        初始化后的 AIService 实例，未配置 api_key 时返回 None。
+        enabled 字段已废弃，改由整理页面的 ai_mode（off/assist/force）控制是否使用 AI。
     """
     global global_ai_client
 
@@ -463,15 +464,9 @@ def init_ai_client() -> Optional[AIService]:
     base_url = config.get("base_url", "").strip() or _DEFAULT_CONFIG["base_url"]
     model_name = config.get("model_name", "").strip() or _DEFAULT_CONFIG["model_name"]
     timeout = config.get("timeout", _DEFAULT_CONFIG["timeout"])
-    enabled = config.get("enabled", False)
-
-    if not enabled:
-        logger.info("AI 服务未启用，跳过初始化")
-        global_ai_client = None
-        return None
 
     if not api_key:
-        logger.warning("AI 服务已启用但 api_key 未配置，无法初始化")
+        logger.warning("AI 服务 api_key 未配置，无法初始化")
         global_ai_client = None
         return None
 

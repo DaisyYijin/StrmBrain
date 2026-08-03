@@ -8,11 +8,12 @@ import json
 import time
 import asyncio
 import shutil
+import hashlib
 from typing import Optional
 from pathlib import Path
 
 from app.services.client_115 import Client115Service
-from app.config import DATA_DIR
+from app.config import DATA_DIR, CONFIG_DIR
 from app.core.logbuffer import get_logger
 from app.core.db_helper import get_api_intervals
 
@@ -23,10 +24,17 @@ logger = get_logger("app.services.sync_service")
 DEFAULT_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".m2ts", ".rmvb", ".iso"}
 
 # 同步计划配置文件
-SCHEDULE_FILE = DATA_DIR / "sync_schedule.json"
+SCHEDULE_FILE = CONFIG_DIR / "sync_schedule.json"
 
-# 清单文件名（保存在本地媒体目录中）
-MANIFEST_FILENAME = ".strmhub_manifest.json"
+# 清单目录（保存在后端数据目录，不污染用户的媒体目录）
+MANIFEST_DIR = DATA_DIR / "manifests"
+MANIFEST_DIR.mkdir(exist_ok=True)
+
+
+def _manifest_path(local_root: Path) -> Path:
+    """根据本地媒体目录路径生成清单文件路径（按路径哈希命名，避免特殊字符）"""
+    key = hashlib.md5(str(local_root.resolve()).encode("utf-8")).hexdigest()[:16]
+    return MANIFEST_DIR / f"manifest_{key}.json"
 
 
 class SyncService:
@@ -124,7 +132,10 @@ class SyncService:
                 account_id, strm_settings,
             )
             if synced:
-                result["synced"].append(synced)
+                if synced.get("type") == "skipped":
+                    result["skipped"] += 1
+                else:
+                    result["synced"].append(synced)
                 if entry:
                     manifest[f["file_id"]] = entry
             elif entry:
@@ -202,7 +213,7 @@ class SyncService:
         logger.info(f"[sync] 扫描本地目录已有文件...")
         local_existing_files: set = set()
         for item in local_root.rglob("*"):
-            if item.is_file() and item.name != MANIFEST_FILENAME:
+            if item.is_file():
                 local_existing_files.add(str(item.relative_to(local_root)).replace("\\", "/"))
         logger.info(f"[sync] 本地已有 {len(local_existing_files)} 个文件")
 
@@ -253,23 +264,33 @@ class SyncService:
                         "pickcode": pickcode, "parent_path": parent_path,
                     }
                 else:
-                    # 检查本地文件是否实际存在
+                    # 检查本地文件是否实际存在且有效
                     if ext in video_exts:
                         local_rel = (f"{parent_path}/{name}.strm") if parent_path else f"{name}.strm"
                     else:
                         local_rel = f"{parent_path}/{name}" if parent_path else name
-                    if local_rel in local_existing_files:
+                    local_file_valid = local_rel in local_existing_files
+                    # STRM 文件需额外检查内容是否为空（空文件视为缺失，触发重新生成）
+                    if local_file_valid and ext in video_exts:
+                        local_file = local_root / local_rel
+                        if not local_file.exists() or local_file.stat().st_size == 0:
+                            local_file_valid = False
+                            logger.info(f"[sync] STRM 文件内容为空，重新生成: {local_rel}")
+                    if local_file_valid:
                         result["skipped"] += 1
                         new_manifest[file_id] = existing
                     else:
-                        # 本地文件被删除，重新同步
+                        # 本地文件被删除或为空，重新同步
                         logger.info(f"[sync] 本地文件缺失，重新同步: {local_rel}")
                         synced, entry = cls._sync_single_file(
                             cookies, f, local_root, video_exts, image_exts, data_exts,
                             account_id, strm_settings,
                         )
                         if synced:
-                            result["synced"].append(synced)
+                            if synced.get("type") == "skipped":
+                                result["skipped"] += 1
+                            else:
+                                result["synced"].append(synced)
                         elif entry:
                             result["errors"].append(entry)
                         new_manifest[file_id] = {
@@ -284,7 +305,10 @@ class SyncService:
                 account_id, strm_settings,
             )
             if synced:
-                result["synced"].append(synced)
+                if synced.get("type") == "skipped":
+                    result["skipped"] += 1
+                else:
+                    result["synced"].append(synced)
                 new_manifest[file_id] = {
                     "name": name, "size": f.get("size", 0), "sha1": sha1,
                     "pickcode": pickcode, "parent_path": parent_path,
@@ -403,7 +427,15 @@ class SyncService:
                 strm_name = name + ".strm"
                 strm_path = local_dir / strm_name
 
+                # overwrite_mode=skip 时，已存在且非空的 STRM 文件跳过写入
+                overwrite_mode = (strm_settings or {}).get("overwrite_mode", "skip")
+                if overwrite_mode == "skip" and strm_path.exists() and strm_path.stat().st_size > 0:
+                    return {"name": name, "type": "skipped"}, manifest_entry
+
                 content = cls._generate_strm_content(name, parent_path, pickcode, account_id, strm_settings)
+                if not content:
+                    logger.warning(f"[sync] STRM 内容为空（server_url 未配置），跳过: {parent_path}/{strm_name}")
+                    return None, {"name": name, "error": "server_url 未配置，无法生成 STRM"}
                 strm_path.write_text(content, encoding="utf-8")
 
                 return {
@@ -451,6 +483,7 @@ class SyncService:
         """
         生成 302 跳转模式的 .strm 文件内容。
         STRM 文件指向本服务接口，播放时实时获取 115 直链并 302 重定向。
+        account_id 固定使用 0（自动选择第一个有效账号），避免账号删除/重建后 STRM 失效。
         """
         settings = settings or cls._load_strm_settings()
 
@@ -462,13 +495,13 @@ class SyncService:
         from urllib.parse import quote
         full_path = f"{parent_path}/{file_name}" if parent_path else file_name
         encoded_path = quote(full_path, safe="/")
-        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id={account_id}"
+        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id=0"
 
     @classmethod
     def _save_manifest(cls, local_root: Path, manifest: dict):
-        """保存同步清单到本地媒体目录"""
+        """保存同步清单到后端数据目录"""
         try:
-            manifest_path = local_root / MANIFEST_FILENAME
+            manifest_path = _manifest_path(local_root)
             manifest_path.write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -479,7 +512,7 @@ class SyncService:
     def _load_manifest(cls, local_root: Path) -> dict:
         """加载上次同步清单"""
         try:
-            manifest_path = local_root / MANIFEST_FILENAME
+            manifest_path = _manifest_path(local_root)
             if manifest_path.exists():
                 return json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception as e:
@@ -532,6 +565,10 @@ class SyncService:
                 if old_strm_path.exists():
                     if old_strm_path.resolve() != new_strm_path.resolve():
                         shutil.move(str(old_strm_path), str(new_strm_path))
+                    # 迁移后重新生成 STRM 内容，确保 URL 中的文件名和路径与网盘一致
+                    content = cls._generate_strm_content(new_name, new_parent_path, pickcode, account_id, strm_settings or cls._load_strm_settings())
+                    if content:
+                        new_strm_path.write_text(content, encoding="utf-8")
                     logger.info(f"[sync] STRM 迁移: {old_parent_path}/{old_strm_name} -> {new_parent_path}/{new_strm_name}")
                     result["synced"].append({
                         "name": new_name, "type": "strm_relocated",
@@ -545,7 +582,10 @@ class SyncService:
                         account_id, strm_settings or cls._load_strm_settings(),
                     )
                     if synced:
-                        result["synced"].append(synced)
+                        if synced.get("type") == "skipped":
+                            result["skipped"] += 1
+                        else:
+                            result["synced"].append(synced)
                     elif entry:
                         result["errors"].append(entry)
 
@@ -586,12 +626,13 @@ class SyncService:
         image_exts: set,
         data_exts: set,
     ):
-        """检测已从网盘删除的文件，清理本地对应的 STRM/图片/数据文件。"""
+        """检测已从网盘删除的文件，清理本地对应的 STRM/图片/数据文件，并删除空目录。"""
         deleted_ids = set(last_manifest.keys()) - set(new_manifest.keys())
         if not deleted_ids:
             return
 
         cleaned = 0
+        affected_dirs: set = set()
         for fid in deleted_ids:
             old = last_manifest[fid]
             old_parent_path = old.get("parent_path", "")
@@ -613,11 +654,37 @@ class SyncService:
                         old_file_path.unlink()
                         cleaned += 1
                         logger.info(f"[sync] 删除已移除的文件: {old_parent_path}/{old_name}")
+                if old_parent_path:
+                    affected_dirs.add(old_local_dir)
             except Exception as e:
                 logger.warning(f"[sync] 清理已删除文件失败: {old_parent_path}/{old_name}: {e}")
 
+        # 清理空目录（从最深层的受影响目录开始向上检查）
+        for dir_path in sorted(affected_dirs, key=lambda p: len(p.parts), reverse=True):
+            cls._cleanup_empty_dirs(local_root, dir_path)
+
         if cleaned:
             logger.info(f"[sync] 清理了 {cleaned} 个已从网盘移除的本地文件")
+
+    @staticmethod
+    def _cleanup_empty_dirs(local_root: Path, start_dir: Path):
+        """从 start_dir 开始向上删除空目录，直到 local_root 或遇到非空目录为止。"""
+        try:
+            current = start_dir
+            while current != local_root and current.is_relative_to(local_root):
+                if not current.exists():
+                    break
+                # 目录非空则停止
+                try:
+                    next(current.iterdir())
+                    break
+                except StopIteration:
+                    # 空目录，删除
+                    current.rmdir()
+                    logger.info(f"[sync] 清理空目录: {current.relative_to(local_root)}")
+                    current = current.parent
+        except Exception as e:
+            logger.warning(f"[sync] 清理空目录失败: {e}")
 
     # ============ 上传同步 ============
 
@@ -671,9 +738,6 @@ class SyncService:
                 continue
             # 跳过 .strm 文件（本地专用，不上传）
             if item.suffix.lower() == ".strm":
-                continue
-            # 跳过清单文件
-            if item.name == MANIFEST_FILENAME:
                 continue
             ext = ("." + item.suffix.lstrip(".").lower()) if item.suffix else ""
             if ext in upload_exts:

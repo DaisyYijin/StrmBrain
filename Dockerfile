@@ -50,8 +50,8 @@ ENV HOST=0.0.0.0 \
 # 暴露端口
 EXPOSE 8000
 
-# 数据持久化
-VOLUME ["/app/data"]
+# 数据持久化（运行数据、配置、日志、STRM 媒体输出）
+VOLUME ["/app/data", "/app/config", "/app/log", "/media"]
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

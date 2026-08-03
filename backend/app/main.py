@@ -12,7 +12,7 @@ from app.api import (v115_router, accounts_router, settings_router,
                      system_router, dashboard_router, organize_router,
                      tools_router, wechat_router,
                      ai_router, watcher_router,
-                     emby_webhook_router)
+                     emby_webhook_router, clouddownload_router)
 from app.config import HOST, PORT, CORS_ORIGINS, AUTH_ENABLED
 from app.core.auth import verify_token
 from app.core.logbuffer import setup_logging, get_logger
@@ -183,6 +183,7 @@ app.include_router(wechat_router)
 app.include_router(ai_router)
 app.include_router(watcher_router)
 app.include_router(emby_webhook_router)
+app.include_router(clouddownload_router)
 
 
 # 静态文件（前端）- 必须放在最后

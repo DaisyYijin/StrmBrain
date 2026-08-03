@@ -3,6 +3,7 @@
 支持基于 TMDB 元数据的二级分类（YAML 配置），整理结果保存到整理后目录
 """
 import re
+import time as _time
 from typing import Optional
 from collections import defaultdict
 
@@ -106,28 +107,39 @@ def extract_title(name: str) -> str:
     """
     从文件名中提取标题（去除扩展名、分辨率、编码等标记）
     用于重复检测。
-    AV 文件以番号作为去重 key。
+    - AV 文件以番号作为去重 key
+    - 剧集（含 SxxExx）保留季集信息作为去重 key，避免不同集被误判为重复
+    - 电影用纯标题去重
     """
     # AV 文件：用番号作为去重 key
     av_code = extract_av_code(name)
     if av_code:
         return av_code.lower()
+    # 检测是否为剧集（含 SxxExx 季集信息）
+    season_episode = re.search(r'[sS]\d{1,2}[eE]\d{1,3}', name)
     # 去扩展名
     base = re.sub(r'\.[^.]+$', '', name)
     # 去方括号内容（发布组、集号、技术信息、字幕信息等）
     base = re.sub(r'\[[^\]]*\]', ' ', base)
-    # 去分辨率/编码标记
-    base = re.sub(r'[._\s]?(1080p|720p|480p|2160p|4k|bluray|webrip|web-dl|h264|h265|x264|x265|hevc|aac|dts|hdr|atmos|remux|srt|ass|ssa|cr|hevc)[._\s]?', '', base, flags=re.IGNORECASE)
-    # 去 SxxExx
-    base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}[._\s]?', '', base)
-    # 去单独的 Sxx（季号，无集号）
-    base = re.sub(r'(?:^|[._\s])[sS]\d{1,2}(?![eE]\d)(?:[._\s]|$)', ' ', base)
-    # 去 Season N（英文季号写法）
-    base = re.sub(r'[._\s]?[sS]eason\s*\d{1,2}[._\s]?', ' ', base)
+    # 去分辨率/编码标记（用空格替换避免粘连）
+    base = re.sub(r'[._\s]?(1080i|1080p|720i|720p|480i|480p|2160i|2160p|4k|bluray|blu-ray|webrip|web-dl|web|hd|h264|h265|x264|x265|hevc|aac|dts|hdr|atmos|remux|srt|ass|ssa|cr|chs|cht|big5|hevc)[._\s]?', ' ', base, flags=re.IGNORECASE)
+    if season_episode:
+        # 剧集：保留 SxxExx 作为去重 key 的一部分，避免不同集被误判为重复
+        # 只去掉 SxxExx 前后的分隔符，保留本身
+        pass
+    else:
+        # 电影：去 SxxExx（一般没有，保险起见）
+        base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}[._\s]?', ' ', base)
+        # 去单独的 Sxx（季号，无集号）
+        base = re.sub(r'(?:^|[._\s])[sS]\d{1,2}(?![eE]\d)(?:[._\s]|$)', ' ', base)
+        # 去 Season N（英文季号写法）
+        base = re.sub(r'[._\s]?[sS]eason\s*\d{1,2}[._\s]?', ' ', base)
     # 去年份
-    base = re.sub(r'[（(]?\s*(19|20)\d{2}\s*[）)]?', '', base)
+    base = re.sub(r'[（(]?\s*(19|20)\d{2}\s*[）)]?', ' ', base)
     # 去全角标点
     base = re.sub(r'[？！：；]', '', base)
+    # 去网站水印
+    base = re.sub(r'BT[\u4e00-\u9fff]*网?', '', base, flags=re.IGNORECASE)
     # 统一小写、去空格和分隔符
     base = re.sub(r'[._\-\s]', '', base).lower()
     return base
@@ -229,9 +241,12 @@ def parse_resource_info(filename: str, media_info: Optional[dict] = None, prefer
     # 去除方括号（替换为空格），使方括号内的资源信息可被正则匹配
     # 如 [CR-WebRip 1080p HEVC AAC SRT] →  CR-WebRip 1080p HEVC AAC SRT
     base = re.sub(r'[\[\]]', ' ', base)
+    # 末尾补一个空格作为分隔符，确保文件名末尾的资源字段也能被正则匹配
+    # （如 "蜘蛛侠.1080p.x265.AAC" 去扩展名后 AAC 在末尾，无尾部分隔符）
+    base += ' '
 
-    # 分辨率 resource_pix
-    pix_match = re.search(r'[._\s](2160p|1080p|720p|480p|4k|4K)[._\s]', base, re.IGNORECASE)
+    # 分辨率 resource_pix（含隔行扫描 1080i/720i/480i/2160i）
+    pix_match = re.search(r'[._\s](2160p|1080p|720p|480p|4k|4K|2160i|1080i|720i|480i)[._\s]', base, re.IGNORECASE)
     if pix_match:
         pix = pix_match.group(1)
         if pix.lower() == "4k":
@@ -843,6 +858,7 @@ class OrganizeService:
         redundant_cid: str = "",
         unrecognized_cid: str = "",
         classify_config: str = "",
+        category_roots: dict = None,
         rename_rules: dict = None,
         wash_config: dict = None,
         use_ffprobe: bool = False,
@@ -850,6 +866,7 @@ class OrganizeService:
         prefer_filename: bool = False,
         min_organize_size_mb: int = 0,
         organize_blacklist: str = "",
+        ai_mode: str = "off",  # off=关闭, assist=TMDB失败时辅助, force=强制使用AI
         dry_run: bool = False,
         progress_callback=None,
     ) -> dict:
@@ -897,22 +914,49 @@ class OrganizeService:
             logger.warning(f"[organize] 分类配置解析失败，使用默认配置: {e}")
             category_helper = CategoryHelper()
 
-        # 1. 扫描源目录所有文件
+        # 加载全量同步配置，获取后缀分类（媒体图片 / 媒体数据）
+        image_exts: set = set()
+        data_exts: set = set()
+        try:
+            from app.services.sync_service import SyncService
+            sync_config = SyncService.load_schedule()
+            if sync_config:
+                image_exts_str = sync_config.get("image_exts_str", "")
+                data_exts_str = sync_config.get("data_exts_str", "")
+                if image_exts_str:
+                    image_exts = {ext.strip().lower() for ext in image_exts_str.split(",") if ext.strip()}
+                if data_exts_str:
+                    data_exts = {ext.strip().lower() for ext in data_exts_str.split(",") if ext.strip()}
+                logger.info(f"[organize] 后缀分类: 视频={VIDEO_EXTS}, 媒体数据={data_exts}, 媒体图片={image_exts}")
+        except Exception as e:
+            logger.warning(f"[organize] 加载同步配置失败，仅整理视频文件: {e}")
+
+        # 1. 扫描源目录所有匹配文件（视频 + 媒体数据 + 媒体图片）
         logger.info(f"[organize] 正在扫描源目录文件...")
-        all_files = Client115Service.list_all_files(
-            cookies, source_cid, VIDEO_EXTS, min_size=0, recursive=True
+        all_scan_exts = VIDEO_EXTS | data_exts | image_exts
+        all_files = Client115Service.list_all_files_with_meta(
+            cookies, source_cid, all_scan_exts, min_size=0, recursive=True
         )
 
-        # 按最小视频大小过滤
+        # 按类型分离文件
+        def _get_ext(name: str) -> str:
+            return ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+
+        video_files = [f for f in all_files if _get_ext(f["name"]) in VIDEO_EXTS]
+        data_files = [f for f in all_files if _get_ext(f["name"]) in data_exts]
+        image_files = [f for f in all_files if _get_ext(f["name"]) in image_exts]
+        logger.info(f"[organize] 扫描完成: 视频 {len(video_files)} 个, 媒体数据 {len(data_files)} 个, 媒体图片 {len(image_files)} 个")
+
+        # 视频文件按最小大小过滤
         min_size_bytes = min_organize_size_mb * 1024 * 1024 if min_organize_size_mb > 0 else 0
         if min_size_bytes > 0:
-            before_count = len(all_files)
-            all_files = [f for f in all_files if f.get("size", 0) >= min_size_bytes]
-            skipped = before_count - len(all_files)
+            before_count = len(video_files)
+            video_files = [f for f in video_files if f.get("size", 0) >= min_size_bytes]
+            skipped = before_count - len(video_files)
             if skipped > 0:
                 logger.info(f"[organize] 最小视频大小过滤: 跳过 {skipped} 个小于 {min_organize_size_mb}MB 的文件")
 
-        # 按整理黑名单（正则）过滤
+        # 按整理黑名单（正则）过滤视频文件
         if organize_blacklist and organize_blacklist.strip():
             blacklist_patterns = []
             for line in organize_blacklist.strip().splitlines():
@@ -924,68 +968,147 @@ class OrganizeService:
                 except re.error as e:
                     logger.warning(f"[organize] 黑名单正则无效，已忽略: {line} ({e})")
             if blacklist_patterns:
-                before_count = len(all_files)
-                all_files = [f for f in all_files if not any(p.search(f.get("name", "")) for p in blacklist_patterns)]
-                skipped = before_count - len(all_files)
+                before_count = len(video_files)
+                video_files = [f for f in video_files if not any(p.search(f.get("name", "")) for p in blacklist_patterns)]
+                skipped = before_count - len(video_files)
                 if skipped > 0:
                     logger.info(f"[organize] 黑名单过滤: 跳过 {skipped} 个匹配黑名单的文件")
 
-        result["total"] = len(all_files)
-        logger.info(f"[organize] 扫描完成: 共 {len(all_files)} 个视频文件")
-        if not all_files:
-            logger.info(f"[organize] 源目录无匹配文件，整理结束")
+        result["total"] = len(video_files)
+        logger.info(f"[organize] 待整理视频文件: {len(video_files)} 个")
+        if not video_files:
+            logger.info(f"[organize] 源目录无匹配视频文件")
+            # 即使没有视频文件，也要将残留的非视频文件移到冗余目录并清理源目录
+            if not dry_run and redundant_cid:
+                # 移动媒体图片和媒体数据文件到冗余目录
+                for img_f in image_files:
+                    try:
+                        ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid)
+                        if ok_img:
+                            logger.info(f"[organize] 残留媒体图片移到冗余: {img_f['name']}")
+                            result["redundant"].append({"name": img_f["name"], "reason": "残留媒体图片文件"})
+                        else:
+                            logger.warning(f"[organize] 媒体图片移动失败: {img_f['name']}")
+                    except Exception as e:
+                        logger.warning(f"[organize] 媒体图片移动异常: {img_f['name']}: {e}")
+                for df in data_files:
+                    try:
+                        ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid)
+                        if ok_df:
+                            logger.info(f"[organize] 残留媒体数据移到冗余: {df['name']}")
+                            result["redundant"].append({"name": df["name"], "reason": "残留媒体数据文件"})
+                        else:
+                            logger.warning(f"[organize] 媒体数据移动失败: {df['name']}")
+                    except Exception as e:
+                        logger.warning(f"[organize] 媒体数据移动异常: {df['name']}: {e}")
+                # 清理源目录：将所有残留子项（目录和文件）移到冗余目录
+                try:
+                    logger.info(f"[organize] 开始清理源目录残留...")
+                    remaining_items = Client115Service.list_all_items(
+                        cookies, source_cid, recursive=False
+                    )
+                    if remaining_items:
+                        moved = 0
+                        failed_items = []  # 记录第一轮移动失败的项
+                        for item in remaining_items:
+                            item_id = item.get("id", "")
+                            item_name = item.get("name", "")
+                            if not item_id:
+                                continue
+                            try:
+                                ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                if ok:
+                                    moved += 1
+                                    logger.info(f"[organize] 残留移到冗余目录: {item_name}")
+                                else:
+                                    failed_items.append(item)
+                            except Exception as e:
+                                logger.warning(f"[organize] 残留移动异常: {item_name}: {e}")
+                                failed_items.append(item)
+                            _time.sleep(1)
+                        # 第二轮：重试第一轮失败的项（等待更长时间）
+                        if failed_items:
+                            logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待 10s 后重试...")
+                            _time.sleep(10)
+                            still_failed = []
+                            for item in failed_items:
+                                item_id = item.get("id", "")
+                                item_name = item.get("name", "")
+                                try:
+                                    ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                    if ok:
+                                        moved += 1
+                                        logger.info(f"[organize] 残留重试成功: {item_name}")
+                                    else:
+                                        still_failed.append(item)
+                                        logger.warning(f"[organize] 残留重试仍失败: {item_name}")
+                                except Exception as e:
+                                    still_failed.append(item)
+                                    logger.warning(f"[organize] 残留重试异常: {item_name}: {e}")
+                                _time.sleep(1)
+                            # 仍然失败的项记录到结果中
+                            if still_failed:
+                                result["cleanup_failed"] = [
+                                    {"name": item.get("name", ""), "id": item.get("id", "")}
+                                    for item in still_failed
+                                ]
+                                logger.warning(f"[organize] {len(still_failed)} 个残留项移动失败，需手动处理")
+                        if moved > 0:
+                            result["cleaned_items"] = moved
+                            logger.info(f"[organize] 已将 {moved} 个残留项移到冗余目录")
+                    else:
+                        logger.info(f"[organize] 源目录已清空")
+                except Exception as e:
+                    logger.warning(f"[organize] 清理源目录失败: {e}")
             return result
 
         # 2. 分类：冗余文件 / 可识别 / 不可识别
-        # 同时按标题去重
-        title_map = defaultdict(list)  # title -> [file_info, ...]
-        for f in all_files:
-            f["_title"] = extract_title(f["name"])
-            title_map[f["_title"]].append(f)
+        # 按 SHA1 去重：仅 SHA1 完全一致才视为重复文件
+        # 无 SHA1 的文件不参与去重，各自独立处理
+        sha1_map = defaultdict(list)   # sha1 -> [file_info, ...]
+        _no_sha1_files: list = []      # 无 SHA1 的文件，不参与去重
+        for f in video_files:
+            sha1 = f.get("sha1", "")
+            if sha1:
+                sha1_map[sha1].append(f)
+            else:
+                _no_sha1_files.append(f)
 
         to_organize = []   # 可整理（电影/剧集）
         to_redundant = []  # 冗余/重复
         to_unrecognized = []  # 无法识别
 
-        logger.info(f"[organize] 开始分类识别 ({len(title_map)} 个标题)...")
+        # 每组同 SHA1 文件只保留第一个，其余标记为重复；无 SHA1 的全部保留
+        deduped_files: list = []
+        for sha1, files in sha1_map.items():
+            keep = files[0]
+            deduped_files.append(keep)
+            for d in files[1:]:
+                logger.info(f"[organize] 重复文件(SHA1一致): {d['name']} (与 {keep['name']} 重复)")
+                to_redundant.append({"file": d, "reason": f"与 {keep['name']} 重复(SHA1一致)"})
+        deduped_files.extend(_no_sha1_files)
+
+        logger.info(f"[organize] 开始分类识别 ({len(deduped_files)} 个文件，已去重 {len(video_files) - len(deduped_files)} 个)...")
 
         _idx = 0
-        for title, files in title_map.items():
+        for f in deduped_files:
             _idx += 1
             if progress_callback:
                 try:
-                    await progress_callback(_idx, len(title_map), title)
+                    await progress_callback(_idx, len(deduped_files), f["name"])
                 except Exception:
                     pass
-            if len(files) > 1:
-                # 同标题多文件：保留第一个，其余视为重复
-                keep = files[0]
-                dups = files[1:]
-                # 保留的文件正常分类
-                category, tmdb_info, media_type = await cls._classify_file(keep["name"], category_helper)
-                if category is None:
-                    logger.warning(f"[organize] 无法识别: {keep['name']}")
-                    to_unrecognized.append({"file": keep, "reason": "无法识别影视类型"})
-                else:
-                    logger.info(f"[organize] 识别成功: {keep['name']} -> {category} ({media_type})")
-                    to_organize.append({"file": keep, "category": category, "tmdb_info": tmdb_info, "media_type": media_type})
-                # 重复文件移到冗余
-                for d in dups:
-                    logger.info(f"[organize] 重复文件: {d['name']} (与 {keep['name']} 重复)")
-                    to_redundant.append({"file": d, "reason": f"与 {keep['name']} 重复"})
+            if is_redundant(f["name"]):
+                logger.info(f"[organize] 冗余文件: {f['name']}")
+                to_redundant.append({"file": f, "reason": "冗余文件（sample/预告等）"})
             else:
-                f = files[0]
-                if is_redundant(f["name"]):
-                    logger.info(f"[organize] 冗余文件: {f['name']}")
-                    to_redundant.append({"file": f, "reason": "冗余文件（sample/预告等）"})
+                category, tmdb_info, media_type = await cls._classify_file(f["name"], category_helper, category_roots, ai_mode)
+                if category is None:
+                    logger.warning(f"[organize] 无法识别: {f['name']}")
+                    to_unrecognized.append({"file": f, "reason": "无法识别影视类型"})
                 else:
-                    category, tmdb_info, media_type = await cls._classify_file(f["name"], category_helper)
-                    if category is None:
-                        logger.warning(f"[organize] 无法识别: {f['name']}")
-                        to_unrecognized.append({"file": f, "reason": "无法识别影视类型"})
-                    else:
-                        logger.info(f"[organize] 识别成功: {f['name']} -> {category} ({media_type})")
-                        to_organize.append({"file": f, "category": category, "tmdb_info": tmdb_info, "media_type": media_type})
+                    logger.info(f"[organize] 识别成功: {f['name']} -> {category} ({media_type})")
+                    to_organize.append({"file": f, "category": category, "tmdb_info": tmdb_info, "media_type": media_type})
 
         logger.info(f"[organize] 分类完成: 可整理 {len(to_organize)}，冗余 {len(to_redundant)}，无法识别 {len(to_unrecognized)}")
 
@@ -1019,6 +1142,11 @@ class OrganizeService:
                 result["redundant"].append({"name": item["file"]["name"], "reason": item["reason"]})
             for item in to_unrecognized:
                 result["unrecognized"].append({"name": item["file"]["name"], "reason": item["reason"]})
+            # 预览：报告媒体数据文件和媒体图片文件的处理方式
+            for df in data_files:
+                result["redundant"].append({"name": df["name"], "reason": "媒体数据文件（预览：将跟随视频或移到冗余）"})
+            for img_f in image_files:
+                result["redundant"].append({"name": img_f["name"], "reason": "媒体图片文件（移到冗余）"})
             logger.info(
                 f"[organize] 预览完成: 共 {result['total']} 个文件，"
                 f"可整理 {len(result['organized'])}，冗余 {len(result['redundant'])}，"
@@ -1026,10 +1154,9 @@ class OrganizeService:
             )
             return result
 
-        # 3a. 扫描全量同步目录中已有的文件标题，用于判断是否重复
+        # 3a. 扫描全量同步目录中已有文件的 SHA1，用于判断是否重复
         #     排除 source_cid（待整理目录），因为它里面的文件还没被整理，不应算作"已存在"
-        existing_titles: set = set()
-        existing_files_list: list[dict] = []
+        existing_sha1s: set = set()
         if target_cid and existing_cid:
             logger.info(f"[organize] 正在扫描全量同步目录已有文件（用于重复检测）...")
             try:
@@ -1041,18 +1168,28 @@ class OrganizeService:
                     exclude_cids.add(redundant_cid)
                 if unrecognized_cid:
                     exclude_cids.add(unrecognized_cid)
-                existing_files_list = Client115Service.list_all_files(
+                existing_files_list = Client115Service.list_all_files_with_meta(
                     cookies, target_cid, VIDEO_EXTS, min_size=0, recursive=True,
-                    exclude_cids=exclude_cids,
                 )
+                # 过滤掉排除的子目录（list_all_files_with_meta 不支持 exclude_cids）
+                if exclude_cids:
+                    existing_files_list = [
+                        ef for ef in existing_files_list
+                        if ef.get("parent_id", "") not in exclude_cids
+                    ]
                 for ef in existing_files_list:
-                    existing_titles.add(extract_title(ef["name"]))
-                logger.info(f"[organize] 全量同步目录已有 {len(existing_titles)} 个影视标题（已排除待整理等子目录）")
+                    sha1 = ef.get("sha1", "")
+                    if sha1:
+                        existing_sha1s.add(sha1)
+                logger.info(f"[organize] 全量同步目录已有 {len(existing_sha1s)} 个文件 SHA1（已排除待整理等子目录）")
             except Exception as e:
                 logger.warning(f"[organize] 扫描全量同步目录失败，跳过重复检测: {e}")
 
         # 3b. 移动整理后的文件到「全量同步目录」下的二级分类子目录
         #     如果文件在全量同步目录中已存在 → 移到「已存在影视的目录」
+        # 已跟随视频移动的媒体数据文件 ID（避免重复移动）
+        moved_data_file_ids: set = set()
+
         if target_cid:
             # 按二级分类分组
             category_groups = defaultdict(list)
@@ -1072,45 +1209,47 @@ class OrganizeService:
                             "error": f"创建分类目录「{category}」失败",
                         })
                     continue
+                # 按分类目录缓存已有文件列表（含 sha1），避免洗版检查时重复 API 调用
+                wash_cached_files = None
+                if wash_config and wash_config.get("enabled"):
+                    try:
+                        wash_cached_files = Client115Service.list_all_files(
+                            cookies, sub_cid, VIDEO_EXTS, min_size=0, recursive=True
+                        )
+                        logger.info(f"[organize] 洗版缓存: 目录「{category}」已加载 {len(wash_cached_files)} 个已有文件")
+                    except Exception as e:
+                        logger.warning(f"[organize] 洗版缓存加载失败（目录「{category}」），将逐个查询: {e}")
+                        wash_cached_files = None
                 for item in items:
                     file_info = item["file"]
                     tmdb_info = item.get("tmdb_info")
                     media_type = item.get("media_type", "movie")
                     orig_name = file_info["name"]
                     renamed_to = ""
+                    final_target_cid = sub_cid  # 视频最终移动到的目录 cid
 
-                    # 重复检测：如果全量同步目录中已有相同标题的文件 → 移到「已存在影视的目录」
-                    # 注意：只有当文件名完全相同时才跳过，文件名不同则继续走重命名和洗版流程
-                    file_title = extract_title(orig_name)
-                    existing_match = None
-                    if file_title and file_title in existing_titles and existing_cid:
-                        # 进一步检查：是否有完全相同的文件名
-                        existing_match = next(
-                            (ef for ef in existing_files_list
-                             if ef["name"] == orig_name),
-                            None
+                    # 重复检测：全量同步目录中已有相同 SHA1 的文件 → 移到「已存在影视的目录」
+                    file_sha1 = file_info.get("sha1", "")
+                    if file_sha1 and file_sha1 in existing_sha1s and existing_cid:
+                        logger.info(f"[organize] 全量同步目录已存在相同SHA1文件: {orig_name}，移到已存在影视目录")
+                        ok_exist = Client115Service.move(
+                            cookies, [file_info["file_id"]], existing_cid
                         )
-                        if existing_match:
-                            logger.info(f"[organize] 全量同步目录已存在同名文件: {orig_name}，移到已存在影视目录")
-                            ok_exist = Client115Service.move(
-                                cookies, [file_info["file_id"]], existing_cid
-                            )
-                            if ok_exist:
-                                result["organized"].append({
-                                    "name": orig_name,
-                                    "category": item["category"],
-                                    "from": file_info.get("parent_path", ""),
-                                    "to": f"已存在影视/{orig_name}",
-                                    "renamed_to": "",
-                                })
-                            else:
-                                result["errors"].append({
-                                    "name": orig_name,
-                                    "error": "移动到已存在影视目录失败",
-                                })
-                            continue
+                        if ok_exist:
+                            result["organized"].append({
+                                "name": orig_name,
+                                "category": item["category"],
+                                "from": file_info.get("parent_path", ""),
+                                "to": f"已存在影视/{orig_name}",
+                                "renamed_to": "",
+                                "media_type": media_type,
+                            })
                         else:
-                            logger.info(f"[organize] 全量同步目录有相同标题但不同文件名，继续整理: {orig_name}")
+                            result["errors"].append({
+                                "name": orig_name,
+                                "error": "移动到已存在影视目录失败",
+                            })
+                        continue
 
                     # ffprobe 探测媒体信息（始终探测，用于验证和纠正文件名中的错误标记）
                     media_info = None
@@ -1128,7 +1267,8 @@ class OrganizeService:
                     # 洗版检查
                     if wash_config and wash_config.get("enabled"):
                         should_move, wash_reason, old_files_to_replace = await cls._check_wash_replace(
-                            cookies, sub_cid, file_info, tmdb_info, media_type, wash_config, media_info, category, prefer_filename
+                            cookies, sub_cid, file_info, tmdb_info, media_type, wash_config, media_info, category, prefer_filename,
+                            cached_existing_files=wash_cached_files,
                         )
                         if not should_move:
                             result["redundant"].append({
@@ -1189,7 +1329,7 @@ class OrganizeService:
                             tv_folder_name = new_folder or ""
                             if tmdb_info:
                                 tv_folder_name = apply_rename_template(
-                                    rename_rules.get("tv_folder", "{title} ({year})"),
+                                    rename_rules.get("tv_folder", "{first_letter}-{title} ({year})"),
                                     tmdb_info, orig_name, None, None, None, None, media_info, prefer_filename
                                 ) or tv_folder_name
                             if tv_folder_name:
@@ -1197,6 +1337,7 @@ class OrganizeService:
                                     cookies, [tv_folder_name, season_folder], sub_cid
                                 )
                                 if season_cid:
+                                    final_target_cid = season_cid
                                     ok = Client115Service.move(
                                         cookies, [file_info["file_id"]], season_cid
                                     )
@@ -1218,6 +1359,7 @@ class OrganizeService:
                                     cookies, [av_folder_name], sub_cid
                                 )
                                 if av_cid:
+                                    final_target_cid = av_cid
                                     ok = Client115Service.move(
                                         cookies, [file_info["file_id"]], av_cid
                                     )
@@ -1244,6 +1386,7 @@ class OrganizeService:
                                     cookies, [movie_folder_name], sub_cid
                                 )
                                 if movie_cid:
+                                    final_target_cid = movie_cid
                                     ok = Client115Service.move(
                                         cookies, [file_info["file_id"]], movie_cid
                                     )
@@ -1264,13 +1407,47 @@ class OrganizeService:
 
                     if ok:
                         logger.info(f"[organize] 移动成功: {orig_name} -> {category}/{renamed_to or orig_name}")
+                        # 提取季集信息用于汇总
+                        season_num, episode_num = extract_season_episode(orig_name)
                         result["organized"].append({
                             "name": orig_name,
                             "category": category,
                             "from": file_info.get("parent_path", ""),
                             "to": f"{category}/",
                             "renamed_to": renamed_to or "",
+                            "media_type": media_type,
+                            "season": season_num,
+                            "episode": episode_num,
                         })
+
+                        # 移动关联的媒体数据文件（字幕等）到视频所在目录
+                        if data_files:
+                            video_base = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
+                            new_base = (renamed_to.rsplit(".", 1)[0] if renamed_to and "." in renamed_to
+                                        else (renamed_to or video_base))
+                            video_parent_id = file_info.get("parent_id", "")
+                            for df in data_files:
+                                if df["file_id"] in moved_data_file_ids:
+                                    continue
+                                if df.get("parent_id", "") != video_parent_id:
+                                    continue
+                                df_base = df["name"].rsplit(".", 1)[0] if "." in df["name"] else df["name"]
+                                if df_base != video_base:
+                                    continue
+                                # 视频被重命名时，数据文件同步重命名（保持同名的 basename）
+                                if renamed_to and renamed_to != orig_name:
+                                    df_ext = ("." + df["name"].rsplit(".", 1)[-1]) if "." in df["name"] else ""
+                                    new_df_name = new_base + df_ext
+                                    if new_df_name != df["name"]:
+                                        Client115Service.rename(cookies, df["file_id"], new_df_name)
+                                        logger.info(f"[organize] 关联数据文件重命名: {df['name']} -> {new_df_name}")
+                                # 移动到视频所在目录
+                                ok_df = Client115Service.move(cookies, [df["file_id"]], final_target_cid)
+                                if ok_df:
+                                    moved_data_file_ids.add(df["file_id"])
+                                    logger.info(f"[organize] 关联数据文件已移动: {df['name']} -> {category}/")
+                                else:
+                                    logger.warning(f"[organize] 关联数据文件移动失败: {df['name']}")
                     else:
                         logger.warning(f"[organize] 移动失败: {orig_name}")
                         result["errors"].append({
@@ -1335,11 +1512,158 @@ class OrganizeService:
                     "reason": item["reason"],
                 })
 
+        # 3d. 移动媒体图片文件和未关联的媒体数据文件到「冗余文件存在的目录」
+        #     - 媒体图片（jpg/png 等）：Emby 可自动生成，移到冗余
+        #     - 未关联的媒体数据（未跟随视频移动的字幕等）：移到冗余
+        if not dry_run and redundant_cid:
+            for img_f in image_files:
+                try:
+                    ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid)
+                    if ok_img:
+                        logger.info(f"[organize] 媒体图片移到冗余: {img_f['name']}")
+                        result["redundant"].append({"name": img_f["name"], "reason": "媒体图片文件"})
+                    else:
+                        logger.warning(f"[organize] 媒体图片移动失败: {img_f['name']}")
+                except Exception as e:
+                    logger.warning(f"[organize] 媒体图片移动异常: {img_f['name']}: {e}")
+
+            for df in data_files:
+                if df["file_id"] in moved_data_file_ids:
+                    continue
+                try:
+                    ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid)
+                    if ok_df:
+                        logger.info(f"[organize] 未关联媒体数据移到冗余: {df['name']}")
+                        result["redundant"].append({"name": df["name"], "reason": "未关联的媒体数据文件"})
+                    else:
+                        logger.warning(f"[organize] 未关联媒体数据移动失败: {df['name']}")
+                except Exception as e:
+                    logger.warning(f"[organize] 未关联媒体数据移动异常: {df['name']}: {e}")
+
         logger.info(
-            f"[organize] 整理完成: 共 {result['total']} 个文件，"
             f"已整理 {len(result['organized'])}，冗余 {len(result['redundant'])}，"
             f"无法识别 {len(result['unrecognized'])}，失败 {len(result['errors'])}"
         )
+
+        # 3e. 电视剧整理汇总：按剧集分组，显示每部剧的季集范围和重命名情况
+        tv_items = [item for item in result["organized"] if item.get("media_type") == "tv"]
+        if tv_items:
+            # 按 category（分类路径）分组，同一分类下的同一部剧归为一组
+            # 用 renamed_to 的目录部分或 name 的标题部分作为剧集标识
+            tv_groups = defaultdict(list)
+            for item in tv_items:
+                # 用 to 路径的目录部分作为分组 key（同一目录 = 同一部剧的同一季）
+                group_key = item.get("to", "").rstrip("/")
+                tv_groups[group_key].append(item)
+
+            tv_summary = []
+            for group_key, episodes in sorted(tv_groups.items()):
+                # 按季号分组
+                season_groups = defaultdict(list)
+                for ep in episodes:
+                    s = ep.get("season") or 1
+                    season_groups[s].append(ep)
+
+                for season in sorted(season_groups.keys()):
+                    eps = season_groups[season]
+                    # 提取集号范围
+                    ep_nums = [e.get("episode") for e in eps if e.get("episode") is not None]
+                    ep_count = len(eps)
+                    renamed_count = sum(1 for e in eps if e.get("renamed_to"))
+
+                    if ep_nums:
+                        ep_min, ep_max = min(ep_nums), max(ep_nums)
+                        if ep_min == ep_max:
+                            ep_range = f"S{season:02d}E{ep_min:02d}"
+                        else:
+                            ep_range = f"S{season:02d}E{ep_min:02d}-E{ep_max:02d}"
+                    else:
+                        ep_range = f"S{season:02d}（{ep_count}集）"
+
+                    # 取第一个文件作为示例
+                    sample = eps[0]
+                    summary_item = {
+                        "path": group_key,
+                        "season": season,
+                        "episode_range": ep_range,
+                        "episode_count": ep_count,
+                        "renamed_count": renamed_count,
+                        "sample_original": sample.get("name", ""),
+                        "sample_renamed": sample.get("renamed_to", ""),
+                    }
+                    tv_summary.append(summary_item)
+
+                    logger.info(
+                        f"[organize] 电视剧汇总: {group_key} {ep_range} "
+                        f"({ep_count}集, 重命名{renamed_count}个)"
+                    )
+                    if sample.get("renamed_to"):
+                        logger.info(f"  示例: {sample['name']} → {sample['renamed_to']}")
+
+            result["tv_summary"] = tv_summary
+            logger.info(f"[organize] 电视剧整理汇总: 共 {len(tv_summary)} 组")
+
+        # 4. 清理源目录：将残留的子目录和散落文件移到冗余目录（仅非预览模式）
+        if not dry_run and result["total"] > 0 and redundant_cid:
+            try:
+                logger.info(f"[organize] 开始清理源目录残留...")
+                # 扫描源目录下的直接子项（目录和文件）
+                remaining_items = Client115Service.list_all_items(
+                    cookies, source_cid, recursive=False
+                )
+                if remaining_items:
+                    moved = 0
+                    failed_items = []  # 记录第一轮移动失败的项
+                    for item in remaining_items:
+                        item_id = item.get("id", "")
+                        item_name = item.get("name", "")
+                        if not item_id:
+                            continue
+                        try:
+                            ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                            if ok:
+                                moved += 1
+                                logger.info(f"[organize] 残留移到冗余目录: {item_name}")
+                            else:
+                                failed_items.append(item)
+                        except Exception as e:
+                            logger.warning(f"[organize] 残留移动异常: {item_name}: {e}")
+                            failed_items.append(item)
+                        _time.sleep(1)
+                    # 第二轮：重试第一轮失败的项（等待更长时间）
+                    if failed_items:
+                        logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待 10s 后重试...")
+                        _time.sleep(10)
+                        still_failed = []
+                        for item in failed_items:
+                            item_id = item.get("id", "")
+                            item_name = item.get("name", "")
+                            try:
+                                ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                if ok:
+                                    moved += 1
+                                    logger.info(f"[organize] 残留重试成功: {item_name}")
+                                else:
+                                    still_failed.append(item)
+                                    logger.warning(f"[organize] 残留重试仍失败: {item_name}")
+                            except Exception as e:
+                                still_failed.append(item)
+                                logger.warning(f"[organize] 残留重试异常: {item_name}: {e}")
+                            _time.sleep(1)
+                        # 仍然失败的项记录到结果中
+                        if still_failed:
+                            result["cleanup_failed"] = [
+                                {"name": item.get("name", ""), "id": item.get("id", "")}
+                                for item in still_failed
+                            ]
+                            logger.warning(f"[organize] {len(still_failed)} 个残留项移动失败，需手动处理")
+                    if moved > 0:
+                        result["cleaned_items"] = moved
+                        logger.info(f"[organize] 已将 {moved} 个残留项移到冗余目录")
+                else:
+                    logger.info(f"[organize] 源目录已清空")
+            except Exception as e:
+                logger.warning(f"[organize] 清理源目录失败: {e}")
 
         return result
 
@@ -1355,10 +1679,12 @@ class OrganizeService:
         media_info: Optional[dict] = None,
         category: str = "",
         prefer_filename: bool = False,
+        cached_existing_files: Optional[list] = None,
     ) -> tuple:
         """
         洗版检查：在目标目录中查找同标题的已存在文件，按 YAML 策略比较。
         wash_config 应包含 'wash_yaml' 字段（YAML 格式策略字符串）。
+        cached_existing_files: 预先获取的目标目录文件列表（含 sha1），避免重复 API 调用。
         返回 (should_move: bool, reason: str, old_files_to_replace: list)
         old_files_to_replace: 需要被替换的旧文件列表
         """
@@ -1373,15 +1699,19 @@ class OrganizeService:
             if not strategies:
                 return True, "洗版策略为空，跳过洗版", []
 
-            # 获取目标目录下所有文件
-            existing_files = Client115Service.list_all_files(
-                cookies, target_cid, VIDEO_EXTS, min_size=0, recursive=True
-            )
+            # 获取目标目录下所有文件（优先使用缓存）
+            if cached_existing_files is not None:
+                existing_files = cached_existing_files
+            else:
+                existing_files = Client115Service.list_all_files(
+                    cookies, target_cid, VIDEO_EXTS, min_size=0, recursive=True
+                )
             if not existing_files:
                 return True, "目标目录无重复文件", []
 
             new_info = parse_resource_info(file_info["name"], media_info, prefer_filename)
             new_info["size"] = file_info.get("size", 0)
+            new_sha1 = file_info.get("sha1", "")
 
             # 为新文件找到匹配的策略
             new_strategy = _find_matching_strategy(new_info, media_type, category, strategies)
@@ -1394,7 +1724,9 @@ class OrganizeService:
             old_files_to_replace = []
 
             for ef in existing_files:
-                if extract_title(ef["name"]) != extract_title(file_info["name"]):
+                # 洗版前置条件：仅 SHA1 相同的文件才进行洗版比较
+                old_sha1 = ef.get("sha1", "")
+                if not new_sha1 or not old_sha1 or new_sha1 != old_sha1:
                     continue
 
                 old_info = parse_resource_info(ef["name"], None, prefer_filename)
@@ -1497,7 +1829,7 @@ class OrganizeService:
 
         if media_type == "tv":
             # 剧集文件（apply_rename_template 已原生支持 {season_num:02d} 等零填充格式）
-            template = rename_rules.get("episode_file", "") or "{title} - S{season_num:02d}<E{episode_num:02d}>< - {episode_name}><.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}"
+            template = rename_rules.get("episode_file", "") or "{title}.S{season_num:02d}<E{episode_num:02d}><.{episode_name}><.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><.{resource_team}>{ext}"
             new_name = apply_rename_template(
                 template, tmdb_info, filename, season, episode, season_detail, episode_detail, media_info, prefer_filename
             )
@@ -1523,17 +1855,95 @@ class OrganizeService:
             return (new_name, movie_folder, None)
 
     @classmethod
+    async def _ai_extract_and_search(
+        cls,
+        filename: str,
+        media_type: Optional[str] = None,
+    ) -> Optional[tuple]:
+        """
+        用 AI 从文件名提取标题，再用 TMDB 搜索元数据。
+        返回 (tmdb_info, media_type)，失败返回 None。
+        """
+        try:
+            from app.services.ai_service import get_ai_client
+            client = get_ai_client()
+            if client is None:
+                logger.warning("[organize] AI 服务未配置或未启用，跳过 AI 辅助识别")
+                return None
+
+            # 先用 AI 提取标题信息
+            # 如果已知 media_type 就用对应方法，否则先试电影再试电视剧
+            if media_type == "tv":
+                ai_info = await client.extract_tv_name(filename)
+            elif media_type == "movie":
+                ai_info = await client.extract_movie_name(filename)
+            else:
+                # 未知类型：先试电影，再试电视剧
+                ai_info = await client.extract_movie_name(filename)
+                if not ai_info or not ai_info.get("name"):
+                    ai_info = await client.extract_tv_name(filename)
+
+            if not ai_info or not ai_info.get("name"):
+                logger.warning(f"[organize] AI 未能从文件名提取标题: {filename}")
+                return None
+
+            ai_name = ai_info["name"]
+            ai_year = ai_info.get("year")
+
+            # 用 AI 提取的标题重新搜索 TMDB
+            # 构造搜索用的标题（带年份）
+            search_name = ai_name
+            if ai_year:
+                search_name = f"{ai_name}.{ai_year}"
+
+            # 判断类型：如果 AI 返回了 season/episode，按电视剧搜索
+            if ai_info.get("season") is not None or ai_info.get("episode") is not None:
+                search_type = "tv"
+            elif media_type:
+                search_type = media_type
+            else:
+                search_type = None
+
+            tmdb_info = await TmdbService.search_media(search_name, search_type)
+            if tmdb_info:
+                # 确定最终类型
+                if "release_date" in tmdb_info and tmdb_info.get("release_date"):
+                    final_type = "movie"
+                elif "first_air_date" in tmdb_info and tmdb_info.get("first_air_date"):
+                    final_type = "tv"
+                else:
+                    final_type = search_type or "movie"
+                return (tmdb_info, final_type)
+
+            logger.warning(f"[organize] AI 提取标题 '{ai_name}' 在 TMDB 中未找到结果")
+            return None
+
+        except Exception as e:
+            logger.warning(f"[organize] AI 辅助识别异常: {e}")
+            return None
+
+    @classmethod
     async def _classify_file(
         cls,
         name: str,
         category_helper: CategoryHelper,
+        category_roots: dict = None,
+        ai_mode: str = "off",
     ) -> tuple:
         """
         分类文件：通过 TMDB 搜索影视元数据，再按 YAML 分类配置匹配。
         AV 文件通过番号前缀匹配厂商分类，不查询 TMDB。
         返回 (category_str, tmdb_info, media_type)。
         category_str 为分类路径（如 "电影/动画电影"），无法识别返回 (None, None, None)。
+        category_roots: 自定义根目录名称 {"movie":"电影", "tv":"电视剧", "av":"AV"}
+        ai_mode: off=关闭AI, assist=TMDB失败时辅助AI, force=强制使用AI
         """
+        # 根目录名称（支持用户自定义）
+        roots = category_roots or {}
+        movie_root = roots.get("movie", "") or "电影"
+        tv_root = roots.get("tv", "") or "电视剧"
+        av_root = roots.get("av", "") or "AV"
+
         # 先用内置逻辑判断电影/电视剧/AV
         builtin = auto_classify(name)
 
@@ -1543,10 +1953,30 @@ class OrganizeService:
             if av_code:
                 sub_category = category_helper.get_av_category(av_code)
                 if sub_category:
-                    return (f"AV/{sub_category}", {"av_code": av_code}, "av")
-                return ("AV", {"av_code": av_code}, "av")
+                    return (f"{av_root}/{sub_category}", {"av_code": av_code}, "av")
+                return (av_root, {"av_code": av_code}, "av")
             return (None, None, None)
 
+        # ===== 强制 AI 模式：跳过内置正则识别，直接用 AI 提取标题 =====
+        if ai_mode == "force":
+            ai_result = await cls._ai_extract_and_search(name, None)
+            if ai_result:
+                tmdb_info, media_type = ai_result
+                if media_type == "movie":
+                    sub_category = category_helper.get_movie_category(tmdb_info)
+                    return (f"{movie_root}/{sub_category}" if sub_category else movie_root, tmdb_info, "movie")
+                elif media_type == "tv":
+                    sub_category = category_helper.get_tv_category(tmdb_info)
+                    return (f"{tv_root}/{sub_category}" if sub_category else tv_root, tmdb_info, "tv")
+            # AI 也失败，回退到内置分类
+            logger.warning(f"[organize] 强制AI模式识别失败: '{name}'，回退到简单分类")
+            if builtin == "movie":
+                return (movie_root, None, "movie")
+            elif builtin == "tvshow":
+                return (tv_root, None, "tv")
+            return (None, None, None)
+
+        # ===== 正常模式 / 辅助 AI 模式 =====
         if builtin == "movie":
             media_type = "movie"
         elif builtin == "tvshow":
@@ -1559,13 +1989,23 @@ class OrganizeService:
         tmdb_info = await TmdbService.search_media(name, media_type)
 
         if not tmdb_info:
-            # TMDB 未找到，回退到简单分类
-            logger.warning(f"[organize] TMDB 未找到 '{name}'，回退到简单分类")
-            if builtin == "movie":
-                return ("电影", None, "movie")
-            elif builtin == "tvshow":
-                return ("电视剧", None, "tv")
-            return (None, None, None)
+            # TMDB 未找到
+            # 辅助 AI 模式：用 AI 提取标题后重新搜索 TMDB
+            if ai_mode == "assist":
+                logger.info(f"[organize] TMDB 未找到 '{name}'，尝试 AI 辅助识别...")
+                ai_result = await cls._ai_extract_and_search(name, media_type)
+                if ai_result:
+                    tmdb_info, media_type = ai_result
+                    logger.info(f"[organize] AI 辅助识别成功: '{name}' -> {tmdb_info.get('title') or tmdb_info.get('name', '')}")
+
+            if not tmdb_info:
+                # 回退到简单分类
+                logger.warning(f"[organize] TMDB 未找到 '{name}'，回退到简单分类")
+                if builtin == "movie":
+                    return (movie_root, None, "movie")
+                elif builtin == "tvshow":
+                    return (tv_root, None, "tv")
+                return (None, None, None)
 
         # 判断是电影还是电视剧
         # TMDB 搜索结果中有 release_date 的是电影，有 first_air_date 的是电视剧
@@ -1573,22 +2013,22 @@ class OrganizeService:
             # 电影
             sub_category = category_helper.get_movie_category(tmdb_info)
             if sub_category:
-                return (f"电影/{sub_category}", tmdb_info, "movie")
-            return ("电影", tmdb_info, "movie")
+                return (f"{movie_root}/{sub_category}", tmdb_info, "movie")
+            return (movie_root, tmdb_info, "movie")
         elif "first_air_date" in tmdb_info and tmdb_info.get("first_air_date"):
             # 电视剧
             sub_category = category_helper.get_tv_category(tmdb_info)
             if sub_category:
-                return (f"电视剧/{sub_category}", tmdb_info, "tv")
-            return ("电视剧", tmdb_info, "tv")
+                return (f"{tv_root}/{sub_category}", tmdb_info, "tv")
+            return (tv_root, tmdb_info, "tv")
         else:
             # 无法确定类型，按内置判断回退
             if builtin == "movie":
                 sub_category = category_helper.get_movie_category(tmdb_info)
-                return (f"电影/{sub_category}" if sub_category else "电影", tmdb_info, "movie")
+                return (f"{movie_root}/{sub_category}" if sub_category else movie_root, tmdb_info, "movie")
             elif builtin == "tvshow":
                 sub_category = category_helper.get_tv_category(tmdb_info)
-                return (f"电视剧/{sub_category}" if sub_category else "电视剧", tmdb_info, "tv")
+                return (f"{tv_root}/{sub_category}" if sub_category else tv_root, tmdb_info, "tv")
             return (None, None, None)
 
 

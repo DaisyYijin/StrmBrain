@@ -577,9 +577,34 @@
             user-select: none;
         }
         .log-filter-btn:hover { border-color: #c0c4cc; }
+        .log-filter-btn.active-critical { background: #fef0f0; border-color: #f56c6c; color: #f56c6c; }
         .log-filter-btn.active-error { background: #fef0f0; border-color: #f56c6c; color: #f56c6c; }
-        .log-filter-btn.active-warning { background: #fdf6ec; border-color: #e6a23c; color: #e6a23c; }
-        .log-filter-btn.active-info { background: #f4f4f5; border-color: #909399; color: #909399; }
+        .log-filter-btn.active-all { background: #f4f4f5; border-color: #909399; color: #909399; }
+        .log-keyword-filter {
+            padding: 4px 10px;
+            border: 1px solid #dcdfe6;
+            border-radius: 4px;
+            font-size: 13px;
+            width: 200px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .log-keyword-filter:focus { border-color: #409eff; }
+        .ai-mode-btn {
+            padding: 6px 16px;
+            border: 1px solid #dcdfe6;
+            border-radius: 4px;
+            background: #fff;
+            color: #606266;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+            user-select: none;
+            flex: 1;
+            text-align: center;
+        }
+        .ai-mode-btn:hover { border-color: #c0c4cc; }
+        .ai-mode-btn.ai-mode-active { background: #ecf5ff; border-color: #409eff; color: #409eff; font-weight: 500; }
         .log-source-tag {
             display: inline-block;
             padding: 0 6px;
@@ -602,6 +627,21 @@
         .log-source-media { background: #1f3a4a; color: #4dd0e1; }
         .log-source-scheduler { background: #3d2e5c; color: #9575cd; }
         .log-source-app { background: #3a3a3a; color: #c0c0c0; }
+
+        /* 转存下载状态标签 */
+        .cd-status-tag {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .cd-status-done { background: #f0f9eb; color: #67c23a; }
+        .cd-status-downloading { background: #ecf5ff; color: #409eff; }
+        .cd-status-error { background: #fef0f0; color: #f56c6c; }
+        .cd-status-waiting { background: #fdf6ec; color: #e6a23c; }
+        .cd-status-unknown { background: #f4f4f5; color: #909399; }
 
         .local-account-tip {
             margin-top: 12px;
@@ -1418,6 +1458,42 @@
             font-size: 12px;
         }
 
+        /* 重命名预览 */
+        .rename-preview { display:flex; flex-direction:column; gap:16px; }
+        .preview-item { background:#f9fafc; border:1px solid #ebeef5; border-radius:6px; padding:12px 14px; }
+        .preview-label { font-size:12px; font-weight:600; color:#909399; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+        .preview-original { font-size:12px; color:#909399; font-family:'Consolas','Monaco','Courier New',monospace; word-break:break-all; }
+        .preview-arrow { text-align:center; color:#c0c4cc; font-size:14px; margin:4px 0; }
+        .preview-result { font-size:13px; font-family:'Consolas','Monaco','Courier New',monospace; word-break:break-all; line-height:1.6; }
+        .preview-folder { color:#409eff; }
+        .preview-file { color:#303133; font-weight:500; }
+
+        /* 小按钮 */
+        .btn-sm { padding:4px 14px; font-size:13px; border-radius:4px; cursor:pointer; border:1px solid #dcdfe6; background:#fff; color:#606266; transition:all 0.2s; min-height:auto; display:inline-flex; align-items:center; }
+        .btn-sm:hover { border-color:#409eff; color:#409eff; }
+        .btn-sm.btn-primary { background:#409eff; border-color:#409eff; color:#fff; }
+        .btn-sm.btn-primary:hover { background:#66b1ff; border-color:#66b1ff; }
+
+        /* 规则内联预览 */
+        .rule-preview-line { margin-top:4px; font-size:12px; color:#909399; }
+        .rule-preview-line code { color:#409eff; font-family:'Consolas','Monaco','Courier New',monospace; word-break:break-all; }
+
+        /* 规则 label 行（label + 预设按钮并排） */
+        .rule-label-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; flex-wrap:wrap; }
+        .rule-label-row > label { margin:0; }
+        .rule-mini-presets { display:flex; gap:4px; flex-shrink:0; }
+        .rule-mini-presets .btn-sm { padding:2px 10px; font-size:12px; }
+
+        /* 规则输入框自适应高度 */
+        .rule-textarea {
+            width:100%; min-height:38px; padding:8px 12px; font-size:14px;
+            border:1px solid #dcdfe6; border-radius:4px; resize:none; overflow:hidden;
+            line-height:1.6; outline:none; transition:border-color 0.2s;
+            font-family:'Consolas','Monaco','Courier New',monospace;
+            box-sizing:border-box;
+        }
+        .rule-textarea:focus { border-color:#409eff; }
+
         /* 页面标题（统一结构） */
         .page-header {
             margin-bottom: 20px;
@@ -1560,71 +1636,6 @@
             border-radius: 4px;
             font-size: 14px;
             z-index: 1000;
-        }
-
-        /* WebSocket 实时进度条 */
-        .ws-progress-bar {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 360px;
-            background: #fff;
-            border: 1px solid #e4e7ed;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            padding: 14px 16px;
-            z-index: 999;
-            transition: opacity 0.3s;
-        }
-        .ws-progress-bar.ws-progress-done { border-color: #67c23a; }
-        .ws-progress-bar.ws-progress-error { border-color: #f56c6c; }
-        .ws-progress-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-        .ws-progress-title { font-weight: 600; font-size: 14px; color: #303133; }
-        .ws-progress-count { font-size: 12px; color: #909399; margin-left: auto; }
-        .ws-progress-status { font-size: 12px; font-weight: 600; }
-        .ws-progress-close {
-            cursor: pointer;
-            font-size: 18px;
-            color: #c0c4cc;
-            line-height: 1;
-            padding: 0 2px;
-            margin-left: 4px;
-            transition: color 0.15s;
-        }
-        .ws-progress-close:hover { color: #909399; }
-        .ws-progress-done .ws-progress-status { color: #67c23a; }
-        .ws-progress-error .ws-progress-status { color: #f56c6c; }
-        .ws-progress-track {
-            height: 6px;
-            background: #ebeef5;
-            border-radius: 3px;
-            overflow: hidden;
-        }
-        .ws-progress-fill {
-            height: 100%;
-            background: #409eff;
-            border-radius: 3px;
-            transition: width 0.3s ease;
-        }
-        .ws-progress-done .ws-progress-fill { background: #67c23a; }
-        .ws-progress-error .ws-progress-fill { background: #f56c6c; }
-        .ws-progress-file {
-            font-size: 12px;
-            color: #606266;
-            margin-top: 6px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .ws-progress-msg {
-            font-size: 12px;
-            color: #909399;
-            margin-top: 4px;
         }
 
         /* Tag input - 可点击删除的标签输入框 */
@@ -1840,6 +1851,12 @@
         .ws-dot.disconnected { background: #f56c6c; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+        /* 顶栏日志连接状态 */
+        .topbar-ws-indicator { font-size: 11px; margin-left: 4px; }
+        .topbar-ws-indicator .ws-dot.connected + span { color: #67c23a; }
+        .topbar-ws-indicator .ws-dot.connecting + span { color: #e6a23c; }
+        .topbar-ws-indicator .ws-dot.disconnected + span { color: #f56c6c; }
+
         /* ===== 通用卡片网格 ===== */
         .feature-card {
             background: white; border-radius: 8px; border: 1px solid #ebeef5;
@@ -2006,9 +2023,9 @@
                         <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M19.4 13c.04-.3.06-.7.06-1s-.02-.7-.06-1l2.1-1.6c.2-.15.25-.42.12-.64l-2-3.46c-.12-.22-.4-.3-.6-.22l-2.5 1c-.5-.4-1.1-.73-1.7-.98l-.4-2.65c-.04-.24-.25-.42-.5-.42h-4c-.25 0-.46.18-.5.42l-.4 2.65c-.6.25-1.2.58-1.7.98l-2.5-1c-.23-.08-.5 0-.6.22l-2 3.46c-.13.22-.08.5.12.64L4.6 11c-.04.3-.06.66-.06 1s.02.7.06 1l-2.1 1.6c-.2.15-.25.42-.12.64l2 3.46c.12.22.4.3.6.22l2.5-1c.5.4 1.1.73 1.7.98l.4 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.4-2.65c.6-.25 1.2-.58 1.7-.98l2.5 1c.23.08.5 0 .6-.22l2-3.46c.13-.22.08-.5-.12-.64L19.4 13zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/></svg>
                         <span class="nav-text">核心配置</span>
                     </div>
-                    <div class="nav-item" :class="{ active: tab === 'notification' }" @click="tab = 'notification'" title="通知配置">
-                        <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-                        <span class="nav-text">通知配置</span>
+                    <div class="nav-item" :class="{ active: tab === 'clouddownload' }" @click="tab = 'clouddownload'" title="转存下载">
+                        <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                        <span class="nav-text">转存下载</span>
                     </div>
                     <div class="nav-item" :class="{ active: tab === 'organize' }" @click="tab = 'organize'" title="整理功能">
                         <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
@@ -2017,6 +2034,10 @@
                     <div class="nav-item" :class="{ active: tab === 'sync' }" @click="tab = 'sync'" title="同步归档">
                         <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
                         <span class="nav-text">同步归档</span>
+                    </div>
+                    <div class="nav-item" :class="{ active: tab === 'notification' }" @click="tab = 'notification'" title="通知配置">
+                        <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                        <span class="nav-text">通知配置</span>
                     </div>
                     <div class="nav-item" :class="{ active: tab === 'tools' }" @click="tab = 'tools'" title="特色工具">
                         <svg class="nav-item-icon" viewBox="0 0 24 24"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
@@ -2030,6 +2051,10 @@
                 <div class="topbar-item" :class="{ active: tab === 'logs' }" @click="openLogs" @contextmenu.prevent="openLogWindow" title="实时日志（右键新窗口打开）">
                     <svg viewBox="0 0 24 24"><path d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h12v2H3v-2zm0 4h18v2H3v-2zm0 4h12v2H3v-2z"/></svg>
                     <span class="topbar-text">实时日志</span>
+                    <span class="ws-indicator topbar-ws-indicator" :title="wsStatusText">
+                        <span class="ws-dot" :class="wsStatusClass"></span>
+                        <span>{{ wsStatusText }}</span>
+                    </span>
                 </div>
                 <div class="account-dropdown-wrap topbar-item" @click.stop="toggleAccountMenu">
                     <svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
@@ -2965,7 +2990,7 @@
                         <div class="card-title">影视整理<span class="help-tip">?<span class="tip-text">选择 115 网盘源目录，系统通过 TMDB 自动识别并整理影视文件。</span></span></div>
                         <!-- 需要整理的源目录 -->
                         <div class="form-group">
-                            <label>需要整理的目录<span class="help-tip">?<span class="tip-text">115 网盘中需要整理的源目录。</span></span></label>
+                            <label>等待整理<span class="help-tip">?<span class="tip-text">指定 115 网盘中待整理的源目录，系统将递归扫描其中的视频文件，通过 TMDB 自动识别并进行二级分类、重命名等整理操作。</span></span></label>
                             <div class="dir-picker" @click="openOrganizeDirPicker('source')">
                                 <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
                                 <span>{{ organize.source_path || '点击选择需要整理的 115 目录' }}</span>
@@ -2974,7 +2999,7 @@
 
                         <!-- 已存在影视的目录 -->
                         <div class="form-group">
-                            <label>已存在影视的目录<span class="help-tip">?<span class="tip-text">整理后的影视文件移入此目录。</span></span></label>
+                            <label>已经存在<span class="help-tip">?<span class="tip-text">整理过程中若发现文件与全量同步目录中已有影视重复（同名、同标题或 SHA1 一致），将自动移入此目录，避免覆盖原有文件。</span></span></label>
                             <div class="dir-picker" @click="openOrganizeDirPicker('existing')">
                                 <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
                                 <span>{{ organize.existing_path || '点击选择目录' }}</span>
@@ -2983,7 +3008,7 @@
 
                         <!-- 冗余文件存在的目录 -->
                         <div class="form-group">
-                            <label>冗余文件存在的目录<span class="help-tip">?<span class="tip-text">洗版替换的旧版本、重复文件移入此目录。</span></span></label>
+                            <label>冗余文件<span class="help-tip">?<span class="tip-text">洗版策略中被替换的旧版本文件、同标题重复文件，以及整理完成后源目录中残留的 NFO、TXT、广告等非视频文件，均统一移入此目录归档。</span></span></label>
                             <div class="dir-picker" @click="openOrganizeDirPicker('redundant')">
                                 <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
                                 <span>{{ organize.redundant_path || '点击选择目录' }}</span>
@@ -2992,7 +3017,7 @@
 
                         <!-- 识别不准的目录 -->
                         <div class="form-group">
-                            <label>识别不准的目录<span class="help-tip">?<span class="tip-text">无法识别的文件移入此目录。</span></span></label>
+                            <label>识别不准<span class="help-tip">?<span class="tip-text">系统通过 TMDB 无法识别影视类型，或识别结果与文件名严重不符的文件，将移入此目录以便人工复核。</span></span></label>
                             <div class="dir-picker" @click="openOrganizeDirPicker('unrecognized')">
                                 <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
                                 <span>{{ organize.unrecognized_path || '点击选择目录' }}</span>
@@ -3030,15 +3055,6 @@
                                 {{ organize.running ? '整理中...' : '开始整理' }}
                             </button>
                         </div>
-                        <div v-if="organize.running" style="margin-top:12px;">
-                            <div style="color:#909399; font-size:13px; margin-bottom:8px;">正在扫描和整理文件，请耐心等待...</div>
-                            <div class="mini-log-panel">
-                                <div v-for="entry in organizeLogs" :key="entry.seq" class="mini-log-line" :class="'log-line-log-' + (entry.level || 'INFO').toLowerCase()">
-                                    <span class="log-source-tag" :class="'log-source-' + (entry.source || 'app')">{{ sourceLabel(entry.source) }}</span>{{ entry.line }}
-                                </div>
-                                <div v-if="organizeLogs.length === 0" style="color:#666;padding:8px 0;">等待日志...</div>
-                            </div>
-                        </div>
                       </div>
                     </div>
 
@@ -3062,7 +3078,24 @@
                     <!-- ===== 二级分类 Tab ===== -->
                     <div v-show="organizeTab === 'classify'">
                       <div class="card">
-                        <div class="card-title">二级分类<span class="help-tip">?<span class="tip-text">按 TMDB 信息将影视自动分到不同目录。一级分类 movie/tv/av 固定，二级名称即目录名。</span></span></div>
+                        <div class="card-title">二级分类<span class="help-tip">?<span class="tip-text">按 TMDB 信息将影视自动分到不同目录。可自定义根目录名称，二级名称即目录名。</span></span></div>
+                        <div class="form-group">
+                            <label>根目录名称<span class="help-tip">?<span class="tip-text">自定义电影/电视剧/AV 在影视库中的根目录名称。留空则使用默认值。</span></span></label>
+                            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <div style="flex:1; min-width:140px;">
+                                    <label style="font-size:12px; color:#909399; margin-bottom:4px;">电影</label>
+                                    <input type="text" v-model="organize.category_roots.movie" placeholder="电影" class="code" style="width:100%;">
+                                </div>
+                                <div style="flex:1; min-width:140px;">
+                                    <label style="font-size:12px; color:#909399; margin-bottom:4px;">电视剧</label>
+                                    <input type="text" v-model="organize.category_roots.tv" placeholder="电视剧" class="code" style="width:100%;">
+                                </div>
+                                <div style="flex:1; min-width:140px;">
+                                    <label style="font-size:12px; color:#909399; margin-bottom:4px;">AV</label>
+                                    <input type="text" v-model="organize.category_roots.av" placeholder="AV" class="code" style="width:100%;">
+                                </div>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label>分类规则<span class="help-tip">?<span class="tip-text">YAML 格式。每项二级分类下方填写匹配条件，无条件项作为兜底。多个值逗号分隔。</span></span></label>
                             <div class="yaml-editor-wrapper">
@@ -3154,47 +3187,131 @@
                     <!-- ===== 重命名规则 Tab ===== -->
                     <div v-show="organizeTab === 'rename'">
                       <div class="card">
-                        <div class="card-title">重命名规则<span class="help-tip">?<span class="tip-text">设置影视文件的命名规则，支持变量和条件语法。留空使用默认值。</span></span></div>
+                        <div class="card-title">重命名规则<span class="help-tip">?<span class="tip-text">设置影视文件的命名规则，支持变量和条件语法。每个规则可独立切换预设模板，下方实时预览命名效果。</span></span></div>
                         <!-- 电影文件夹命名规则 -->
                         <div class="form-group">
-                            <label>电影文件夹命名规则<span class="help-tip">?<span class="tip-text">电影文件夹名称。变量见「变量说明」。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.movie_folder" placeholder="{first_letter}-{title}-{year}" class="code">
+                            <div class="rule-label-row">
+                                <label>电影文件夹命名规则<span class="help-tip">?<span class="tip-text">电影文件夹名称。变量见「变量说明」。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_folder','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_folder','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_folder','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleMovieFolderRef" v-model="organize.rename_rules.movie_folder" @input="autoResizeRule($refs.ruleMovieFolderRef)" placeholder="{first_letter}-{title}-{year}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('movie_folder') }}</code></div>
                         </div>
 
                         <!-- 电影文件命名规则 -->
                         <div class="form-group">
-                            <label>电影文件命名规则<span class="help-tip">?<span class="tip-text">电影文件名。&lt;...&gt; 包裹可选字段，语法见「语法说明」。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.movie_file" placeholder="{title}.{year}&lt;.{resource_pix}&gt;&lt;.{resource_type}&gt;&lt;.{video_encode}&gt;&lt;-{resource_team}&gt;{ext}" class="code">
+                            <div class="rule-label-row">
+                                <label>电影文件命名规则<span class="help-tip">?<span class="tip-text">电影文件名。&lt;...&gt; 包裹可选字段，语法见「语法说明」。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_file','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_file','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('movie_file','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleMovieFileRef" v-model="organize.rename_rules.movie_file" @input="autoResizeRule($refs.ruleMovieFileRef)" placeholder="{title}.{year}&lt;.{resource_pix}&gt;&lt;.{resource_type}&gt;&lt;.{video_encode}&gt;&lt;-{resource_team}&gt;{ext}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('movie_file') }}</code></div>
                         </div>
 
                         <!-- 剧集文件夹命名规则 -->
                         <div class="form-group">
-                            <label>剧集文件夹命名规则<span class="help-tip">?<span class="tip-text">剧集根目录名称，包含所有季。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.tv_folder" placeholder="{title} ({year})" class="code">
+                            <div class="rule-label-row">
+                                <label>剧集文件夹命名规则<span class="help-tip">?<span class="tip-text">剧集根目录名称，包含所有季。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('tv_folder','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('tv_folder','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('tv_folder','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleTvFolderRef" v-model="organize.rename_rules.tv_folder" @input="autoResizeRule($refs.ruleTvFolderRef)" placeholder="{first_letter}-{title} ({year})" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('tv_folder') }}</code></div>
                         </div>
 
                         <!-- 季文件夹命名规则 -->
                         <div class="form-group">
-                            <label>季文件夹命名规则<span class="help-tip">?<span class="tip-text">每季所在的子文件夹。{season_num:02d} 表示两位补零季号。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.season_folder" placeholder="Season {season_num:02d}" class="code">
+                            <div class="rule-label-row">
+                                <label>季文件夹命名规则<span class="help-tip">?<span class="tip-text">每季所在的子文件夹。{season_num:02d} 表示两位补零季号。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('season_folder','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('season_folder','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('season_folder','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleSeasonFolderRef" v-model="organize.rename_rules.season_folder" @input="autoResizeRule($refs.ruleSeasonFolderRef)" placeholder="Season {season_num:02d}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('season_folder') }}</code></div>
                         </div>
 
                         <!-- 集文件命名规则 -->
                         <div class="form-group">
-                            <label>集文件命名规则<span class="help-tip">?<span class="tip-text">单集文件名。{episode_num:02d} 为两位补零集号。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.episode_file" placeholder="{title} - S{season_num:02d}&lt;E{episode_num:02d}&gt;&lt; - {episode_name}&gt;&lt;.{resource_pix}&gt;&lt;.{fps}&gt;&lt;.{resource_version}&gt;&lt;.{resource_source}&gt;&lt;.{resource_type}&gt;&lt;.{resource_effect}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}" class="code">
+                            <div class="rule-label-row">
+                                <label>集文件命名规则<span class="help-tip">?<span class="tip-text">单集文件名。{episode_num:02d} 为两位补零集号。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('episode_file','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('episode_file','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('episode_file','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleEpisodeFileRef" v-model="organize.rename_rules.episode_file" @input="autoResizeRule($refs.ruleEpisodeFileRef)" placeholder="{title} - S{season_num:02d}&lt;E{episode_num:02d}&gt;&lt; - {episode_name}&gt;&lt;.{resource_pix}&gt;&lt;.{fps}&gt;&lt;.{resource_version}&gt;&lt;.{resource_source}&gt;&lt;.{resource_type}&gt;&lt;.{resource_effect}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('episode_file') }}</code></div>
                         </div>
 
                         <!-- AV 文件夹命名规则 -->
                         <div class="form-group">
-                            <label>AV 文件夹命名规则<span class="help-tip">?<span class="tip-text">{code} 为番号，如 SSIS-001。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.av_folder" placeholder="{code}" class="code">
+                            <div class="rule-label-row">
+                                <label>AV 文件夹命名规则<span class="help-tip">?<span class="tip-text">{code} 为番号，如 SSIS-001。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_folder','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_folder','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_folder','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleAvFolderRef" v-model="organize.rename_rules.av_folder" @input="autoResizeRule($refs.ruleAvFolderRef)" placeholder="{code}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('av_folder') }}</code></div>
                         </div>
 
                         <!-- AV 文件命名规则 -->
                         <div class="form-group">
-                            <label>AV 文件命名规则<span class="help-tip">?<span class="tip-text">{code} 为番号，资源信息变量同电影。</span></span></label>
-                            <input type="text" v-model="organize.rename_rules.av_file" placeholder="{code}&lt;.{resource_pix}&gt;&lt;.{resource_type}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}" class="code">
+                            <div class="rule-label-row">
+                                <label>AV 文件命名规则<span class="help-tip">?<span class="tip-text">{code} 为番号，资源信息变量同电影。</span></span></label>
+                                <div class="rule-mini-presets">
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_file','full')">完整</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_file','standard')">常规</button>
+                                    <button class="btn btn-sm" @click="applyRulePreset('av_file','minimal')">精简</button>
+                                </div>
+                            </div>
+                            <textarea ref="ruleAvFileRef" v-model="organize.rename_rules.av_file" @input="autoResizeRule($refs.ruleAvFileRef)" placeholder="{code}&lt;.{resource_pix}&gt;&lt;.{resource_type}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}" rows="1" class="code rule-textarea"></textarea>
+                            <div class="rule-preview-line">预览: <code>{{ previewRule('av_file') }}</code></div>
+                        </div>
+
+                        <!-- 整理效果总览 -->
+                        <div class="rename-overview" style="margin-top:20px; padding:16px; background:#f5f7fa; border-radius:8px; border:1px solid #e4e7ed;">
+                            <div style="font-weight:600; color:#303133; margin-bottom:12px; font-size:14px;">整理效果总览<span style="font-weight:400; font-size:12px; color:#909399; margin-left:8px;">基于当前规则和示例数据生成</span></div>
+                            <div style="display:flex; flex-direction:column; gap:10px;">
+                                <!-- 电影 -->
+                                <div style="background:white; border-radius:6px; padding:10px 14px; border:1px solid #ebeef5;">
+                                    <div style="font-size:12px; color:#909399; margin-bottom:6px; font-weight:500;">📁 {{ organize.category_roots.movie || '电影' }}</div>
+                                    <div style="font-family:monospace; font-size:12px; color:#606266; line-height:1.8; word-break:break-all;">
+                                        └─ <span style="color:#409eff;">{{ previewFolder('movie') }}</span> / <span style="color:#67c23a;">{{ previewRename('movie') }}</span>
+                                    </div>
+                                </div>
+                                <!-- 剧集 -->
+                                <div style="background:white; border-radius:6px; padding:10px 14px; border:1px solid #ebeef5;">
+                                    <div style="font-size:12px; color:#909399; margin-bottom:6px; font-weight:500;">📁 {{ organize.category_roots.tv || '电视剧' }}</div>
+                                    <div style="font-family:monospace; font-size:12px; color:#606266; line-height:1.8; word-break:break-all;">
+                                        └─ <span style="color:#409eff;">{{ previewFolder('tv').split('/')[0] }}</span> / <span style="color:#409eff;">{{ previewFolder('tv').split('/')[1] || 'Season 01' }}</span> / <span style="color:#67c23a;">{{ previewRename('tv') }}</span>
+                                    </div>
+                                </div>
+                                <!-- AV -->
+                                <div style="background:white; border-radius:6px; padding:10px 14px; border:1px solid #ebeef5;">
+                                    <div style="font-size:12px; color:#909399; margin-bottom:6px; font-weight:500;">📁 {{ organize.category_roots.av || 'AV' }}</div>
+                                    <div style="font-family:monospace; font-size:12px; color:#606266; line-height:1.8; word-break:break-all;">
+                                        └─ <span style="color:#409eff;">{{ previewFolder('av') }}</span> / <span style="color:#67c23a;">{{ previewRename('av') }}</span>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                       </div>
                     </div>
@@ -3433,15 +3550,18 @@
                     <!-- ===== AI识别 Tab ===== -->
                     <div v-show="organizeTab === 'ai'">
                       <div class="card">
-                        <div class="card-title">AI识别<span class="help-tip">?<span class="tip-text">当 TMDB 无法识别文件名时，使用 AI 从文件名提取影片名称和年份辅助识别。</span></span></div>
-                        <div class="feature-card">
-                            <div class="feature-card-header">
-                                <div class="feature-card-title">AI识别配置</div>
-                                <label class="mini-toggle">
-                                    <input type="checkbox" v-model="aiConfig.enabled">
-                                    <span class="mini-slider"></span>
-                                </label>
+                        <!-- AI 识别模式（顶部） -->
+                        <div class="form-group" style="margin-bottom:16px;">
+                            <label>AI 识别模式<span class="help-tip">?<span class="tip-text">关闭AI：仅使用内置正则+TMDB识别。辅助AI：TMDB搜索失败时用AI提取标题重新搜索。强制AI：跳过内置识别，直接用AI提取标题再搜索TMDB。选择辅助或强制前需先在下方配置 AI 服务并保存。</span></span></label>
+                            <div style="display:flex; gap:8px;">
+                                <button class="ai-mode-btn" :class="{ 'ai-mode-active': organize.ai_mode === 'off' }" @click="organize.ai_mode = 'off'">关闭AI</button>
+                                <button class="ai-mode-btn" :class="{ 'ai-mode-active': organize.ai_mode === 'assist' }" @click="organize.ai_mode = 'assist'">辅助AI</button>
+                                <button class="ai-mode-btn" :class="{ 'ai-mode-active': organize.ai_mode === 'force' }" @click="organize.ai_mode = 'force'">强制AI</button>
                             </div>
+                        </div>
+
+                        <div class="card-title">AI识别配置<span class="help-tip">?<span class="tip-text">配置 AI 服务的 API Key、地址和模型。当 AI 识别模式选择辅助或强制时，将使用此配置从文件名提取影片信息。</span></span></div>
+                        <div class="feature-card">
                             <div class="form-group">
                                 <label>API Key<span class="help-tip">?<span class="tip-text">AI 服务的 API Key。</span></span></label>
                                 <input type="text" v-model="aiConfig.api_key" placeholder="AI服务的API Key">
@@ -3570,8 +3690,8 @@
                     <div v-show="syncTab === 'incremental'">
                         <!-- 定时执行周期（cron 格式） -->
                         <div class="form-group">
-                            <label>定时执行周期（Cron 表达式）<span class="help-tip">?<span class="tip-text">标准 5 段式 Cron：分 时 日 月 周。例如 0 3 * * * 表示每天 3:00 执行，0 */2 * * * 表示每 2 小时。留空则不启用定时。</span></span></label>
-                            <input type="text" v-model="organize.sync_cron" @input="updateCronPreview" placeholder="* * * * *" class="code">
+                            <label>定时执行周期（Cron 表达式）<span class="help-tip">?<span class="tip-text">标准 5 段式 Cron：分 时 日 月 周。默认 */20 * * * * 表示每 20 分钟执行一次。每次触发时先执行整理（将等待整理目录的文件归类到全量同步目录），再执行增量同步（生成 STRM 文件）。留空则不启用定时。</span></span></label>
+                            <input type="text" v-model="organize.sync_cron" @input="updateCronPreview" placeholder="*/20 * * * *" class="code">
                             <!-- Cron 预览：接下来 5 次执行时间 -->
                             <div v-if="organize.sync_cron && organize.sync_cron.trim()" class="info-box info-box--bordered" style="margin-top:10px;">
                                 <div style="font-size:12px; color:#909399; margin-bottom:6px;">接下来 5 次执行时间（北京时间）：</div>
@@ -4087,6 +4207,84 @@
                     </div>
                 </div>
 
+                <!-- ===== 转存下载 ===== -->
+                <div v-show="tab === 'clouddownload'">
+                    <div style="margin-bottom:20px;">
+                        <div class="card-title" style="margin-bottom:8px;">转存下载<span class="help-tip">?<span class="tip-text">自动识别链接类型：115分享链接会先列出文件供选择转存，磁力/HTTP/FTP/电驴链接会直接添加离线下载。</span></span></div>
+                    </div>
+
+                    <!-- 统一输入区 -->
+                    <div class="card" style="margin-bottom:20px;">
+                        <div class="form-group">
+                            <label>链接<span class="help-tip">?<span class="tip-text">每行一个链接，自动识别类型。&#10;115分享：https://115.com/s/xxxxx?password=yyyy&#10;磁力：magnet:?xt=urn:btih:xxxxx&#10;HTTP/FTP/电驴链接均可</span></span></label>
+                            <textarea v-model="clouddownload.urls" style="width:100%; min-height:100px; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-family:monospace; font-size:13px; resize:vertical;" placeholder="每行一个链接，自动识别类型&#10;115分享: https://115.com/s/xxxxx?password=yyyy&#10;磁力: magnet:?xt=urn:btih:xxxxx&#10;HTTP: https://example.com/file.zip"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>保存目录<span class="help-tip">?<span class="tip-text">转存或下载的文件保存到此 115 网盘目录，留空=根目录。转存成功后会自动整理此目录中的文件。</span></span></label>
+                            <div class="dir-picker" @click="openDirPicker('clouddownload_save')">
+                                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                                <span>{{ clouddownload.savePath || '点击选择 115 网盘目录（留空=根目录）' }}</span>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:8px;">
+                            <button class="btn btn-primary btn-action" @click="addTask" :disabled="clouddownload.adding || clouddownload.snapping" style="flex:1;">
+                                {{ clouddownload.snapping ? '获取文件列表中...' : (clouddownload.adding ? '添加中...' : '添加') }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 分享文件列表（仅识别到分享链接时显示） -->
+                    <div class="card" v-if="clouddownload.shareFiles.length > 0">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                            <span style="font-weight:600; color:#303133;">分享文件（共 {{ clouddownload.shareFiles.length }} 项）</span>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-default btn-sm" @click="toggleAllShareFiles" style="padding:2px 10px;">{{ clouddownload.shareSelectedAll ? '取消全选' : '全选' }}</button>
+                                <button class="btn btn-primary btn-sm" @click="receiveShare" :disabled="clouddownload.receiving" style="padding:2px 10px;">
+                                    {{ clouddownload.receiving ? '转存中...' : '转存选中' }}
+                                </button>
+                            </div>
+                        </div>
+                        <div style="overflow-x:auto;">
+                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="border-bottom:2px solid #ebeef5;">
+                                        <th style="padding:8px 12px; width:36px; text-align:center;"><input type="checkbox" :checked="clouddownload.shareSelectedAll" @change="toggleAllShareFiles" style="cursor:pointer;"></th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">文件名</th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">大小</th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">类型</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="f in clouddownload.shareFiles" :key="f.fid || f.cid" style="border-bottom:1px solid #ebeef5; cursor:pointer;" @click="toggleShareSelect(f)">
+                                        <td style="padding:8px 12px; text-align:center;"><input type="checkbox" :checked="clouddownload.shareSelectedIds.includes(f.fid || f.cid)" @click.stop @change="toggleShareSelect(f)" style="cursor:pointer;"></td>
+                                        <td style="padding:8px 12px; max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="f.n">
+                                            <span style="margin-right:4px;" :style="{ color: f.fid ? '#909399' : '#e6a23c' }">{{ f.fid ? '📄' : '📁' }}</span>
+                                            {{ f.n || '-' }}
+                                        </td>
+                                        <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ f.fid ? formatDownloadSize(f.s) : '-' }}</td>
+                                        <td style="padding:8px 12px; white-space:nowrap; color:#909399;">{{ f.fid ? '文件' : '文件夹' }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div v-if="clouddownload.shareError" class="card" style="text-align:center; color:#f56c6c; padding:20px;">{{ clouddownload.shareError }}</div>
+
+                    <!-- 下载完成检测中提示 -->
+                    <div v-if="clouddownload.pollingDownload" class="card" style="text-align:center; padding:20px; color:#e6a23c;">
+                        <svg viewBox="0 0 24 24" style="width:24px; height:24px; animation:spin 1s linear infinite; vertical-align:middle; margin-right:8px;"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" fill="currentColor"/></svg>
+                        <template v-if="clouddownload.pollType === 'transfer'">正在等待 115 处理转存文件，完成后将自动整理</template>
+                        <template v-else>正在检测下载状态：{{ clouddownload.downloadCompleted }}/{{ clouddownload.downloadTotal }} 已完成，完成后将自动整理</template>
+                        <button class="btn btn-sm" @click="stopDownloadPolling" style="margin-left:12px; padding:2px 12px;">取消</button>
+                    </div>
+
+                    <!-- 自动整理进行中提示 -->
+                    <div v-if="clouddownload.autoOrganizing" class="card" style="text-align:center; padding:20px; color:#409eff;">
+                        <svg viewBox="0 0 24 24" style="width:24px; height:24px; animation:spin 1s linear infinite; vertical-align:middle; margin-right:8px;"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" fill="currentColor"/></svg>
+                        正在自动整理转存的文件...
+                    </div>
+                </div>
+
                 <!-- ===== 实时日志 ===== -->
                 <div v-show="tab === 'logs'">
                     <div class="page-header" style="margin-bottom: 16px;">
@@ -4094,10 +4292,10 @@
                         <p style="margin:6px 0 0; font-size:13px; color:#909399;">实时查看系统运行日志，支持按级别过滤。</p>
                     </div>
                     <div class="log-toolbar">
+                        <button class="log-filter-btn" :class="{ 'active-critical': logs.levelFilter === 'IMPORTANT' }" @click="toggleLevelFilter('IMPORTANT')">重要</button>
                         <button class="log-filter-btn" :class="{ 'active-error': logs.levelFilter === 'ERROR' }" @click="toggleLevelFilter('ERROR')">错误</button>
-                        <button class="log-filter-btn" :class="{ 'active-warning': logs.levelFilter === 'WARNING' }" @click="toggleLevelFilter('WARNING')">警告</button>
-                        <button class="log-filter-btn" :class="{ 'active-info': logs.levelFilter === 'INFO' }" @click="toggleLevelFilter('INFO')">一般</button>
-                        <button class="log-filter-btn" @click="toggleLevelFilter('')">全部</button>
+                        <button class="log-filter-btn" :class="{ 'active-all': logs.levelFilter === '' }" @click="toggleLevelFilter('')">全部</button>
+                        <input type="text" class="log-keyword-filter" v-model="logs.keyword" placeholder="筛选关键字..." @input="onKeywordInput">
                         <div style="flex:1;"></div>
                         <button class="btn btn-danger btn-small" @click="clearLogs">清空日志</button>
                     </div>
@@ -4138,6 +4336,10 @@
                     <div class="dock-item" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">
                         <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
                         <span>工具</span>
+                    </div>
+                    <div class="dock-item" :class="{ active: tab === 'clouddownload' }" @click="tab = 'clouddownload'">
+                        <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                        <span>下载</span>
                     </div>
                 </div>
             </nav>
@@ -4266,22 +4468,6 @@
         </div>
 
         <div class="toast" v-if="toast.show">{{ toast.message }}</div>
-
-        <!-- 实时进度条 -->
-        <div v-if="wsProgress.show" class="ws-progress-bar" :class="{ 'ws-progress-error': wsProgress.status === 'error', 'ws-progress-done': wsProgress.status === 'completed' }">
-            <div class="ws-progress-header">
-                <span class="ws-progress-title">{{ wsProgress.title }}</span>
-                <span class="ws-progress-count" v-if="wsProgress.total > 0">{{ wsProgress.current }} / {{ wsProgress.total }}</span>
-                <span class="ws-progress-status" v-if="wsProgress.status === 'completed'">完成</span>
-                <span class="ws-progress-status" v-if="wsProgress.status === 'error'">失败</span>
-                <span class="ws-progress-close" @click="wsProgress.show = false">×</span>
-            </div>
-            <div class="ws-progress-track" v-if="wsProgress.total > 0 && wsProgress.status === 'running'">
-                <div class="ws-progress-fill" :style="{ width: wsProgress.total > 0 ? Math.round(wsProgress.current / wsProgress.total * 100) + '%' : '0%' }"></div>
-            </div>
-            <div class="ws-progress-file" v-if="wsProgress.currentFile && wsProgress.status === 'running'">{{ wsProgress.currentFile }}</div>
-            <div class="ws-progress-msg" v-if="wsProgress.message">{{ wsProgress.message }}</div>
-        </div>
     </div>
     
     <script>
@@ -4453,16 +4639,6 @@
                 // 企业微信回调 URL
                 const callbackUrl = ref('');
 
-                // WebSocket 实时进度
-                const wsProgress = reactive({
-                    show: false,
-                    title: '',
-                    status: 'running',
-                    total: 0,
-                    current: 0,
-                    currentFile: '',
-                    message: '',
-                });
                 let _ws = null;
                 let _wsReconnectTimer = null;
 
@@ -4476,23 +4652,7 @@
                         if (_wsReconnectTimer) { clearInterval(_wsReconnectTimer); _wsReconnectTimer = null; }
                     };
                     _ws.onmessage = (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-                            if (data.type === 'progress') {
-                                wsProgress.show = true;
-                                wsProgress.title = data.title || '';
-                                wsProgress.status = data.status || 'running';
-                                wsProgress.total = data.total || 0;
-                                wsProgress.current = data.current || 0;
-                                wsProgress.currentFile = data.current_file || '';
-                                wsProgress.message = data.message || '';
-                                if (data.status === 'completed' || data.status === 'error') {
-                                    setTimeout(() => { wsProgress.show = false; }, 5000);
-                                }
-                            }
-                        } catch (e) {
-                            console.warn('[ws] 消息解析失败:', e);
-                        }
+                        // WebSocket 连接保活，进度消息已不再弹窗显示
                     };
                     _ws.onclose = () => {
                         wsStatus.value = 'disconnected';
@@ -4555,7 +4715,224 @@
                 // YAML 代码编辑器
                 const yamlEditorRef = ref(null);
                 const blacklistRef = ref(null);
+                const ruleMovieFolderRef = ref(null);
+                const ruleMovieFileRef = ref(null);
+                const ruleTvFolderRef = ref(null);
+                const ruleSeasonFolderRef = ref(null);
+                const ruleEpisodeFileRef = ref(null);
+                const ruleAvFolderRef = ref(null);
+                const ruleAvFileRef = ref(null);
+                // 规则 ref 映射，方便批量操作
+                const ruleRefMap = {
+                    movie_folder: () => ruleMovieFolderRef.value,
+                    movie_file: () => ruleMovieFileRef.value,
+                    tv_folder: () => ruleTvFolderRef.value,
+                    season_folder: () => ruleSeasonFolderRef.value,
+                    episode_file: () => ruleEpisodeFileRef.value,
+                    av_folder: () => ruleAvFolderRef.value,
+                    av_file: () => ruleAvFileRef.value,
+                };
                 let yamlEditor = null;
+                // 每个规则的独立预设模板（full=完整 / standard=常规 / minimal=精简）
+                const RULE_PRESETS = {
+                    movie_folder: {
+                        full: '{first_letter}-{title}-{year}-[[tmdb={tmdb_id}]]',
+                        standard: '{first_letter}-{title}-{year}',
+                        minimal: '{title}-{year}',
+                    },
+                    movie_file: {
+                        full: '{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
+                        standard: '{title}.{year}<.{resource_pix}><.{resource_type}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
+                        minimal: '{title}.{year}<.{resource_pix}><-{resource_team}>{ext}',
+                    },
+                    tv_folder: {
+                        full: '{first_letter}-{title} ({year})-[[tmdb={tmdb_id}]]',
+                        standard: '{first_letter}-{title} ({year})',
+                        minimal: '{first_letter}-{title}',
+                    },
+                    season_folder: {
+                        full: 'Season {season_num:02d}< - {season_name}>',
+                        standard: 'Season {season_num:02d}',
+                        minimal: 'S{season_num:02d}',
+                    },
+                    episode_file: {
+                        full: '{title}.S{season_num:02d}<E{episode_num:02d}><.{episode_name}><.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><.{resource_team}>{ext}',
+                        standard: '{title}.S{season_num:02d}<E{episode_num:02d}><.{episode_name}><.{resource_pix}><.{resource_type}><.{video_encode}><.{audio_encode}><.{resource_team}>{ext}',
+                        minimal: '{title}.S{season_num:02d}<E{episode_num:02d}><.{resource_pix}>{ext}',
+                    },
+                    av_folder: {
+                        full: '{code}',
+                        standard: '{code}',
+                        minimal: '{code}',
+                    },
+                    av_file: {
+                        full: '{code}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
+                        standard: '{code}<.{resource_pix}><.{resource_type}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
+                        minimal: '{code}<.{resource_pix}>{ext}',
+                    },
+                };
+
+                // 预览用的模拟数据
+                const PREVIEW_DATA = {
+                    movie: {
+                        title: '钢铁侠', year: '2008', first_letter: 'G', ext: '.mkv',
+                        tmdb_id: '1726',
+                        resource_pix: '2160p', fps: '', resource_version: 'UHD',
+                        resource_source: '', resource_type: 'BluRay', resource_effect: 'HDR',
+                        video_encode: 'x265.10bit', audio_encode: 'TrueHD', resource_team: 'TnT',
+                        season_num: '', episode_num: '', episode_name: '', season_name: '', code: '',
+                    },
+                    tv: {
+                        title: '愛你', year: '2025', first_letter: 'A', ext: '.mkv',
+                        tmdb_id: '139201',
+                        resource_pix: '2160p', fps: '', resource_version: '',
+                        resource_source: '', resource_type: 'WEB-DL', resource_effect: '',
+                        video_encode: 'H265', audio_encode: '', resource_team: 'HHWEB',
+                        season_num: '1', episode_num: '16', episode_name: '朱砂', season_name: '第一季', code: '',
+                    },
+                    av: {
+                        title: '', year: '', first_letter: '', ext: '.mp4',
+                        tmdb_id: '',
+                        resource_pix: '1080p', fps: '', resource_version: '',
+                        resource_source: '', resource_type: '', resource_effect: '',
+                        video_encode: '', audio_encode: '', resource_team: '',
+                        season_num: '', episode_num: '', episode_name: '', season_name: '', code: 'MARR-012',
+                    },
+                };
+
+                // 前端模拟模板渲染（与后端 apply_rename_template 逻辑一致）
+                const _evalExpr = (expr, vars) => {
+                    expr = expr.trim();
+                    // :02d 零填充
+                    const m = expr.match(/^(\w+):0?2d$/);
+                    if (m) {
+                        const v = parseInt(vars[m[1]] || '0', 10);
+                        return isNaN(v) ? '' : String(v).padStart(2, '0');
+                    }
+                    // 简单变量
+                    if (/^\w+$/.test(expr)) return vars[expr] || '';
+                    // 支持 .replace() 等链式调用
+                    try {
+                        const fn = new Function(...Object.keys(vars), `return ${expr}`);
+                        return String(fn(...Object.values(vars)) || '');
+                    } catch { return ''; }
+                };
+
+                const _renderTemplate = (template, vars) => {
+                    if (!template || !template.trim()) return '';
+                    // 转义 [[ ]] → 临时占位符
+                    template = template.replace(/\[\[/g, '\x00').replace(/\]\]/g, '\x01');
+                    const blockRe = /<\?{{(\w+)}}([^>]*)>|<{{(\w+)}}([^>]*)>|<([^>]*)>/g;
+                    let result = '';
+                    let lastEnd = 0;
+                    const namedValues = { ...vars };
+                    for (const m of template.matchAll(blockRe)) {
+                        result += template.slice(lastEnd, m.index).replace(/\{([^{}]+)\}/g, (mm, expr) => _evalExpr(expr, namedValues));
+                        if (m[1] !== undefined) {
+                            // 静默命名块
+                            const content = m[2];
+                            let blockResult = '';
+                            let allNonEmpty = true;
+                            let evaluated = content.replace(/\{([^{}]+)\}/g, (mm, expr) => {
+                                const v = _evalExpr(expr, namedValues);
+                                if (!v) allNonEmpty = false;
+                                return v;
+                            });
+                            namedValues[m[1]] = evaluated;
+                        } else if (m[3] !== undefined) {
+                            // 命名块
+                            const content = m[4];
+                            let allNonEmpty = true;
+                            let evaluated = content.replace(/\{([^{}]+)\}/g, (mm, expr) => {
+                                const v = _evalExpr(expr, namedValues);
+                                if (!v) allNonEmpty = false;
+                                return v;
+                            });
+                            namedValues[m[3]] = evaluated;
+                            if (allNonEmpty && evaluated) result += evaluated;
+                        } else {
+                            // 条件块
+                            const content = m[5];
+                            let allNonEmpty = true;
+                            let evaluated = content.replace(/\{([^{}]+)\}/g, (mm, expr) => {
+                                const v = _evalExpr(expr, namedValues);
+                                if (!v) allNonEmpty = false;
+                                return v;
+                            });
+                            if (allNonEmpty && evaluated) result += evaluated;
+                        }
+                        lastEnd = m.index + m[0].length;
+                    }
+                    result += template.slice(lastEnd).replace(/\{([^{}]+)\}/g, (mm, expr) => _evalExpr(expr, namedValues));
+                    // 恢复转义
+                    result = result.replace(/\x00/g, '{').replace(/\x01/g, '}');
+                    // 清理连续分隔符
+                    result = result.replace(/\.{2,}/g, '.').replace(/ {2,}/g, ' ').replace(/^[._\s]+|[._\s]+$/g, '');
+                    return result || '';
+                };
+
+                // 单个规则应用预设
+                const applyRulePreset = (ruleName, preset) => {
+                    const presets = RULE_PRESETS[ruleName];
+                    if (!presets || !presets[preset]) return;
+                    organize.rename_rules[ruleName] = presets[preset];
+                    // 预设变更后自适应高度
+                    nextTick(() => {
+                        const el = ruleRefMap[ruleName]?.();
+                        if (el) autoResizeRule(el);
+                    });
+                };
+
+                const previewRename = (type) => {
+                    const vars = PREVIEW_DATA[type];
+                    if (!vars) return '';
+                    const rules = organize.rename_rules;
+                    let template = '';
+                    if (type === 'movie') template = rules.movie_file || '';
+                    else if (type === 'tv') template = rules.episode_file || '';
+                    else if (type === 'av') template = rules.av_file || '';
+                    if (!template.trim()) return '(模板为空)';
+                    const result = _renderTemplate(template, vars);
+                    return result || '(无法生成)';
+                };
+
+                const previewFolder = (type) => {
+                    const vars = PREVIEW_DATA[type];
+                    if (!vars) return '';
+                    const rules = organize.rename_rules;
+                    let folder = '';
+                    if (type === 'movie') {
+                        folder = _renderTemplate(rules.movie_folder || '', vars);
+                    } else if (type === 'tv') {
+                        folder = _renderTemplate(rules.tv_folder || '', vars);
+                        const seasonFolder = _renderTemplate(rules.season_folder || '', { ...vars, season_num: '01' });
+                        if (seasonFolder) folder += '/' + seasonFolder;
+                    } else if (type === 'av') {
+                        folder = _renderTemplate(rules.av_folder || '', vars);
+                    }
+                    return folder || '';
+                };
+
+                // 每个规则的独立预览
+                const previewRule = (ruleName) => {
+                    const rules = organize.rename_rules;
+                    const template = rules[ruleName] || '';
+                    if (!template.trim()) return '(空)';
+                    // 根据规则名选择模拟数据
+                    let vars;
+                    if (ruleName.startsWith('movie')) {
+                        vars = PREVIEW_DATA.movie;
+                    } else if (ruleName.startsWith('tv') || ruleName === 'season_folder' || ruleName === 'episode_file') {
+                        vars = PREVIEW_DATA.tv;
+                    } else if (ruleName.startsWith('av')) {
+                        vars = PREVIEW_DATA.av;
+                    } else {
+                        vars = PREVIEW_DATA.movie;
+                    }
+                    const result = _renderTemplate(template, vars);
+                    return result || '(无法生成)';
+                };
+
                 const organize = reactive({
                     source_cid: '', source_path: '',
                     existing_cid: '', existing_path: '',
@@ -4573,7 +4950,8 @@
                     upload_exts_input: '',
                     upload_overwrite: 'skip',
                     min_video_size_mb: 0,
-                    sync_cron: '',
+                    sync_cron: '*/20 * * * *',
+                    category_roots: { movie: '电影', tv: '电视剧', av: 'AV' },
                     classify_config: `# 电影分类
 movie:
   动画电影:
@@ -4620,9 +4998,9 @@ av:
                     rename_rules: {
                         movie_folder: '{first_letter}-{title}-{year}',
                         movie_file: '{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
-                        tv_folder: '{title} ({year})',
+                        tv_folder: '{first_letter}-{title} ({year})',
                         season_folder: 'Season {season_num:02d}',
-                        episode_file: '{title} - S{season_num:02d}E{episode_num:02d}< - {episode_name}>{ext}',
+                        episode_file: '{title}.S{season_num:02d}<E{episode_num:02d}><.{episode_name}><.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><.{resource_team}>{ext}',
                         av_folder: '{code}',
                         av_file: '{code}<.{resource_pix}><.{resource_type}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
                     },
@@ -4681,6 +5059,7 @@ av:
                     skip_no_info: false,
                     min_organize_size_mb: 0,
                     organize_blacklist: '',
+                    ai_mode: 'off',  // off=关闭, assist=TMDB失败时辅助, force=强制使用AI
                 });
                 const curWash = computed(() => {
                     if (organize.wash_media_type === 'tv') return organize.wash_tv;
@@ -4690,7 +5069,17 @@ av:
                 const autoResizeTextarea = (el) => {
                     if (!el) return;
                     el.style.height = 'auto';
-                    el.style.height = el.scrollHeight + 'px';
+                    // 空内容时使用 placeholder 的预估高度，避免文字显示不全
+                    const minHeight = el.placeholder
+                        ? Math.ceil(el.placeholder.length / 40) * 24 + 20
+                        : 40;
+                    el.style.height = Math.max(el.scrollHeight, minHeight) + 'px';
+                };
+                // 规则输入框专用自适应：空内容时单行高度，有内容时按内容撑开
+                const autoResizeRule = (el) => {
+                    if (!el) return;
+                    el.style.height = 'auto';
+                    el.style.height = Math.max(el.scrollHeight, 38) + 'px';
                 };
                 const openOrganizeDirPicker = (target) => {
                     const accId = getDefaultAccountId();
@@ -4722,11 +5111,13 @@ av:
                                 unrecognized_cid: organize.unrecognized_cid,
                                 unrecognized_path: organize.unrecognized_path,
                                 classify_config: organize.classify_config,
+                                category_roots: organize.category_roots,
                                 rename_rules: organize.rename_rules,
                                 use_ffprobe: organize.use_ffprobe,
                                 skip_no_info: organize.skip_no_info,
                                 min_organize_size_mb: organize.min_organize_size_mb || 0,
                                 organize_blacklist: organize.organize_blacklist || '',
+                                ai_mode: organize.ai_mode || 'off',
                                 wash_config: {
                                     enabled: true,
                                     wash_yaml: washYaml || '',
@@ -4846,11 +5237,13 @@ av:
                             if (c.unrecognized_cid) organize.unrecognized_cid = c.unrecognized_cid;
                             if (c.unrecognized_path) organize.unrecognized_path = c.unrecognized_path;
                             if (c.classify_config) organize.classify_config = c.classify_config;
+                            if (c.category_roots) Object.assign(organize.category_roots, c.category_roots);
                             if (c.rename_rules) Object.assign(organize.rename_rules, c.rename_rules);
                             if (typeof c.use_ffprobe === 'boolean') organize.use_ffprobe = c.use_ffprobe;
                             if (typeof c.skip_no_info === 'boolean') organize.skip_no_info = c.skip_no_info;
                             if (typeof c.min_organize_size_mb === 'number') organize.min_organize_size_mb = c.min_organize_size_mb;
                             if (typeof c.organize_blacklist === 'string') organize.organize_blacklist = c.organize_blacklist;
+                            if (typeof c.ai_mode === 'string') organize.ai_mode = c.ai_mode;
                             if (c.wash_config) {
                                 const w = c.wash_config;
                                 if (w.wash_yaml) {
@@ -4924,7 +5317,13 @@ av:
                         console.error('加载整理配置失败', e);
                     } finally {
                         organizeConfigLoaded.value = true;
-                        nextTick(() => autoResizeTextarea(blacklistRef.value));
+                        nextTick(() => {
+                            autoResizeTextarea(blacklistRef.value);
+                            Object.values(ruleRefMap).forEach(fn => {
+                                const el = fn();
+                                if (el) autoResizeRule(el);
+                            });
+                        });
                     }
                 };
                 const runOrganize = async () => {
@@ -4950,11 +5349,13 @@ av:
                                 unrecognized_cid: organize.unrecognized_cid,
                                 unrecognized_path: organize.unrecognized_path,
                                 classify_config: organize.classify_config,
+                                category_roots: organize.category_roots,
                                 rename_rules: organize.rename_rules,
                                 use_ffprobe: organize.use_ffprobe,
                                 skip_no_info: organize.skip_no_info,
                                 min_organize_size_mb: organize.min_organize_size_mb || 0,
                                 organize_blacklist: organize.organize_blacklist || '',
+                                ai_mode: organize.ai_mode || 'off',
                                 wash_config: {
                                     enabled: true,
                                     wash_yaml: washYaml || '',
@@ -5386,7 +5787,7 @@ av:
                             if (s.image_exts_str) organize.image_exts_list = parseSyncExts(s.image_exts_str);
                             if (s.data_exts_str) organize.data_exts_list = parseSyncExts(s.data_exts_str);
                             if (s.min_video_size_mb !== undefined) organize.min_video_size_mb = s.min_video_size_mb;
-                            if (s.cron !== undefined) organize.sync_cron = s.cron;
+                            if (s.cron) organize.sync_cron = s.cron;
                             if (s.source_cid) {
                                 organize.sync_source_cid = s.source_cid;
                             }
@@ -5430,6 +5831,7 @@ av:
                                 skip_no_info: organize.skip_no_info,
                                 min_organize_size_mb: organize.min_organize_size_mb || 0,
                                 organize_blacklist: organize.organize_blacklist || '',
+                                ai_mode: organize.ai_mode || 'off',
                             })
                         });
                         const data = await res.json();
@@ -5448,6 +5850,7 @@ av:
                             body: JSON.stringify({
                                 type: 'classify',
                                 classify_config: organize.classify_config,
+                                category_roots: organize.category_roots,
                             })
                         });
                         const data = await res.json();
@@ -5542,13 +5945,19 @@ av:
                         organize.skip_no_info,
                         organize.min_organize_size_mb,
                         organize.organize_blacklist,
+                        organize.ai_mode,
                     ],
                     () => _debouncedSave('dirs', _silentSaveDirs)
                 );
 
                 // 监听二级分类变化 → 保存到 classify_config.json
                 watch(
-                    () => [organize.classify_config],
+                    () => [
+                        organize.classify_config,
+                        organize.category_roots.movie,
+                        organize.category_roots.tv,
+                        organize.category_roots.av,
+                    ],
                     () => _debouncedSave('classify', _silentSaveClassify)
                 );
 
@@ -5581,6 +5990,7 @@ av:
                         organize.rename_rules.movie_folder, organize.rename_rules.movie_file,
                         organize.rename_rules.tv_folder, organize.rename_rules.season_folder,
                         organize.rename_rules.episode_file,
+                        organize.rename_rules.av_folder, organize.rename_rules.av_file,
                     ],
                     () => _debouncedSave('rename', _silentSaveRename)
                 );
@@ -5596,7 +6006,7 @@ av:
                 );
 
                 // 实时日志
-                const logs = reactive({ show: false, entries: [], levelFilter: '', sources: {}, timer: null, lastSeq: 0 });
+                const logs = reactive({ show: false, entries: [], levelFilter: '', keyword: '', sources: {}, timer: null, lastSeq: 0 });
                 const logViewer = ref(null);
 
                 const sourceLabel = (src) => {
@@ -5605,8 +6015,19 @@ av:
                 };
 
                 const filteredLogs = computed(() => {
-                    if (!logs.levelFilter) return logs.entries;
-                    return logs.entries.filter(e => e.level === logs.levelFilter);
+                    let result = logs.entries;
+                    // 级别过滤
+                    if (logs.levelFilter === 'IMPORTANT') {
+                        result = result.filter(e => ['WARNING', 'ERROR', 'CRITICAL'].includes((e.level || '').toUpperCase()));
+                    } else if (logs.levelFilter === 'ERROR') {
+                        result = result.filter(e => ['ERROR', 'CRITICAL'].includes((e.level || '').toUpperCase()));
+                    }
+                    // 关键字过滤
+                    const kw = (logs.keyword || '').trim().toLowerCase();
+                    if (kw) {
+                        result = result.filter(e => (e.line || '').toLowerCase().includes(kw));
+                    }
+                    return result;
                 });
 
                 // 同步相关日志（最近20条，倒序）
@@ -6022,18 +6443,25 @@ av:
                     dirPicker.loading = true;
                     dirPicker.cid = cid;
                     dirPicker.pathStack = stack;
-                    // 默认使用第一个可用账号
-                    const accId = accounts.value.length ? accounts.value[0].id : null;
-                    if (!accId) { showToast('无可用账号'); dirPicker.loading = false; return; }
+                    dirPicker.dirs = [];
+                    // 使用第一个有效账号（status === 1）
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('无可用账号，请先在核心配置中添加 115 账号'); dirPicker.loading = false; return; }
                     try {
                         const res = await api(`/api/115/files?account_id=${accId}&cid=${cid}&limit=1000`);
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
-                            dirPicker.dirs = (data.data.data || [])
+                            const rawList = data.data.data || [];
+                            dirPicker.dirs = rawList
                                 .filter(f => !f.fid)
                                 .map(f => ({ cid: f.cid, name: f.n }));
+                        } else {
+                            console.warn('[dirPicker] API 返回错误:', data);
                         }
-                    } catch (e) { console.warn('[app] 操作失败:', e); }
+                    } catch (e) {
+                        console.warn('[app] 目录加载失败:', e);
+                        showToast('目录加载失败: ' + (e.message || '网络错误'));
+                    }
                     dirPicker.loading = false;
                 };
                 const dirPickerEnter = (d) => {
@@ -6072,6 +6500,17 @@ av:
                         clearFolder.path = dirPicker.pathStack.length
                             ? dirPicker.pathStack.map(p => p.name).join('/')
                             : '根目录';
+                    } else if (dirPicker.target === 'clouddownload_save') {
+                        clouddownload.saveCid = dirPicker.cid;
+                        clouddownload.savePath = dirPicker.pathStack.length
+                            ? dirPicker.pathStack.map(p => p.name).join('/')
+                            : '根目录';
+                        // 持久化保存目录配置
+                        api('/api/clouddownload/config/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ save_cid: clouddownload.saveCid, save_path: clouddownload.savePath }),
+                        }).catch(() => {});
                     }
                     dirPicker.show = false;
                 };
@@ -6829,7 +7268,7 @@ av:
                         const url = logs.lastSeq > 0
                             ? `/api/logs?since=${logs.lastSeq}`
                             : '/api/logs';
-                        const res = await fetch(url);
+                        const res = await api(url);
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
                             const newEntries = data.data.entries || [];
@@ -6847,7 +7286,15 @@ av:
                 };
 
                 const toggleLevelFilter = (level) => {
-                    logs.levelFilter = logs.levelFilter === level ? '' : level;
+                    if (level === '') {
+                        logs.levelFilter = '';
+                    } else {
+                        logs.levelFilter = logs.levelFilter === level ? '' : level;
+                    }
+                };
+
+                const onKeywordInput = () => {
+                    // 关键字过滤通过 computed 自动响应，此处仅用于未来扩展
                 };
 
                 const clearLogs = async () => {
@@ -6886,8 +7333,15 @@ av:
                 const openLogWindow = () => {
                     const w = window.open('', 'strmhub_logs', 'width=800,height=600,scrollbars=yes,resizable=yes');
                     if (!w) { showToast('弹窗被拦截，请允许弹窗后重试'); return; }
+                    // 写入基础 HTML 骨架，避免 about:blank 空白
+                    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>实时日志 - STRMhub</title><style>*{margin:0;padding:0;}html,body{height:100%;}body{background:#1e1e1e;}</style></head><body></body></html>');
+                    w.document.close();
                     const poll = () => {
-                        fetch('/api/logs').then(r => r.json()).then(data => {
+                        const headers = {};
+                        if (authToken.value) {
+                            headers['Authorization'] = 'Bearer ' + authToken.value;
+                        }
+                        fetch('/api/logs', { headers }).then(r => r.json()).then(data => {
                             if (data.code === 0 && data.data) {
                                 const entries = data.data.entries || [];
                                 const sources = data.data.sources || {};
@@ -7052,6 +7506,7 @@ av:
                         await loadNotifySettings();
                         await loadSyncSchedule();
                         await loadOrganizeConfig();
+                        await loadClouddownloadConfig();
                         await checkFfprobeStatus();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
@@ -7383,7 +7838,6 @@ av:
                     base_url: 'https://api.siliconflow.cn',
                     model_name: 'Qwen/Qwen2.5-7B-Instruct',
                     timeout: 60,
-                    enabled: false,
                     testResult: '',
                 });
 
@@ -7397,7 +7851,6 @@ av:
                             aiConfig.base_url = data.data.base_url || 'https://api.siliconflow.cn';
                             aiConfig.model_name = data.data.model_name || 'Qwen/Qwen2.5-7B-Instruct';
                             aiConfig.timeout = data.data.timeout || 60;
-                            aiConfig.enabled = data.data.enabled || false;
                         }
                     } catch (e) {
                         console.warn('[app] 加载AI配置失败:', e);
@@ -7416,7 +7869,6 @@ av:
                                 base_url: aiConfig.base_url,
                                 model_name: aiConfig.model_name,
                                 timeout: aiConfig.timeout,
-                                enabled: aiConfig.enabled,
                             })
                         });
                         const data = await res.json();
@@ -7598,11 +8050,406 @@ av:
                     }
                 });
 
+                // ===== 转存下载 =====
+                const clouddownload = reactive({
+                    urls: '',
+                    saveCid: '',
+                    savePath: '',
+                    adding: false,
+                    // 分享转存（自动识别后使用）
+                    shareUrl: '',  // 当前操作的分享链接
+                    shareFiles: [],
+                    shareSelectedIds: [],
+                    shareSelectedAll: false,
+                    snapping: false,
+                    receiving: false,
+                    shareError: '',
+                    autoOrganizing: false,  // 自动整理进行中
+                    // 离线下载/转存 等待检测
+                    pollingDownload: false,  // 正在等待检测
+                    pollType: '',            // 'download'=离线下载检测  'transfer'=转存等待
+                    downloadInfoHashes: [],  // 待检测的 info_hash 列表
+                    downloadProgress: '',    // 进度文本
+                    downloadTotal: 0,        // 总任务数
+                    downloadCompleted: 0,    // 已完成任务数
+                    pollTimer: null,         // 定时器
+                });
+
+                const formatDownloadSize = (bytes) => {
+                    if (!bytes || bytes <= 0) return '-';
+                    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+                    let v = bytes, i = 0;
+                    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+                    return v.toFixed(2) + ' ' + u[i];
+                };
+
+                // 判断是否为 115 分享链接
+                const isShareLink = (url) => {
+                    return /115\.com\/s\//i.test(url) ||
+                           /115cdn\.com\/s\//i.test(url) ||
+                           /share\.115\.com\//i.test(url) ||
+                           /^[a-z0-9]+-[a-z0-9]{4}$/i.test(url.trim());
+                };
+
+                // 统一添加：自动识别链接类型
+                const addTask = async () => {
+                    const lines = clouddownload.urls.split('\n').map(u => u.trim()).filter(u => u);
+                    if (lines.length === 0) {
+                        showToast('请输入至少一个链接');
+                        return;
+                    }
+
+                    const shareLinks = lines.filter(u => isShareLink(u));
+                    const downloadUrls = lines.filter(u => !isShareLink(u));
+
+                    // 处理离线下载链接
+                    if (downloadUrls.length > 0) {
+                        clouddownload.adding = true;
+                        let downloadHashes = [];
+                        try {
+                            const res = await api('/api/clouddownload/add', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ urls: downloadUrls, save_cid: clouddownload.saveCid }),
+                            });
+                            const data = await res.json();
+                            if (data.code === 0) {
+                                const result = data.data || {};
+                                if (result.error) {
+                                    showToast(`离线下载添加失败: ${result.error}`, 4000);
+                                } else if (result.success_count !== undefined) {
+                                    downloadHashes = result.info_hashes || [];
+                                    const ok = result.success_count;
+                                    const fail = result.total - ok;
+                                    if (fail > 0) {
+                                        showToast(`添加完成：成功 ${ok} 个，失败 ${fail} 个`, 4000);
+                                    } else if (downloadHashes.length > 0) {
+                                        showToast(`已添加 ${ok} 个离线下载任务，将自动检测下载完成后整理`);
+                                    } else {
+                                        showToast(`已添加 ${ok} 个离线下载任务，下载完成后请在整理页面手动整理`);
+                                    }
+                                } else {
+                                    showToast('离线下载添加成功，下载完成后请在整理页面手动整理');
+                                }
+                            } else {
+                                showToast(data.message || '离线下载添加失败', 4000);
+                            }
+                        } catch (e) {
+                            showToast(e._network ? e.message : '离线下载添加失败', 4000);
+                        }
+                        clouddownload.adding = false;
+
+                        // 有有效的 info_hash 时启动轮询检测
+                        if (downloadHashes.length > 0 && clouddownload.saveCid) {
+                            startDownloadPolling(downloadHashes);
+                        }
+                    }
+
+                    // 处理分享链接（取第一个，获取文件列表供选择）
+                    if (shareLinks.length > 0) {
+                        clouddownload.shareUrl = shareLinks[0];
+                        clouddownload.snapping = true;
+                        clouddownload.shareError = '';
+                        clouddownload.shareFiles = [];
+                        clouddownload.shareSelectedIds = [];
+                        clouddownload.shareSelectedAll = false;
+                        try {
+                            const res = await api('/api/clouddownload/share/snap', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ share_url: clouddownload.shareUrl.trim() }),
+                            });
+                            const data = await res.json();
+                            if (data.code === 0 && data.data) {
+                                const result = data.data.data || data.data;
+                                if (data.data.state === false || (result && result.error)) {
+                                    clouddownload.shareError = data.data.error || (result && result.error) || '获取文件列表失败';
+                                } else {
+                                    const files = result.list || result.files || result || [];
+                                    clouddownload.shareFiles = Array.isArray(files) ? files : [];
+                                    if (clouddownload.shareFiles.length === 0) {
+                                        clouddownload.shareError = '分享链接中没有文件';
+                                    } else if (downloadUrls.length > 0) {
+                                        showToast('离线下载已添加，分享文件列表已获取');
+                                    }
+                                }
+                            } else {
+                                clouddownload.shareError = data.message || '获取文件列表失败';
+                            }
+                        } catch (e) {
+                            clouddownload.shareError = e._network ? e.message : '获取文件列表失败';
+                        }
+                        clouddownload.snapping = false;
+                    }
+
+                    // 清空输入框（仅当全部成功时）
+                    if (clouddownload.shareError === '' || shareLinks.length === 0) {
+                        clouddownload.urls = '';
+                    }
+                };
+
+                const toggleAllShareFiles = () => {
+                    if (clouddownload.shareSelectedAll) {
+                        clouddownload.shareSelectedIds = [];
+                        clouddownload.shareSelectedAll = false;
+                    } else {
+                        clouddownload.shareSelectedIds = clouddownload.shareFiles.map(f => f.fid || f.cid);
+                        clouddownload.shareSelectedAll = true;
+                    }
+                };
+
+                const toggleShareSelect = (f) => {
+                    const id = f.fid || f.cid;
+                    const idx = clouddownload.shareSelectedIds.indexOf(id);
+                    if (idx > -1) {
+                        clouddownload.shareSelectedIds.splice(idx, 1);
+                    } else {
+                        clouddownload.shareSelectedIds.push(id);
+                    }
+                    clouddownload.shareSelectedAll = clouddownload.shareSelectedIds.length === clouddownload.shareFiles.length;
+                };
+
+                const receiveShare = async () => {
+                    if (clouddownload.shareSelectedIds.length === 0) {
+                        showToast('请选择要转存的文件');
+                        return;
+                    }
+                    clouddownload.receiving = true;
+                    try {
+                        const res = await api('/api/clouddownload/share/receive', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                share_url: clouddownload.shareUrl.trim(),
+                                file_ids: clouddownload.shareSelectedIds,
+                                target_cid: clouddownload.saveCid || '',
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            // 检查 115 API 返回的错误状态
+                            if (data.data && data.data.state === false) {
+                                showToast(data.data.error || '转存失败');
+                            } else {
+                                showToast('转存成功，等待 115 处理后自动整理...');
+                                clouddownload.shareFiles = [];
+                                clouddownload.shareSelectedIds = [];
+                                clouddownload.shareSelectedAll = false;
+                                // 转存成功后等待 115 处理，再自动整理
+                                startTransferWait();
+                            }
+                        } else {
+                            showToast(data.message || '转存失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '转存失败');
+                    }
+                    clouddownload.receiving = false;
+                };
+
+                // 离线下载完成检测：只检查一次，完成后自动整理
+                const startDownloadPolling = (infoHashes) => {
+                    if (clouddownload.pollTimer) {
+                        clearTimeout(clouddownload.pollTimer);
+                        clouddownload.pollTimer = null;
+                    }
+                    clouddownload.pollType = 'download';
+                    clouddownload.downloadInfoHashes = infoHashes;
+                    clouddownload.downloadTotal = infoHashes.length;
+                    clouddownload.downloadCompleted = 0;
+                    clouddownload.downloadProgress = `0/${infoHashes.length}`;
+                    clouddownload.pollingDownload = true;
+                    showToast(`已添加 ${infoHashes.length} 个下载任务，等待 15 秒后检测完成状态...`);
+                    // 延迟 15 秒后执行一次性检测（给下载启动时间）
+                    clouddownload.pollTimer = setTimeout(pollDownloadStatus, 15000);
+                };
+
+                // 转存完成后等待 115 处理，再自动整理
+                const startTransferWait = () => {
+                    if (clouddownload.pollTimer) {
+                        clearTimeout(clouddownload.pollTimer);
+                        clouddownload.pollTimer = null;
+                    }
+                    clouddownload.pollType = 'transfer';
+                    clouddownload.downloadTotal = 1;
+                    clouddownload.downloadCompleted = 0;
+                    clouddownload.downloadProgress = '';
+                    clouddownload.pollingDownload = true;
+                    showToast('转存成功，等待 115 处理文件...');
+                    // 等待 5 秒让 115 后端处理转存文件
+                    clouddownload.pollTimer = setTimeout(async () => {
+                        clouddownload.pollingDownload = false;
+                        showToast('文件已就绪，开始自动整理...', 3000);
+                        await triggerAutoOrganize();
+                    }, 5000);
+                };
+
+                const stopDownloadPolling = () => {
+                    if (clouddownload.pollTimer) {
+                        clearTimeout(clouddownload.pollTimer);
+                        clouddownload.pollTimer = null;
+                    }
+                    clouddownload.pollingDownload = false;
+                };
+
+                // 离线下载状态检测：仅检查一次
+                const pollDownloadStatus = async () => {
+                    if (!clouddownload.pollingDownload || clouddownload.downloadInfoHashes.length === 0) {
+                        clouddownload.pollingDownload = false;
+                        return;
+                    }
+
+                    const accId = getDefaultAccountId();
+                    if (!accId) {
+                        clouddownload.pollingDownload = false;
+                        showToast('下载检测停止：未找到有效 115 账号');
+                        return;
+                    }
+
+                    try {
+                        const res = await api('/api/clouddownload/check_status', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                account_id: accId,
+                                info_hashes: clouddownload.downloadInfoHashes,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const tasks = data.data.tasks || {};
+                            let completed = 0;
+                            let totalPercent = 0;
+                            for (const [hash, info] of Object.entries(tasks)) {
+                                if (info.completed) completed++;
+                                totalPercent += (info.percent || 0);
+                            }
+                            clouddownload.downloadCompleted = completed;
+                            clouddownload.downloadProgress = `${completed}/${clouddownload.downloadTotal}`;
+
+                            if (data.data.all_completed) {
+                                // 全部完成，自动整理
+                                clouddownload.pollingDownload = false;
+                                showToast(`所有下载任务已完成（${completed}/${clouddownload.downloadTotal}），开始自动整理...`, 4000);
+                                await triggerAutoOrganize();
+                            } else {
+                                // 未全部完成，停止检测，提示手动整理
+                                clouddownload.pollingDownload = false;
+                                const avgPercent = clouddownload.downloadTotal > 0
+                                    ? Math.round(totalPercent / clouddownload.downloadTotal) : 0;
+                                showToast(`下载未完成：${completed}/${clouddownload.downloadTotal} 已完成，平均进度 ${avgPercent}%，请稍后手动整理`, 6000);
+                            }
+                        }
+                    } catch (e) {
+                        clouddownload.pollingDownload = false;
+                        showToast('下载状态检查失败，请稍后手动整理', 4000);
+                    }
+                };
+
+                // 转存成功后自动调用影视整理
+                const triggerAutoOrganize = async () => {
+                    const accId = getDefaultAccountId();
+                    if (!accId) {
+                        showToast('自动整理跳过：未找到有效 115 账号');
+                        return;
+                    }
+                    if (!clouddownload.saveCid) {
+                        showToast('自动整理跳过：未选择保存目录');
+                        return;
+                    }
+
+                    clouddownload.autoOrganizing = true;
+                    try {
+                        // 生成洗版 YAML
+                        generateYamlFromVisual(true);
+                        const washYaml = organize.wash_yaml;
+
+                        const res = await api('/api/organize/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                account_id: accId,
+                                source_cid: clouddownload.saveCid,
+                                source_path: clouddownload.savePath,
+                                existing_cid: organize.existing_cid,
+                                existing_path: organize.existing_path,
+                                redundant_cid: organize.redundant_cid,
+                                redundant_path: organize.redundant_path,
+                                unrecognized_cid: organize.unrecognized_cid,
+                                unrecognized_path: organize.unrecognized_path,
+                                classify_config: organize.classify_config,
+                                category_roots: organize.category_roots,
+                                rename_rules: organize.rename_rules,
+                                use_ffprobe: organize.use_ffprobe,
+                                skip_no_info: organize.skip_no_info,
+                                min_organize_size_mb: organize.min_organize_size_mb || 0,
+                                organize_blacklist: organize.organize_blacklist || '',
+                                ai_mode: organize.ai_mode || 'off',
+                                wash_config: {
+                                    enabled: true,
+                                    wash_yaml: washYaml || '',
+                                },
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const r = data.data;
+                            const renamedCount = r.organized.filter(x => x.renamed_to).length;
+                            showToast(`自动整理完成：${r.organized.length} 个已整理（其中 ${renamedCount} 个已重命名），${r.redundant.length} 个冗余，${r.unrecognized.length} 个识别不准，正在生成 STRM...`);
+                            // 整理完成后自动触发增量同步生成 STRM
+                            try {
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                const syncRes = await api('/api/organize/sync/incremental', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ account_id: accId })
+                                });
+                                const syncData = await syncRes.json();
+                                if (syncData.code === 0 && syncData.data) {
+                                    const sr = syncData.data;
+                                    showToast(`STRM 生成完成：新增同步 ${sr.synced.length} 个，跳过 ${sr.skipped} 个` + (sr.errors.length ? `，失败 ${sr.errors.length} 个` : ''));
+                                } else if (syncData.code === 409) {
+                                    showToast('STRM 生成跳过：已有任务正在运行');
+                                } else {
+                                    showToast(`STRM 生成失败：${syncData.message || '未知错误'}`, 4000);
+                                }
+                            } catch (syncErr) {
+                                showToast('STRM 生成失败：网络错误，请手动执行增量同步', 4000);
+                            }
+                        } else if (data.code === 409) {
+                            showToast('自动整理跳过：已有任务正在运行');
+                        } else {
+                            showToast(`自动整理失败：${data.message || '未知错误'}`, 4000);
+                        }
+                    } catch (e) {
+                        showToast('自动整理失败：网络错误', 4000);
+                    } finally {
+                        clouddownload.autoOrganizing = false;
+                    }
+                };
+
+                // 切换到转存下载标签时自动加载任务列表
+                Vue.watch(tab, (newTab) => {
+                    // 转存下载页面无需自动加载
+                });
+
+                // 加载转存下载保存的目录配置
+                const loadClouddownloadConfig = async () => {
+                    try {
+                        const res = await api('/api/clouddownload/config/load');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            if (data.data.save_cid) clouddownload.saveCid = data.data.save_cid;
+                            if (data.data.save_path) clouddownload.savePath = data.data.save_path;
+                        }
+                    } catch (e) { /* 静默忽略 */ }
+                };
+
                 return {
                     tab, configTab, sidebarCollapsed,
                     accounts, loginApps, qr, qrStatusClass, files, toast,
                     version, logs, logViewer, localAccount, accountMenu,
-                    openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount,
+                    openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, onKeywordInput, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount,
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
                     hasValidAccount, openLoginModal, closeLoginModal,
                     getQRCode, checkAccount, deleteAccount, appLabel,
@@ -7619,10 +8466,12 @@ av:
                     localDirPickerEnter, localDirPickerGoUp, confirmLocalDirPicker,
                     // 整理功能
                     organizeTab, syncTab, yamlEditorRef, blacklistRef,
+                    ruleMovieFolderRef, ruleMovieFileRef, ruleTvFolderRef, ruleSeasonFolderRef, ruleEpisodeFileRef, ruleAvFolderRef, ruleAvFileRef,
                     organize, cronPreview, updateCronPreview, autoSaveStatus, curWash,
                     ffprobeAvailable, checkFfprobeStatus, organizeConfigLoaded,
                     openOrganizeDirPicker, runOrganize, saveOrganizeConfig, loadOrganizeConfig,
-                    autoResizeTextarea,
+                    applyRulePreset, previewRename, previewFolder, previewRule,
+                    autoResizeTextarea, autoResizeRule,
                     runFullSync, runIncrementalSync, runUploadSync, saveSyncSchedule,
                     addExt, removeExt, onExtKeydown,
                     addWashTag, removeWashTag, onWashKeydown,
@@ -7638,8 +8487,6 @@ av:
                     // 通知配置
                     notify, loadNotifySettings, saveNotify, testNotifyChannel,
                     callbackUrl, loadCallbackUrl,
-                    // WebSocket 进度
-                    wsProgress,
                     switchLatest, switchGenre, genrePercent, onPosterError,
                     // 新增：仪表盘扩展
                     onAvatarError, onLibImgError,
@@ -7664,6 +8511,12 @@ av:
                     initLoading, initLoadingText,
                     authRequired, authToken, loginForm, doLogin, doLogout,
                     online, wsStatus, wsStatusClass, wsStatusText,
+                    // 转存下载
+                    clouddownload, addTask,
+                    formatDownloadSize,
+                    toggleAllShareFiles, toggleShareSelect, receiveShare,
+                    triggerAutoOrganize, loadClouddownloadConfig,
+                    startDownloadPolling, stopDownloadPolling, startTransferWait,
                 };
             }
         }).mount('#app');

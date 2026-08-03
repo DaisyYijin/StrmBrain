@@ -51,12 +51,39 @@ def _is_rate_limited(exc: Exception) -> bool:
     return "访问频率" in msg or "频率过高" in msg or "too many" in msg.lower()
 
 
+def _is_method_not_allowed(exc) -> bool:
+    """判断是否为 405 Method Not Allowed 错误"""
+    msg = str(exc)
+    return "405" in msg or "Method Not Allowed" in msg
+
+
 def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) -> dict:
-    """带限流重试的 fs_files 调用"""
+    """带限流重试的 fs_files 调用，405 时依次降级: fs_files → fs_files_app → fs_files_aps"""
     for attempt in range(max_retries):
         try:
             return client.fs_files(params)
         except Exception as e:
+            # 405 错误：依次降级到 fs_files_app、fs_files_aps
+            if _is_method_not_allowed(e):
+                logger.info(f"[115] fs_files 返回 405，降级到 fs_files_app")
+                try:
+                    return client.fs_files_app(params)
+                except Exception as e2:
+                    if _is_method_not_allowed(e2):
+                        logger.info(f"[115] fs_files_app 返回 405，降级到 fs_files_aps")
+                        try:
+                            return client.fs_files_aps(params)
+                        except Exception as e3:
+                            if _is_rate_limited(e3) and attempt < max_retries - 1:
+                                logger.warning(f"[115] fs_files_aps 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
+                                _time.sleep(_RATE_LIMIT_WAIT)
+                                continue
+                            raise
+                    if _is_rate_limited(e2) and attempt < max_retries - 1:
+                        logger.warning(f"[115] fs_files_app 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
+                        _time.sleep(_RATE_LIMIT_WAIT)
+                        continue
+                    raise
             if _is_rate_limited(e) and attempt < max_retries - 1:
                 logger.warning(f"[115] 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
                 _time.sleep(_RATE_LIMIT_WAIT)
@@ -342,7 +369,7 @@ class Client115Service:
     def list_files(cls, cookies: str, cid: str = "0", offset: int = 0, limit: int = 100) -> dict:
         try:
             client = cls.create_client_from_cookies(cookies)
-            result = client.fs_files({
+            result = _fs_files_with_retry(client, {
                 "cid": cid,
                 "offset": offset,
                 "limit": limit,
@@ -485,6 +512,53 @@ class Client115Service:
         return videos
 
     @classmethod
+    def list_all_files_full(cls, cookies: str, cid: str,
+                            recursive: bool = True) -> list[dict]:
+        """
+        递归列出目录下的所有文件（不限扩展名），用于整理时识别配套文件。
+        返回: [{"file_id", "pickcode", "name", "size", "parent_id", "parent_path"}]
+        """
+        client = cls.create_client_from_cookies(cookies)
+        results: list[dict] = []
+
+        def _walk(dir_cid: str, dir_rel_path: str):
+            offset = 0
+            while True:
+                resp = _fs_files_with_retry(client, {
+                    "cid": dir_cid, "offset": offset, "limit": 1000, "show_dir": 1,
+                })
+                items = resp.get("data", []) or []
+                if not items:
+                    break
+                for it in items:
+                    is_dir = not it.get("fid")
+                    name = it.get("n", "")
+                    if is_dir:
+                        if recursive:
+                            child_cid = str(it.get("cid", ""))
+                            child_path = f"{dir_rel_path}/{name}" if dir_rel_path else name
+                            _walk(child_cid, child_path)
+                    else:
+                        results.append({
+                            "file_id": str(it.get("fid", "")),
+                            "pickcode": it.get("pc", ""),
+                            "name": name,
+                            "size": it.get("s", 0) or 0,
+                            "parent_id": str(dir_cid),
+                            "parent_path": dir_rel_path,
+                        })
+                total = resp.get("count", 0)
+                offset += len(items)
+                if offset >= total:
+                    break
+                _interval = get_api_intervals().get("file_list_interval", 0.3)
+                if _interval > 0:
+                    _time.sleep(_interval)
+
+        _walk(cid, "")
+        return results
+
+    @classmethod
     def mkdir(cls, cookies: str, name: str, parent_id: str = "0") -> Optional[str]:
         """
         新建目录，返回目录 ID。如已存在则返回已存在目录 ID。
@@ -570,17 +644,33 @@ class Client115Service:
         传 list 时 p115client 会自动转为 fid[0]、fid[1] 格式。
         不能传 {"fid": [...]} 因为 API 不接受 fid 为列表。
         返回 dict 含 state 字段，需检查。
+        遇到"操作尚未执行完成"时自动等待重试。
         """
         client = cls.create_client_from_cookies(cookies)
-        try:
-            resp = client.fs_move(file_ids, pid=dest_id)
-            if isinstance(resp, dict) and resp.get("state") is False:
-                logger.warning(f"[115] move 失败 -> {dest_id}: {resp.get('error', '')}")
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                resp = client.fs_move(file_ids, pid=dest_id)
+                if isinstance(resp, dict) and resp.get("state") is False:
+                    err_msg = resp.get("error", "")
+                    # 115 移动操作是异步的，连续操作可能返回"操作尚未执行完成"
+                    if "尚未执行完成" in err_msg and attempt < max_retries - 1:
+                        wait = 2 * (attempt + 1)
+                        logger.warning(f"[115] move 等待重试 ({attempt+1}/{max_retries}), {wait}s 后重试: {err_msg}")
+                        _time.sleep(wait)
+                        continue
+                    logger.warning(f"[115] move 失败 -> {dest_id}: {err_msg}")
+                    return False
+                return True
+            except Exception as e:
+                if "尚未执行完成" in str(e) and attempt < max_retries - 1:
+                    wait = 2 * (attempt + 1)
+                    logger.warning(f"[115] move 等待重试 ({attempt+1}/{max_retries}), {wait}s 后重试: {e}")
+                    _time.sleep(wait)
+                    continue
+                logger.warning(f"[115] move 失败 -> {dest_id}: {e}")
                 return False
-            return True
-        except Exception as e:
-            logger.warning(f"[115] move 失败 -> {dest_id}: {e}")
-            return False
+        return False
 
     @classmethod
     def copy(cls, cookies: str, file_ids: list[str], dest_id: str) -> bool:
@@ -886,3 +976,289 @@ class Client115Service:
         except Exception as e:
             logger.warning(f"[115] recyclebin_clean 失败: {e}")
             return {"error": str(e)}
+
+    # ===== 离线下载（转存下载） =====
+
+    @classmethod
+    def clouddownload_add_urls(cls, cookies: str, urls: list[str], wp_path_id: str = "") -> dict:
+        """
+        添加离线下载任务（支持 HTTP/HTTPS/FTP/磁力链/电驴链接）
+        urls: 链接列表
+        wp_path_id: 保存到的目录 cid（留空=根目录）
+        使用 ssp 端点 (clouddownload.115.com) 逐个添加，避免 proapi 端点 405/错误问题
+        返回 results 中包含 info_hash 供后续下载状态轮询使用
+        """
+        client = cls.create_client_from_cookies(cookies)
+        clean_urls = [u.strip() for u in urls if u.strip()]
+        if not clean_urls:
+            return {"error": "无有效链接"}
+
+        logger.info(f"[115] 添加离线下载任务: {len(clean_urls)} 个链接, 保存目录 cid={wp_path_id or '根目录'}")
+        results = []
+        has_error = False
+        error_msg = ""
+        info_hashes = []
+        for url in clean_urls:
+            payload = {"url": url}
+            if wp_path_id:
+                payload["wp_path_id"] = wp_path_id
+            try:
+                resp = client.clouddownload_task_add_url(payload)
+                if isinstance(resp, dict):
+                    data = resp.get("data", resp)
+                    if isinstance(data, dict) and data.get("state") is False:
+                        errcode = data.get("errcode", 0)
+                        msg = data.get("error_msg", "添加失败")
+                        # 10008=任务已存在，视为成功（警告而非错误）
+                        if errcode == 10008:
+                            info_hash = data.get("info_hash", "")
+                            logger.info(f"[115] 离线下载任务已存在: {url[:80]} (hash={info_hash})")
+                            results.append({"url": url, "state": True, "message": "任务已存在", "info_hash": info_hash})
+                            if info_hash:
+                                info_hashes.append(info_hash)
+                        else:
+                            logger.warning(f"[115] 离线下载添加失败: {msg} (errcode={errcode})")
+                            has_error = True
+                            error_msg = msg
+                            results.append({"url": url, "state": False, "error": msg})
+                    else:
+                        info_hash = data.get("info_hash", "") if isinstance(data, dict) else ""
+                        logger.info(f"[115] 离线下载任务添加成功: {url[:80]} (hash={info_hash})")
+                        results.append({"url": url, "state": True, "info_hash": info_hash})
+                        if info_hash:
+                            info_hashes.append(info_hash)
+                else:
+                    results.append({"url": url, "state": True})
+            except Exception as e:
+                logger.warning(f"[115] 离线下载添加异常: {e}")
+                has_error = True
+                error_msg = str(e)
+                results.append({"url": url, "state": False, "error": str(e)})
+
+        success_count = sum(1 for r in results if r.get("state"))
+        if has_error and success_count == 0:
+            return {"error": error_msg, "state": False}
+        return {"state": True, "results": results, "success_count": success_count, "total": len(clean_urls), "info_hashes": info_hashes}
+
+    @classmethod
+    def clouddownload_check_status(cls, cookies: str, info_hashes: list[str]) -> dict:
+        """
+        检查离线下载任务的完成状态
+        info_hashes: 要检查的 info_hash 列表
+        返回 {info_hash: {"completed": bool, "percent": int, "status": int, "status_text": str}}
+        """
+        if not info_hashes:
+            return {"tasks": {}}
+        client = cls.create_client_from_cookies(cookies)
+        hash_set = set(info_hashes)
+        result = {}
+        page = 1
+        # 逐页扫描，直到找到所有 hash 或遍历完
+        max_pages = 20
+        while hash_set and page <= max_pages:
+            try:
+                resp = client.clouddownload_task_list({"page": page, "page_size": 50})
+            except Exception as e:
+                logger.warning(f"[115] 获取下载任务列表失败: {e}")
+                break
+            tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
+            if not tasks:
+                break
+            for t in tasks:
+                ih = t.get("info_hash", "")
+                if ih in hash_set:
+                    status = t.get("status", 0)
+                    percent = t.get("percentDone", 0)
+                    # status: 2=完成, 1=进行中, 其他=未完成/失败
+                    completed = (status == 2)
+                    result[ih] = {
+                        "completed": completed,
+                        "percent": percent,
+                        "status": status,
+                        "status_text": t.get("status_text", ""),
+                        "name": t.get("name", ""),
+                    }
+                    hash_set.discard(ih)
+            total_count = resp.get("count", 0)
+            if page * 50 >= total_count:
+                break
+            page += 1
+
+        # 未找到的任务标记为未知
+        for ih in hash_set:
+            result[ih] = {"completed": False, "percent": 0, "status": -1, "status_text": "未找到任务"}
+
+        all_done = all(v.get("completed") for v in result.values())
+        logger.info(f"[115] 下载状态检查: {len(result)} 个任务, 全部完成={all_done}")
+        return {"tasks": result, "all_completed": all_done}
+
+    @classmethod
+    def clouddownload_list(cls, cookies: str, page: int = 1, page_size: int = 30) -> dict:
+        """获取离线下载任务列表"""
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.clouddownload_task_list(page)
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 离线下载任务列表获取失败: {e}")
+            return {"error": str(e)}
+
+    @classmethod
+    def clouddownload_del(cls, cookies: str, info_hashes: list[str], flag: int = 0) -> dict:
+        """
+        删除离线下载任务
+        info_hashes: 任务的 info_hash 列表
+        flag: 0=仅删除任务 1=删除任务及源文件
+        """
+        client = cls.create_client_from_cookies(cookies)
+        del_source = 1 if flag else 0
+        results = []
+        has_error = False
+        for h in info_hashes:
+            if not h:
+                continue
+            payload = {"info_hash": h, "del_source_file": del_source}
+            try:
+                resp = client.clouddownload_task_del(payload)
+                results.append(resp)
+            except Exception as e:
+                logger.warning(f"[115] 离线下载任务删除失败: {e}")
+                has_error = True
+        if has_error and not results:
+            return {"error": "删除失败"}
+        return {"data": results, "count": len(results)}
+
+    @classmethod
+    def clouddownload_clear(cls, cookies: str, flag: int = 0) -> dict:
+        """
+        清空离线下载任务
+        flag: 0=已完成 1=全部 2=已失败 3=进行中 4=已完成+删除源文件 5=全部+删除源文件
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.clouddownload_task_clear(flag)
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 离线下载清空失败: {e}")
+            return {"error": str(e)}
+
+    # ===== 分享链接转存 =====
+
+    @classmethod
+    def share_snap(cls, cookies: str, share_url: str, cid: str = "0") -> dict:
+        """
+        获取分享链接中的文件列表
+        share_url: 115 分享链接
+        cid: 分享中的目录 cid（0=根目录）
+        """
+        try:
+            from p115client.util import share_extract_payload
+        except ImportError:
+            return {"error": "p115client 版本过低，不支持分享链接解析"}
+
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            payload = share_extract_payload(share_url)
+            resp = client.share_snap({
+                "share_code": payload["share_code"],
+                "receive_code": payload.get("receive_code", ""),
+                "cid": cid,
+                "limit": 100,
+                "offset": 0,
+            })
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 获取分享文件列表失败: {e}")
+            return {"error": str(e)}
+
+    @classmethod
+    def share_receive(cls, cookies: str, share_url: str, file_ids: list[str], target_cid: str = "0") -> dict:
+        """
+        转存分享链接中的文件到自己的网盘
+        share_url: 115 分享链接
+        file_ids: 要转存的文件/目录 id 列表
+        target_cid: 保存到自己的网盘目录 cid（0=根目录）
+        """
+        try:
+            from p115client.util import share_extract_payload
+        except ImportError:
+            return {"error": "p115client 版本过低，不支持分享链接解析"}
+
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            payload = share_extract_payload(share_url)
+            resp = client.share_receive(
+                {
+                    "share_code": payload["share_code"],
+                    "receive_code": payload.get("receive_code", ""),
+                    "file_id": ",".join(str(fid) for fid in file_ids),
+                    "cid": target_cid,
+                },
+                share_url=share_url,
+            )
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 分享转存失败: {e}")
+            return {"error": str(e)}
+
+    @classmethod
+    def cleanup_empty_dirs(cls, cookies: str, root_cid: str) -> int:
+        """
+        递归删除 root_cid 下的所有空子目录（不删除 root_cid 本身）。
+        从最深层开始清理，确保子目录删除后父目录也可能变为空并被一并清理。
+        只删除确认为空的目录（无任何文件或子目录），不删除含文件的目录。
+        返回删除的目录数量。
+        """
+        client = cls.create_client_from_cookies(cookies)
+
+        def _collect_subdirs(cid: str) -> list[dict]:
+            """列出 cid 下的所有直接子目录"""
+            subdirs = []
+            offset = 0
+            while True:
+                resp = _fs_files_with_retry(client, {
+                    "cid": cid, "offset": offset, "limit": 1000, "show_dir": 1,
+                })
+                items = resp.get("data", []) or []
+                if not items:
+                    break
+                for it in items:
+                    if not it.get("fid"):  # 是目录
+                        subdirs.append({"cid": str(it.get("cid", "")), "name": it.get("n", "")})
+                total = resp.get("count", 0)
+                offset += len(items)
+                if offset >= total:
+                    break
+                _interval = get_api_intervals().get("file_list_interval", 0.3)
+                if _interval > 0:
+                    _time.sleep(_interval)
+            return subdirs
+
+        def _is_empty(cid: str) -> bool:
+            """检查目录是否为空（无任何文件或子目录）"""
+            resp = _fs_files_with_retry(client, {
+                "cid": cid, "offset": 0, "limit": 1, "show_dir": 1,
+            })
+            items = resp.get("data", []) or []
+            return len(items) == 0
+
+        def _cleanup(cid: str) -> int:
+            count = 0
+            subdirs = _collect_subdirs(cid)
+            for subdir in subdirs:
+                # 先递归清理子目录的子目录
+                count += _cleanup(subdir["cid"])
+                # 再检查子目录是否已变空
+                if _is_empty(subdir["cid"]):
+                    try:
+                        resp = client.fs_delete([subdir["cid"]])
+                        if isinstance(resp, dict) and resp.get("state") is False:
+                            logger.warning(f"[115] 删除空目录失败: {subdir['name']}: {resp.get('error', '')}")
+                        else:
+                            count += 1
+                            logger.info(f"[115] 删除空目录: {subdir['name']}")
+                    except Exception as e:
+                        logger.warning(f"[115] 删除空目录异常: {subdir['name']}: {e}")
+            return count
+
+        return _cleanup(root_cid)

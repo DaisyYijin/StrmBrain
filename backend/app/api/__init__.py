@@ -9,7 +9,8 @@ from app.api.wechat import router as wechat_router
 from app.api.api_keys import router as ai_router
 from app.api.watcher import router as watcher_router
 from app.api.emby_webhook import router as emby_webhook_router
+from app.api.clouddownload import router as clouddownload_router
 
 __all__ = ["v115_router", "accounts_router", "settings_router", "system_router",
            "dashboard_router", "organize_router", "tools_router", "wechat_router",
-           "ai_router", "watcher_router", "emby_webhook_router"]
+           "ai_router", "watcher_router", "emby_webhook_router", "clouddownload_router"]

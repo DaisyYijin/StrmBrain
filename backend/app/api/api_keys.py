@@ -19,7 +19,7 @@ class AISettingsIn(BaseModel):
     base_url: str = "https://api.siliconflow.cn"
     model_name: str = "Qwen/Qwen2.5-7B-Instruct"
     timeout: int = 60
-    enabled: bool = False
+    enabled: bool = True  # 保留字段向后兼容，实际由 ai_mode 控制
 
 
 @router.get("/settings", response_model=ApiResponse)

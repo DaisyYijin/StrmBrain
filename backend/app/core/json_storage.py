@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from app.config import DATA_DIR
+from app.config import DATA_DIR, CONFIG_DIR
 from app.core.logbuffer import get_logger
 
 logger = get_logger("app.core.json_storage")
@@ -20,6 +20,9 @@ logger = get_logger("app.core.json_storage")
 # 可重入锁，防止 save_setting → write_json 嵌套调用时死锁
 _file_locks: dict[str, threading.RLock] = {}
 _locks_lock = threading.Lock()
+
+# 存放在 config/ 目录下的配置类文件
+_CONFIG_FILES = {"settings.json", "local_account.json"}
 
 
 def _get_lock(filename: str) -> threading.RLock:
@@ -31,7 +34,9 @@ def _get_lock(filename: str) -> threading.RLock:
 
 
 def _filepath(filename: str) -> Path:
-    """获取 data 目录下的文件路径"""
+    """获取文件路径：配置类文件存放在 config/，数据类文件存放在 data/"""
+    if filename in _CONFIG_FILES:
+        return CONFIG_DIR / filename
     return DATA_DIR / filename
 
 

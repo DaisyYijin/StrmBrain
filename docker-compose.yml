@@ -11,10 +11,14 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # 数据持久化（账号、配置、Cookie 等）
+      # 运行数据持久化（账号、Cookie、同步清单、备份等）
       - strmhub_data:/app/data
-      # 如需映射本地媒体目录（STRM 文件输出目录），取消注释：
-      # - /path/to/your/media:/media
+      # 核心配置持久化（settings.json、local_account.json、sync_schedule.json 等）
+      - strmhub_config:/app/config
+      # 日志持久化（运行日志文件）
+      - strmhub_log:/app/log
+      # STRM 文件输出目录（供 Emby/Jellyfin 等媒体服务器读取）
+      - strmhub_media:/media
     environment:
       - HOST=0.0.0.0
       - PORT=8000
@@ -27,3 +31,6 @@ services:
 
 volumes:
   strmhub_data:
+  strmhub_config:
+  strmhub_log:
+  strmhub_media:

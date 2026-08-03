@@ -1,9 +1,10 @@
 """
 定时任务调度器 - 基于 APScheduler
 
-支持同步归档的定时增量同步（Cron 表达式）。
+支持同步归档的定时整理+增量同步（Cron 表达式）。
 """
 import asyncio
+import json
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -87,12 +88,12 @@ async def register_sync_schedule():
         replace_existing=True,
         kwargs={"config": config},
     )
-    logger.info(f"同步定时计划已注册: cron='{cron_str}'")
+    logger.info(f"定时任务已注册（整理+增量同步）: cron='{cron_str}'")
 
 
 async def _run_scheduled_sync(config: dict):
     """
-    定时任务执行函数：执行增量同步
+    定时任务执行函数：先执行整理，再执行增量同步
     """
     from app.core.logbuffer import get_logger
     from app.services.sync_service import SyncService
@@ -115,13 +116,28 @@ async def _run_scheduled_sync(config: dict):
         account = get_first_valid_account()
 
     if not account:
-        logger.warning("未找到有效账号，跳过同步")
+        logger.warning("未找到有效账号，跳过执行")
         return
 
     if account.get("status") == 0:
-        logger.warning(f"账号 {account.get('id')} cookies 已失效，跳过同步")
+        logger.warning(f"账号 {account.get('id')} cookies 已失效，跳过执行")
         return
 
+    cookies = account.get("cookies", "")
+    _loop = asyncio.get_running_loop()
+
+    # ========== 第一步：执行整理 ==========
+    organize_result = None
+    try:
+        organize_result = await _run_scheduled_organize(
+            cookies=cookies,
+            target_cid=source_cid,  # 全量同步目录作为整理目标
+            logger=logger,
+        )
+    except Exception as e:
+        logger.error(f"定时整理失败（继续执行增量同步）: {e}")
+
+    # ========== 第二步：执行增量同步 ==========
     logger.info(f"开始执行定时增量同步: account={account.get('id')}, source={source_cid}")
 
     try:
@@ -130,9 +146,6 @@ async def _run_scheduled_sync(config: dict):
         image_exts = _parse_exts(config.get("image_exts_str", ""))
         data_exts = _parse_exts(config.get("data_exts_str", ""))
         min_video_size_mb = config.get("min_video_size_mb", 0)
-
-        cookies = account.get("cookies", "")
-        _loop = asyncio.get_running_loop()
 
         # 在工作线程中执行同步，避免阻塞事件循环
         sync_result = await asyncio.to_thread(
@@ -184,6 +197,120 @@ async def _run_scheduled_sync(config: dict):
         if notify_cfg.get("notify_on_error", True):
             from app.services.notification_service import NotificationService
             await NotificationService.notify_error("定时增量同步", str(e))
+
+
+async def _run_scheduled_organize(cookies: str, target_cid: str, logger) -> dict | None:
+    """
+    定时整理：从已保存的整理配置中读取参数，执行整理。
+    target_cid: 全量同步目录 cid（整理目标目录）
+    返回整理结果 dict，无配置或无文件时返回 None。
+    """
+    from app.config import CONFIG_DIR
+    from app.services.organize_service import OrganizeService
+
+    # 读取整理目录配置
+    dirs_file = CONFIG_DIR / "organize_dirs.json"
+    if not dirs_file.exists():
+        logger.info("定时整理：未找到整理目录配置，跳过整理")
+        return None
+
+    try:
+        dirs_cfg = json.loads(dirs_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"定时整理：读取整理目录配置失败: {e}")
+        return None
+
+    organize_source_cid = dirs_cfg.get("source_cid", "").strip()
+    if not organize_source_cid:
+        logger.info("定时整理：未配置等待整理目录，跳过整理")
+        return None
+
+    existing_cid = dirs_cfg.get("existing_cid", "")
+    redundant_cid = dirs_cfg.get("redundant_cid", "")
+    unrecognized_cid = dirs_cfg.get("unrecognized_cid", "")
+    use_ffprobe = dirs_cfg.get("use_ffprobe", False)
+    skip_no_info = dirs_cfg.get("skip_no_info", False)
+    prefer_filename = dirs_cfg.get("prefer_filename", False)
+    min_organize_size_mb = dirs_cfg.get("min_organize_size_mb", 0)
+    organize_blacklist = dirs_cfg.get("organize_blacklist", "")
+
+    # 读取二级分类配置
+    classify_config = ""
+    category_roots = None
+    classify_file = CONFIG_DIR / "classify_config.json"
+    if classify_file.exists():
+        try:
+            classify_data = json.loads(classify_file.read_text(encoding="utf-8"))
+            classify_config = classify_data.get("classify_config", "")
+            category_roots = classify_data.get("category_roots")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 读取洗版策略
+    wash_config = None
+    wash_file = CONFIG_DIR / "wash_config.json"
+    if wash_file.exists():
+        try:
+            wash_config = json.loads(wash_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 读取重命名规则
+    rename_rules = None
+    rename_file = CONFIG_DIR / "rename_rules.json"
+    if rename_file.exists():
+        try:
+            rename_rules = json.loads(rename_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    logger.info(
+        f"开始执行定时整理: source={organize_source_cid}, target={target_cid}, "
+        f"existing={existing_cid}, redundant={redundant_cid}, unrecognized={unrecognized_cid}"
+    )
+
+    result = await OrganizeService.scan_and_organize(
+        cookies=cookies,
+        source_cid=organize_source_cid,
+        target_cid=target_cid,
+        existing_cid=existing_cid,
+        redundant_cid=redundant_cid,
+        unrecognized_cid=unrecognized_cid,
+        classify_config=classify_config,
+        category_roots=category_roots,
+        rename_rules=rename_rules,
+        wash_config=wash_config,
+        use_ffprobe=use_ffprobe,
+        skip_no_info=skip_no_info,
+        prefer_filename=prefer_filename,
+        min_organize_size_mb=min_organize_size_mb,
+        organize_blacklist=organize_blacklist,
+        dry_run=False,
+    )
+
+    organized = len(result.get("organized", []))
+    redundant = len(result.get("redundant", []))
+    unrecognized = len(result.get("unrecognized", []))
+    errors = len(result.get("errors", []))
+
+    logger.info(
+        f"定时整理完成: 成功 {organized}, 冗余 {redundant}, "
+        f"无法识别 {unrecognized}, 失败 {errors}"
+    )
+
+    # 整理完成后根据配置触发 Emby 刷新和通知
+    from app.core.db_helper import read_setting
+    sync_cfg = read_setting("emby_sync") or {}
+    if sync_cfg.get("auto_refresh", True) and organized > 0:
+        from app.services.emby import trigger_emby_refresh
+        await trigger_emby_refresh()
+
+    notify_cfg = read_setting("emby_notify") or {}
+    if notify_cfg.get("notify_on_organize", True) and organized > 0:
+        from app.services.notification_service import NotificationService
+        await NotificationService.notify_organize_complete(result)
+
+    return result
 
 
 def _parse_exts(exts_str: str) -> set:

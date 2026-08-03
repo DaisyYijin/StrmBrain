@@ -13,7 +13,7 @@ from typing import Optional
 from app.core.logbuffer import get_logger
 from app.core.db_helper import read_setting
 from app.core.json_storage import read_accounts, get_first_valid_account
-from app.config import DATA_DIR
+from app.config import CONFIG_DIR
 
 logger = get_logger("app.services.wechat_app")
 
@@ -227,7 +227,7 @@ class WeChatAppService:
                     lines.append(f"  · {name}")
 
             # 同步配置
-            sync_file = DATA_DIR / "sync_schedule.json"
+            sync_file = CONFIG_DIR / "sync_schedule.json"
             if sync_file.exists():
                 sync_cfg = json.loads(sync_file.read_text(encoding="utf-8"))
                 source = sync_cfg.get("source_path", "")
@@ -238,7 +238,7 @@ class WeChatAppService:
                 lines.append("同步配置: 未配置")
 
             # 整理配置
-            dirs_file = DATA_DIR / "organize_dirs.json"
+            dirs_file = CONFIG_DIR / "organize_dirs.json"
             if dirs_file.exists():
                 dirs_cfg = json.loads(dirs_file.read_text(encoding="utf-8"))
                 source = dirs_cfg.get("source_path", "")
@@ -255,7 +255,7 @@ class WeChatAppService:
         """触发整理"""
         try:
             # 读取整理配置
-            dirs_file = DATA_DIR / "organize_dirs.json"
+            dirs_file = CONFIG_DIR / "organize_dirs.json"
             if not dirs_file.exists():
                 return "❌ 未找到整理配置，请先在网页端配置整理目录。"
 
@@ -265,7 +265,7 @@ class WeChatAppService:
                 return "❌ 整理源目录未配置，请先在网页端选择需要整理的目录。"
 
             # 读取同步配置获取 target_cid
-            sync_file = DATA_DIR / "sync_schedule.json"
+            sync_file = CONFIG_DIR / "sync_schedule.json"
             if not sync_file.exists():
                 return "❌ 未找到同步配置，无法确定整理目标目录。"
 
@@ -297,17 +297,20 @@ class WeChatAppService:
 
             # 读取分类和洗版配置
             classify_config = ""
-            classify_file = DATA_DIR / "classify_config.json"
+            category_roots = None
+            classify_file = CONFIG_DIR / "classify_config.json"
             if classify_file.exists():
-                classify_config = json.loads(classify_file.read_text(encoding="utf-8")).get("classify_config", "")
+                classify_data = json.loads(classify_file.read_text(encoding="utf-8"))
+                classify_config = classify_data.get("classify_config", "")
+                category_roots = classify_data.get("category_roots")
 
             wash_config = {}
-            wash_file = DATA_DIR / "wash_config.json"
+            wash_file = CONFIG_DIR / "wash_config.json"
             if wash_file.exists():
                 wash_config = json.loads(wash_file.read_text(encoding="utf-8"))
 
             rename_rules = {}
-            rename_file = DATA_DIR / "rename_rules.json"
+            rename_file = CONFIG_DIR / "rename_rules.json"
             if rename_file.exists():
                 rename_rules = json.loads(rename_file.read_text(encoding="utf-8"))
 
@@ -326,6 +329,7 @@ class WeChatAppService:
                 redundant_cid=dirs_cfg.get("redundant_cid", ""),
                 unrecognized_cid=dirs_cfg.get("unrecognized_cid", ""),
                 classify_config=classify_config,
+                category_roots=category_roots,
                 rename_rules=rename_rules,
                 wash_config=wash_config,
                 use_ffprobe=dirs_cfg.get("use_ffprobe", False),
@@ -359,7 +363,7 @@ class WeChatAppService:
     async def _cmd_full_sync(cls, from_user: str) -> str:
         """触发全量同步"""
         try:
-            sync_file = DATA_DIR / "sync_schedule.json"
+            sync_file = CONFIG_DIR / "sync_schedule.json"
             if not sync_file.exists():
                 return "❌ 未找到同步配置，请先在网页端配置全量同步。"
 
@@ -448,7 +452,7 @@ class WeChatAppService:
     async def _cmd_incremental_sync(cls, from_user: str) -> str:
         """触发增量同步"""
         try:
-            sync_file = DATA_DIR / "sync_schedule.json"
+            sync_file = CONFIG_DIR / "sync_schedule.json"
             if not sync_file.exists():
                 return "❌ 未找到同步配置，请先在网页端配置全量同步。"
 

@@ -8,8 +8,18 @@ from pathlib import Path
 
 # 基础路径
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# data/ — 运行数据（账号、Cookie、同步清单、备份）
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+# config/ — 配置文件（设置、整理规则、同步计划等用户可编辑配置）
+CONFIG_DIR = BASE_DIR / "config"
+CONFIG_DIR.mkdir(exist_ok=True)
+
+# log/ — 日志文件
+LOG_DIR = BASE_DIR / "log"
+LOG_DIR.mkdir(exist_ok=True)
 
 # 版本号
 VERSION = os.getenv("VERSION", "0.1.0")
