@@ -13,7 +13,8 @@ from app.core.logbuffer import get_logger
 logger = get_logger("app.services.version_service")
 
 # GitHub Releases API（匿名访问，每小时 60 次限额）
-_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+_RELEASES_LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+_RELEASES_LIST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 
 # 缓存的检查结果（内存中）
 _latest_result: dict = {
@@ -60,28 +61,84 @@ def _compare_versions(v1: str, v2: str) -> int:
     return 0
 
 
+async def _fetch_github(url: str) -> httpx.Response:
+    """请求 GitHub API，证书验证失败时降级为不验证"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            return await client.get(
+                url,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+    except Exception:
+        async with httpx.AsyncClient(timeout=15, verify=False) as client:
+            return await client.get(
+                url,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+
+
+def _parse_release(data: dict) -> tuple[str, str, str]:
+    """从 Release JSON 中提取 (tag_name, html_url, body)"""
+    return (
+        data.get("tag_name", ""),
+        data.get("html_url", ""),
+        data.get("body", ""),
+    )
+
+
+def _update_result(latest: str, html_url: str, notes: str):
+    """更新缓存结果"""
+    global _latest_result
+    has_update = _compare_versions(latest, VERSION) > 0
+
+    _latest_result.update({
+        "current_version": VERSION,
+        "latest_version": latest,
+        "has_update": has_update,
+        "release_url": html_url or f"https://github.com/{GITHUB_REPO}/releases",
+        "release_notes": notes if has_update else None,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "error": None,
+    })
+
+    if has_update:
+        logger.info(f"版本检查：发现新版本 {latest}（当前 {VERSION}）")
+    else:
+        logger.info(f"版本检查：当前已是最新版本 {VERSION}")
+
+
 async def check_latest_version() -> dict:
     """
     请求 GitHub Releases API，检查是否有新版本。
+    优先使用 /releases/latest，404 时回退到 /releases 列表取第一条。
     结果写入内存缓存并返回。
     """
     global _latest_result
     try:
-        # 优先使用证书验证；失败时降级为不验证（兼容部分 Windows/Docker 环境）
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    _RELEASES_URL,
-                    headers={"Accept": "application/vnd.github+json"},
-                )
-        except Exception:
-            async with httpx.AsyncClient(timeout=15, verify=False) as client:
-                resp = await client.get(
-                    _RELEASES_URL,
-                    headers={"Accept": "application/vnd.github+json"},
-                )
-        if resp.status_code == 404:
-            # 还没有发布任何 Release
+        # 优先请求 /releases/latest
+        resp = await _fetch_github(_RELEASES_LATEST_URL)
+
+        if resp.status_code == 200:
+            latest, html_url, notes = _parse_release(resp.json())
+            if latest:
+                _update_result(latest, html_url, notes)
+                return _latest_result.copy()
+
+        # /releases/latest 返回 404 或无有效数据时，回退到 /releases 列表
+        if resp.status_code == 404 or resp.status_code == 200:
+            logger.info("版本检查：/releases/latest 无数据，回退到 /releases 列表")
+            resp2 = await _fetch_github(_RELEASES_LIST_URL)
+            if resp2.status_code == 200:
+                releases = resp2.json()
+                # 过滤掉草稿和预发布，取第一条正式 Release
+                for r in releases:
+                    if not r.get("draft", False) and not r.get("prerelease", False):
+                        latest, html_url, notes = _parse_release(r)
+                        if latest:
+                            _update_result(latest, html_url, notes)
+                            return _latest_result.copy()
+
+            # 两个端点都没有 Release
             _latest_result.update({
                 "latest_version": None,
                 "has_update": False,
@@ -94,28 +151,6 @@ async def check_latest_version() -> dict:
             return _latest_result.copy()
 
         resp.raise_for_status()
-        data = resp.json()
-
-        latest = data.get("tag_name", "")
-        html_url = data.get("html_url", "")
-        notes = data.get("body", "")
-
-        has_update = _compare_versions(latest, VERSION) > 0
-
-        _latest_result.update({
-            "current_version": VERSION,
-            "latest_version": latest,
-            "has_update": has_update,
-            "release_url": html_url or f"https://github.com/{GITHUB_REPO}/releases",
-            "release_notes": notes if has_update else None,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "error": None,
-        })
-
-        if has_update:
-            logger.info(f"版本检查：发现新版本 {latest}（当前 {VERSION}）")
-        else:
-            logger.info(f"版本检查：当前已是最新版本 {VERSION}")
 
     except Exception as e:
         _latest_result.update({
