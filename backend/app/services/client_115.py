@@ -34,6 +34,12 @@ _DOWNLOAD_URL_CACHE: dict[str, dict] = {}
 _DOWNLOAD_URL_TTL = 600  # 10 分钟
 _cache_lock = threading.Lock()
 
+# 并发合并表: pickcode -> {"event": threading.Event, "url": str | None}
+# 同一 pickcode 的并发播放请求只向 115 请求一次（参考 LitePan 的 Coalesce 机制），
+# 其余线程等待第一个线程的结果，避免多设备同时播放同一文件时重复请求 115。
+_inflight_download: dict[str, dict] = {}
+_inflight_lock = threading.Lock()
+
 # 115 限流重试次数
 _MAX_RETRIES = 3
 
@@ -433,7 +439,7 @@ class Client115Service:
 
     @classmethod
     def get_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
-        """获取 115 文件下载链接，带 TTL 缓存
+        """获取 115 文件下载链接，带 TTL 缓存 + 并发合并（Coalesce）
         context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
         if not pickcode:
@@ -443,6 +449,44 @@ class Client115Service:
             cached = _DOWNLOAD_URL_CACHE.get(pickcode)
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
                 return cached["url"]
+        # 并发合并：同一 pickcode 已有一个线程在请求，则等待其结果（参考 LitePan Coalesce）
+        with _inflight_lock:
+            inflight = _inflight_download.get(pickcode)
+            if inflight:
+                event = inflight["event"]
+            else:
+                event = threading.Event()
+                _inflight_download[pickcode] = {"event": event, "url": None}
+                inflight = None
+        if inflight is not None:
+            # 已有线程在请求，等待完成
+            event.wait(timeout=15)
+            with _cache_lock:
+                cached = _DOWNLOAD_URL_CACHE.get(pickcode)
+                if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
+                    return cached["url"]
+            # 等待超时或失败：降级为自行请求（不做合并）
+            inflight = None
+        try:
+            url = cls._fetch_download_url(cookies, pickcode, account_id, context)
+            with _inflight_lock:
+                entry = _inflight_download.get(pickcode)
+                if entry:
+                    entry["event"].set()  # 唤醒等待线程，使其立即从缓存读取结果
+                    _inflight_download.pop(pickcode, None)
+            return url
+        except Exception as e:
+            with _inflight_lock:
+                entry = _inflight_download.get(pickcode)
+                if entry:
+                    entry["event"].set()  # 失败也要唤醒，让等待线程降级自行请求
+                    _inflight_download.pop(pickcode, None)
+            logger.warning(f"[115] get_download_url 失败 pickcode={pickcode}: {e}")
+            return None
+
+    @classmethod
+    def _fetch_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
+        """实际请求 115 获取直链（被 get_download_url 调用，含缓存写入）"""
         # 实时获取（指定 user_agent，下载时必须用同一个）
         _apply_rate_limit("download_url", context)
         try:
