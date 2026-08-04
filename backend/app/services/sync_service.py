@@ -130,11 +130,16 @@ class SyncService:
             cls._safe_schedule(loop, progress_manager.update_progress(idx, f["name"]))
             _cur_no = idx + 1
             _cur_name = f.get("name", "")
+            _cur_dir = f.get("parent_path", "")
 
-            # 处理文件前输出当前进度（间隔 >= 1s 时，让用户知道正在同步哪个文件）
+            # 处理文件前输出当前进度。全量同步始终打印，展示正在同步的目录/文件，
+            # 让用户能看到具体影视名称（如 A-爱你 (2025)/S01E01.xxx.mkv）。
+            # 参考 Alist 同步工具：每个文件一条日志，含相对目录。
             _interval = get_api_intervals().get("sync_file_interval", 0.3)
             if _interval >= 1.0:
-                logger.info(f"[sync] 正在处理第 {_cur_no}/{len(filtered)} 个文件: {_cur_name}")
+                logger.info(f"[sync] 正在处理第 {_cur_no}/{len(filtered)} 个文件: {_cur_dir}/{_cur_name}")
+            else:
+                logger.info(f"[sync] ({_cur_no}/{len(filtered)}) {_cur_dir}/{_cur_name}")
 
             synced, entry = cls._sync_single_file(
                 cookies, f, local_root, video_exts, image_exts, data_exts,
