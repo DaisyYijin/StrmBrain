@@ -238,7 +238,11 @@ async def proxy_origin(request: Request):
         body = await request.body()
 
     headers = _strip_hop_headers(dict(request.headers))
-    # 需要保持 api_key 相关的 query 或 header
+    # 不让上游返回压缩内容：httpx 会解压响应但保留 content-encoding 头，
+    # 转发给浏览器会导致 ERR_CONTENT_DECODING_FAILED。移除 Accept-Encoding
+    # 让上游返回明文，彻底避免压缩/解压不一致。
+    headers.pop("accept-encoding", None)
+    headers.pop("Accept-Encoding", None)
 
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -250,6 +254,9 @@ async def proxy_origin(request: Request):
                 follow_redirects=False,
             )
         resp_headers = _strip_hop_headers(dict(resp.headers))
+        # httpx 已自动解压响应体，content-encoding 头不再有效，必须移除
+        resp_headers.pop("content-encoding", None)
+        resp_headers.pop("Content-Encoding", None)
         # 302/307 重定向响应原样返回（保留 Location）
         if resp.status_code in (301, 302, 303, 307, 308):
             return Response(
@@ -540,6 +547,9 @@ async def proxy_to_main_app(request: Request):
 
     headers = _strip_hop_headers(dict(request.headers))
     headers.pop("Content-Length", None)
+    # 同 proxy_origin：移除 Accept-Encoding，避免 httpx 解压与头不一致
+    headers.pop("accept-encoding", None)
+    headers.pop("Accept-Encoding", None)
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=10, pool=5)) as client:
@@ -552,6 +562,9 @@ async def proxy_to_main_app(request: Request):
             )
         # 302 重定向响应原样返回（保留 Location 指向 115 直链）
         resp_headers = _strip_hop_headers(dict(resp.headers))
+        # httpx 已解压，移除无效的 content-encoding 头
+        resp_headers.pop("content-encoding", None)
+        resp_headers.pop("Content-Encoding", None)
         if resp.status_code in (301, 302, 303, 307, 308):
             return Response(
                 content=resp.content,
