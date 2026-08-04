@@ -438,10 +438,9 @@ async def handle_stream(request: Request):
 async def proxy_websocket(websocket: WebSocket, path: str):
     """WebSocket 双向代理（Emby 客户端连接服务器必需）。
     客户端连反代 6086 时，把 WebSocket 升级请求转发到真实 Emby。
-    使用 websockets 库实现双向透传，避免客户端连不上。
+    使用 websockets 库实现双向透传，兼容文本与二进制帧。
     """
     import websockets
-    from urllib.parse import urlencode as _urlencode
     cfg = _get_config()
     emby_host = cfg.get("emby_host", "")
     if not emby_host:
@@ -460,15 +459,25 @@ async def proxy_websocket(websocket: WebSocket, path: str):
             async def client_to_upstream():
                 try:
                     while True:
-                        msg = await websocket.receive_text()
-                        await upstream_ws.send(msg)
+                        msg = await websocket.receive()
+                        msg_type = msg.get("type")
+                        if msg_type == "websocket.disconnect":
+                            break
+                        if msg_type == "websocket.receive":
+                            if "text" in msg and msg["text"] is not None:
+                                await upstream_ws.send(msg["text"])
+                            elif "bytes" in msg and msg["bytes"] is not None:
+                                await upstream_ws.send(msg["bytes"])
                 except (WebSocketDisconnect, Exception):
                     pass
             async def upstream_to_client():
                 try:
                     while True:
                         msg = await upstream_ws.recv()
-                        await websocket.send_text(msg)
+                        if isinstance(msg, str):
+                            await websocket.send_text(msg)
+                        elif isinstance(msg, bytes):
+                            await websocket.send_bytes(msg)
                 except (WebSocketDisconnect, Exception):
                     pass
             import asyncio as _asyncio
