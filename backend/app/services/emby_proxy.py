@@ -17,6 +17,7 @@ Emby 反代服务 — 参考 qmediasync emby302 方案
 """
 import re
 import threading
+import time as _time
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -154,6 +155,34 @@ def _is_self_strm_url(target: str) -> bool:
     由服务器端跟随跳转获取最终直链，避免客户端访问不到内部地址（如 172.17.0.1）。
     """
     return "/api/115/url/" in target
+
+
+# 播放日志去重：同一文件的播放请求在去重窗口内只记录一次。
+# 播放器（AfuseKt/Infuse 等）启动时会并发/连续发起多个 stream 请求
+# （预探测、分段拉取、seek），全部打印会刷屏。
+_play_log_cache: dict[str, float] = {}
+_play_log_lock = threading.Lock()
+_PLAY_LOG_DEDUP_SECONDS = 10.0  # 10 秒内相同播放请求只记录一次
+
+
+def _should_log_play(play_label: str) -> bool:
+    """判断是否应该记录该播放请求日志（去重）"""
+    with _play_log_lock:
+        now = _time.time()
+        last = _play_log_cache.get(play_label, 0)
+        return (now - last) >= _PLAY_LOG_DEDUP_SECONDS
+
+
+def _mark_play_logged(play_label: str) -> None:
+    """标记播放请求已记录"""
+    with _play_log_lock:
+        _play_log_cache[play_label] = _time.time()
+        # 清理过期条目，防止内存泄漏
+        if len(_play_log_cache) > 2000:
+            cutoff = _time.time() - _PLAY_LOG_DEDUP_SECONDS
+            expired = [k for k, v in _play_log_cache.items() if v < cutoff]
+            for k in expired:
+                _play_log_cache.pop(k, None)
 
 
 async def _follow_strm_url(target: str, client_ua: str = "") -> Optional[str]:
@@ -413,6 +442,12 @@ async def handle_stream(request: Request):
             client_ip = fwd.split(",")[0].strip()
     play_label = f"[proxy] 302 播放: {file_name} (客户端: {client}, IP: {client_ip or '未知'})"
 
+    # 日志去重：播放器启动时会对同一文件发起多个请求（预探测/分段拉取/seek），
+    # 短时间内相同文件只打印第一条日志，避免刷屏。
+    # 参考 emby2Alist：仅记录"首次"播放请求，后续请求静默处理。
+    if _should_log_play(play_label):
+        _mark_play_logged(play_label)
+
     # 判断是否为 STRM 文件。
     # 兼容两种情况：
     # 1) emby_path 以 .strm 结尾（常规 STRM 文件路径）
@@ -437,7 +472,8 @@ async def handle_stream(request: Request):
             if _is_self_strm_url(target):
                 final_url = await _follow_strm_url(target, ua)
                 if final_url:
-                    logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
+                    if _should_log_play(play_label):
+                        logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
                     response = RedirectResponse(url=final_url, status_code=302)
                     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
                     response.headers["Pragma"] = "no-cache"
@@ -448,7 +484,8 @@ async def handle_stream(request: Request):
                 logger.warning(f"[proxy] 服务器端跟随失败，回源: {play_label}")
                 return await proxy_origin(request)
             # 普通直链（如 115 CDN 等客户端可访问的地址）直接 307 跳转
-            logger.info(f"{play_label} -> {target[:120]}")
+            if _should_log_play(play_label):
+                logger.info(f"{play_label} -> {target[:120]}")
             response = RedirectResponse(url=target, status_code=307)
             # 禁止缓存，避免过期直链被缓存
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
