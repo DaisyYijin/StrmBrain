@@ -64,8 +64,8 @@ def _get_config() -> dict:
     data = read_setting("emby_proxy")
     emby_data = read_setting("emby")
     return {
-        # 从未保存过配置时默认启用（内置自带），用户主动关闭则尊重
-        "enabled": data.get("enabled", True),
+        # 反代为内置功能，始终启用（历史配置即使存了 false 也强制为 True）
+        "enabled": True,
         "port": int(data.get("port", 6086) or 6086),
         "emby_host": (emby_data.get("host", "") or "").rstrip("/"),
         "emby_api_key": (emby_data.get("api_key", "") or "").strip(),
@@ -473,16 +473,18 @@ def get_status() -> dict:
 
 
 def save_config(enabled: bool, port: int) -> dict:
-    """保存配置并应用（变更端口/启停时自动重启）"""
-    save_setting("emby_proxy", {"enabled": enabled, "port": int(port)})
+    """保存配置并应用（变更端口时自动重启）
+    反代为内置功能，始终启用（忽略传入的 enabled，强制 True）
+    """
+    save_setting("emby_proxy", {"enabled": True, "port": int(port)})
     # 应用配置：如果运行中则重启，否则按需启动
     with _proxy_state["lock"]:
         was_running = _proxy_state["running"]
         if was_running:
             _stop_proxy_locked()
-    if enabled and was_running:
+    if was_running:
         start_proxy()
-    elif enabled:
+    else:
         start_proxy()
     return get_status()
 

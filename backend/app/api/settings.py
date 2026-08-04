@@ -74,24 +74,21 @@ async def get_emby_proxy_settings():
 
 @router.post("/emby-proxy", response_model=ApiResponse)
 async def save_emby_proxy_settings(payload: EmbyProxySettings):
-    """保存 Emby 反代配置并应用（变更端口或启停时自动重启服务）"""
+    """保存 Emby 反代配置并应用（反代为内置功能，仅保存端口并重启服务）"""
     if payload.port < 1 or payload.port > 65535:
         return ApiResponse(code=400, message="端口范围无效（1-65535）")
     from app.services.emby_proxy import save_config
-    status = save_config(payload.enabled, payload.port)
+    status = save_config(True, payload.port)
     running = status.get("running", False)
-    if payload.enabled and not running:
+    if not running:
         return ApiResponse(code=500, message="反代服务启动失败，请检查 Emby 配置和日志")
-    return ApiResponse(message="已保存" if not payload.enabled else "反代服务已启动")
+    return ApiResponse(message="反代服务已重启")
 
 
 @router.post("/emby-proxy/restart", response_model=ApiResponse)
 async def restart_emby_proxy():
     """重启 Emby 反代服务"""
-    from app.services.emby_proxy import get_status, start_proxy, stop_proxy
-    status = get_status()
-    if not status.get("enabled"):
-        return ApiResponse(code=400, message="反代未启用，请先启用")
+    from app.services.emby_proxy import start_proxy, stop_proxy
     stop_proxy()
     status = start_proxy()
     if status.get("running"):

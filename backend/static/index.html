@@ -2868,37 +2868,27 @@
                                     <span class="status-dot" :class="{ 'status-dot-on': embyProxy.running, 'status-dot-off': !embyProxy.running }"></span>
                                     <span style="font-size:13px;">
                                         <template v-if="embyProxy.running">运行中（端口 {{ embyProxy.current_port }}）</template>
-                                        <template v-else-if="embyProxy.enabled && !embyProxy.emby_configured">已启用但 Emby 未配置完整</template>
-                                        <template v-else-if="embyProxy.enabled">未运行</template>
-                                        <template v-else>已停用</template>
+                                        <template v-else-if="!embyProxy.emby_configured">未运行（请先在「连接 Emby」中配置完整）</template>
+                                        <template v-else>未运行</template>
                                     </span>
                                     <button class="btn btn-default btn-small" @click="restartEmbyProxy" v-if="embyProxy.running" style="margin-left:auto;">重启</button>
                                 </div>
                             </div>
 
-                            <!-- 启用开关 -->
-                            <div class="form-group">
-                                <label>启用反代<span class="help-tip">?<span class="tip-text">开启后自动在独立端口启动 Emby 反代服务，Emby 客户端将播放请求发送到反代端口。</span></span></label>
-                                <div class="toggle-switch" @click="embyProxy.enabled = !embyProxy.enabled; saveEmbyProxy()">
-                                    <div class="toggle-slider" :class="{ 'toggle-right': embyProxy.enabled }"></div>
-                                    <div class="toggle-label" :class="{ 'toggle-active': !embyProxy.enabled }">关闭</div>
-                                    <div class="toggle-label" :class="{ 'toggle-active': embyProxy.enabled }">开启</div>
-                                </div>
-                            </div>
-
                             <!-- 端口 -->
                             <div class="form-group">
-                                <label>反代端口<span class="help-tip">?<span class="tip-text">Emby 客户端通过此端口访问反代服务。修改后自动重启反代。</span></span></label>
-                                <input type="number" v-model.number="embyProxy.port" min="1" max="65535" class="code" style="max-width:160px;">
+                                <label>反代端口<span class="help-tip">?<span class="tip-text">Emby 客户端通过此端口访问反代服务。修改后按回车或失焦自动保存并重启。</span></span></label>
+                                <input type="number" v-model.number="embyProxy.port" min="1" max="65535" class="code" style="max-width:160px;" @change="saveEmbyProxy">
                             </div>
 
                             <div class="info-box info-box--bordered" style="margin-top:12px;">
                                 <div style="font-size:12px; color:#909399; line-height:1.6;">
                                     <b style="color:#606266;">使用方法：</b><br>
                                     1. 先在「连接 Emby」中配置 Emby 地址和 API Key（反代依赖此配置）<br>
-                                    2. 开启反代后，将 Emby 客户端（或 Emby 设置中的服务器地址）改为<br>
+                                    2. 反代为内置功能，配置 Emby 后自动运行，无需额外开启<br>
+                                    3. 将 Emby 客户端（或 Emby 设置中的服务器地址）改为<br>
                                     <code style="word-break:break-all;">http://{{ windowHost }}:{{ embyProxy.port }}</code><br>
-                                    3. 反代会拦截播放请求：STRM 文件 → 读取内容 307 跳转 115 直链；本地视频 → 回源 Emby 处理
+                                    4. 反代会拦截播放请求：STRM 文件 → 读取内容 307 跳转 115 直链；本地视频 → 回源 Emby 处理
                                 </div>
                             </div>
                         </div>
@@ -6975,10 +6965,11 @@ av:
 
                 const saveEmbyProxy = async () => {
                     try {
+                        // 反代为内置功能始终开启，这里只保存端口
                         const res = await api('/api/settings/emby-proxy', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ enabled: embyProxy.enabled, port: embyProxy.port || 6086 })
+                            body: JSON.stringify({ enabled: true, port: embyProxy.port || 6086 })
                         });
                         const data = await res.json();
                         if (data.code === 0) {
