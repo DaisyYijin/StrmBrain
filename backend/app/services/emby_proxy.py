@@ -378,6 +378,11 @@ async def proxy_catch_all(path: str, request: Request):
     if full_path in ("/", "/proxy/health"):
         return Response(content="STRMhub Emby Proxy OK", status_code=200)
 
+    # STRMhub 302 下载接口 → 转发到主应用（/api/115/url/...）
+    # 场景：STRM 内容指向反代端口时，客户端经反代访问 302 接口
+    if full_path.startswith("/api/115/url/"):
+        return await proxy_to_main_app(request)
+
     # PlaybackInfo → 改写
     if _REG_PLAYBACK_INFO.match(full_path):
         return await handle_playback_info(request)
@@ -395,6 +400,52 @@ async def proxy_catch_all(path: str, request: Request):
 
     # 其余请求回源 Emby
     return await proxy_origin(request)
+
+
+async def proxy_to_main_app(request: Request):
+    """
+    将请求转发到 STRMhub 主应用（同进程，127.0.0.1:主端口）。
+    用于处理 /api/115/url/ 302 下载接口：反代收到 STRM 内容指向自身的
+    URL 时，转发到主应用获取 115 直链。
+    """
+    from app.config import PORT as MAIN_PORT
+    target = f"http://127.0.0.1:{MAIN_PORT}{request.url.path}"
+    if request.url.query:
+        target += "?" + request.url.query
+
+    body = None
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        body = await request.body()
+
+    headers = _strip_hop_headers(dict(request.headers))
+    headers.pop("Content-Length", None)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=10, pool=5)) as client:
+            resp = await client.request(
+                request.method,
+                target,
+                headers=headers,
+                content=body,
+                follow_redirects=False,
+            )
+        # 302 重定向响应原样返回（保留 Location 指向 115 直链）
+        resp_headers = _strip_hop_headers(dict(resp.headers))
+        if resp.status_code in (301, 302, 303, 307, 308):
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=resp_headers,
+            )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=resp_headers,
+            media_type=resp.headers.get("content-type"),
+        )
+    except Exception as e:
+        logger.warning(f"[proxy] 转发主应用失败 {request.url.path}: {e}")
+        return JSONResponse(status_code=502, content={"detail": f"转发主应用失败: {e}"})
 
 
 # ===== 反代服务生命周期管理 =====

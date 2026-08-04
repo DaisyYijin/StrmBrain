@@ -28,9 +28,10 @@ def get_token() -> str:
     token = data.get("token", "")
     if token:
         return token
-    # 自动生成并保存
+    # 自动生成并保存（保留原有配置字段，不改变 enabled 状态）
     token = _generate_token()
-    save_setting("strm_security", {"token": token, "enabled": True})
+    data["token"] = token
+    save_setting("strm_security", data)
     logger.info("STRM 播放 Token 已自动生成")
     return token
 
@@ -46,9 +47,15 @@ def rotate_token() -> str:
 
 
 def is_enabled() -> bool:
-    """检查 Token 验证是否启用"""
+    """
+    检查 Token 验证是否启用。
+    配置项 strm_security 完全不存在时（首次升级到带 Token 的版本），
+    默认返回 False，保持旧 STRM 文件（无 token 参数）可正常播放的向后兼容。
+    一旦用户保存过配置，则按配置执行。
+    """
     data = read_setting("strm_security")
-    # 默认启用
+    if not data:
+        return False
     return data.get("enabled", True)
 
 
