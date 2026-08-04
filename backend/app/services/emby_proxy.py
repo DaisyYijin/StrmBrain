@@ -326,8 +326,24 @@ async def handle_stream(request: Request):
     emby_path = await _get_emby_path(cfg, item_id, media_source_id, api_key)
 
     if not emby_path:
-        logger.warning(f"[proxy] 未获取到媒体路径，回源: item={item_id}")
+        logger.warning(f"[proxy] 播放请求未获取到媒体路径，回源: item={item_id}")
         return await proxy_origin(request)
+
+    # 提取文件名（路径最后一段），用于日志展示
+    file_name = re.sub(r"[/\\]", "/", emby_path).rsplit("/", 1)[-1]
+    # 客户端信息（简化 UA 名称，便于日志辨认播放设备）
+    ua = request.headers.get("User-Agent", "") or ""
+    if "Infuse" in ua:
+        client = "Infuse"
+    elif "Jellyfin" in ua:
+        client = "Jellyfin"
+    elif "Emby" in ua or "EmbyWeb" in ua:
+        client = "Emby"
+    elif "Kodi" in ua:
+        client = "Kodi"
+    else:
+        client = ua[:20] or "未知客户端"
+    play_label = f"[proxy] 302 播放: {file_name} (客户端: {client})"
 
     # 判断是否为 STRM 文件
     if emby_path.lower().endswith(".strm"):
@@ -335,7 +351,7 @@ async def handle_stream(request: Request):
         if content:
             target = _resolve_strm_target(content)
             if target:
-                logger.info(f"[proxy] STRM 重定向: {emby_path} -> {target[:100]}")
+                logger.info(f"{play_label} -> {target[:120]}")
                 response = RedirectResponse(url=target, status_code=307)
                 # 禁止缓存，避免过期直链被缓存
                 response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -346,7 +362,7 @@ async def handle_stream(request: Request):
         else:
             logger.warning(f"[proxy] 读取 STRM 文件失败（回源处理）: {emby_path}")
     else:
-        logger.info(f"[proxy] 本地媒体回源: {emby_path}")
+        logger.info(f"[proxy] 本地媒体回源: {file_name}")
 
     return await proxy_origin(request)
 
