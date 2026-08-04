@@ -907,6 +907,12 @@ class OrganizeService:
 
         logger.info(f"[organize] 整理开始: source_cid={source_cid}, target_cid={target_cid}, existing_cid={existing_cid}, redundant_cid={redundant_cid}, unrecognized_cid={unrecognized_cid}")
 
+        # 检查 TMDB API Key 是否已配置（未配置时在实时日志显示警告，已配置则不显示）
+        from app.services.tmdb_service import TmdbService
+        tmdb_api_key = TmdbService._get_api_key()
+        if not tmdb_api_key:
+            logger.warning(f"[organize] TMDB API Key 未配置，所有影视将无法识别，将被移到识别不准的目录")
+
         # 初始化分类引擎
         try:
             category_helper = CategoryHelper(classify_config) if classify_config else CategoryHelper()
@@ -1188,8 +1194,8 @@ class OrganizeService:
             except Exception as e:
                 logger.warning(f"[organize] 扫描全量同步目录失败，跳过重复检测: {e}")
 
-        # 3b. 移动整理后的文件到「全量同步目录」下的二级分类子目录
-        #     如果文件在全量同步目录中已存在 → 移到「已存在影视的目录」
+        # 3b. 批量整理：先全部 ffprobe+重命名，再统一移动
+        #     避免逐个处理导致的中间状态混乱
         # 已跟随视频移动的媒体数据文件 ID（避免重复移动）
         moved_data_file_ids: set = set()
 
@@ -1199,10 +1205,13 @@ class OrganizeService:
             for item in to_organize:
                 category_groups[item["category"]].append(item)
 
+            # ===== 阶段 1：ffprobe 探测 + 洗版检查 + 重命名（不移动） =====
+            logger.info(f"[organize] 阶段 1/2：开始 ffprobe 探测和重命名（共 {len(to_organize)} 个文件）")
+            rename_results = []  # [{item, renamed_to, new_folder, season_folder, media_info, skip_move, final_target_cid}]
+
             for category, items in category_groups.items():
                 # category 是路径（如 "电影/动画电影"），拆分为多级目录
                 path_parts = category.split("/")
-                logger.info(f"[organize] 创建分类目录: {category} ({len(items)} 个文件)")
                 sub_cid = Client115Service.ensure_path(cookies, path_parts, target_cid)
                 if not sub_cid:
                     logger.warning(f"[organize] 创建分类目录失败: {category}")
@@ -1211,7 +1220,9 @@ class OrganizeService:
                             "name": item["file"]["name"],
                             "error": f"创建分类目录「{category}」失败",
                         })
+                        rename_results.append({"item": item, "skip_move": True})
                     continue
+
                 # 按分类目录缓存已有文件列表（含 sha1），避免洗版检查时重复 API 调用
                 wash_cached_files = None
                 if wash_config and wash_config.get("enabled"):
@@ -1223,38 +1234,25 @@ class OrganizeService:
                     except Exception as e:
                         logger.warning(f"[organize] 洗版缓存加载失败（目录「{category}」），将逐个查询: {e}")
                         wash_cached_files = None
+
                 for item in items:
                     file_info = item["file"]
                     tmdb_info = item.get("tmdb_info")
                     media_type = item.get("media_type", "movie")
                     orig_name = file_info["name"]
                     renamed_to = ""
-                    final_target_cid = sub_cid  # 视频最终移动到的目录 cid
 
                     # 重复检测：全量同步目录中已有相同 SHA1 的文件 → 移到「已存在影视的目录」
                     file_sha1 = file_info.get("sha1", "")
                     if file_sha1 and file_sha1 in existing_sha1s and existing_cid:
                         logger.info(f"[organize] 全量同步目录已存在相同SHA1文件: {orig_name}，移到已存在影视目录")
-                        ok_exist = Client115Service.move(
-                            cookies, [file_info["file_id"]], existing_cid
-                        )
-                        if ok_exist:
-                            result["organized"].append({
-                                "name": orig_name,
-                                "category": item["category"],
-                                "from": file_info.get("parent_path", ""),
-                                "to": f"已存在影视/{orig_name}",
-                                "renamed_to": "",
-                                "media_type": media_type,
-                            })
-                        else:
-                            result["errors"].append({
-                                "name": orig_name,
-                                "error": "移动到已存在影视目录失败",
-                            })
+                        rename_results.append({
+                            "item": item, "skip_move": True, "skip_reason": "existing",
+                            "renamed_to": "", "sub_cid": sub_cid,
+                        })
                         continue
 
-                    # ffprobe 探测媒体信息（始终探测，用于验证和纠正文件名中的错误标记）
+                    # ffprobe 探测媒体信息
                     media_info = None
                     if use_ffprobe and is_ffprobe_available() and (rename_rules or (wash_config and wash_config.get("enabled"))):
                         try:
@@ -1268,38 +1266,35 @@ class OrganizeService:
                             logger.warning(f"ffprobe 探测失败（跳过）: {orig_name} - {e}")
 
                     # 洗版检查
+                    skip_move = False
+                    skip_reason = ""
                     if wash_config and wash_config.get("enabled"):
                         should_move, wash_reason, old_files_to_replace = await cls._check_wash_replace(
                             cookies, sub_cid, file_info, tmdb_info, media_type, wash_config, media_info, category, prefer_filename,
                             cached_existing_files=wash_cached_files,
                         )
                         if not should_move:
-                            result["redundant"].append({
-                                "name": orig_name,
-                                "reason": f"洗版跳过: {wash_reason}",
-                            })
-                            continue
-                        # 移走被替换的旧文件到冗余目录
-                        if old_files_to_replace and redundant_cid:
+                            skip_move = True
+                            skip_reason = f"洗版跳过: {wash_reason}"
+                        elif old_files_to_replace and redundant_cid:
+                            # 移走被替换的旧文件到冗余目录（洗版替换需要立即执行）
                             for old_file in old_files_to_replace:
                                 old_name = old_file.get("name", "")
                                 logger.info(f"[organize] 洗版替换: 移走旧文件 '{old_name}' → 冗余目录")
-                                ok_old = Client115Service.move(
-                                    cookies, [old_file["file_id"]], redundant_cid
-                                )
+                                ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid)
                                 if ok_old:
-                                    result["redundant"].append({
-                                        "name": old_name,
-                                        "reason": f"洗版被替换: {wash_reason}",
-                                    })
+                                    result["redundant"].append({"name": old_name, "reason": f"洗版被替换: {wash_reason}"})
                                 else:
                                     logger.warning(f"[organize] 移走旧文件失败: {old_name}")
-                                    result["errors"].append({
-                                        "name": old_name,
-                                        "error": "洗版替换：移走旧文件失败",
-                                    })
+                                    result["errors"].append({"name": old_name, "error": "洗版替换：移走旧文件失败"})
 
-                    # 应用重命名规则
+                    if skip_move:
+                        result["redundant"].append({"name": orig_name, "reason": skip_reason})
+                        rename_results.append({"item": item, "skip_move": True, "skip_reason": "wash"})
+                        continue
+
+                    # 计算重命名
+                    new_name, new_folder, season_folder = "", "", ""
                     if rename_rules:
                         if not tmdb_info:
                             logger.warning(f"[organize] 跳过重命名（无 TMDB 信息）: {orig_name}")
@@ -1307,156 +1302,150 @@ class OrganizeService:
                             rename_rules, orig_name, tmdb_info, media_type, media_info, skip_no_info, prefer_filename
                         )
                         logger.info(f"[organize] 重命名计算: orig='{orig_name}', new_name='{new_name}', folder='{new_folder}', season='{season_folder}'")
-                        # 重命名文件
+                        # 执行重命名
                         if new_name and new_name != orig_name:
-                            ok_rename = Client115Service.rename(
-                                cookies, file_info["file_id"], new_name
-                            )
+                            ok_rename = Client115Service.rename(cookies, file_info["file_id"], new_name)
                             if ok_rename:
                                 renamed_to = new_name
                                 logger.info(f"[organize] 重命名: {orig_name} -> {new_name}")
                             else:
                                 logger.warning(f"[organize] 重命名失败: {orig_name}")
-                                result["errors"].append({
-                                    "name": orig_name,
-                                    "error": "重命名失败",
-                                })
+                                result["errors"].append({"name": orig_name, "error": "重命名失败"})
+                                rename_results.append({"item": item, "skip_move": True, "skip_reason": "rename_failed"})
                                 continue
                         elif new_name and new_name == orig_name:
                             logger.info(f"[organize] 文件名已是目标格式，无需重命名: {orig_name}")
                         else:
                             logger.warning(f"[organize] 无法计算新文件名（可能缺少 TMDB 信息或模板解析失败）: {orig_name}")
-                        # 剧集需要创建季文件夹
-                        if media_type == "tv" and season_folder:
-                            # 在分类目录下创建剧集文件夹和季文件夹
-                            tv_folder_name = new_folder or ""
-                            if tmdb_info:
-                                tv_folder_name = apply_rename_template(
-                                    rename_rules.get("tv_folder", "{first_letter}-{title} ({year})"),
-                                    tmdb_info, orig_name, None, None, None, None, media_info, prefer_filename
-                                ) or tv_folder_name
-                            if tv_folder_name:
-                                season_cid = Client115Service.ensure_path(
-                                    cookies, [tv_folder_name, season_folder], sub_cid
-                                )
-                                if season_cid:
-                                    final_target_cid = season_cid
-                                    ok = Client115Service.move(
-                                        cookies, [file_info["file_id"]], season_cid
-                                    )
-                                else:
-                                    result["errors"].append({
-                                        "name": orig_name,
-                                        "error": f"创建季目录「{tv_folder_name}/{season_folder}」失败",
-                                    })
-                                    continue
-                            else:
-                                ok = Client115Service.move(
-                                    cookies, [file_info["file_id"]], sub_cid
-                                )
-                        elif media_type == "av":
-                            # AV：创建以番号命名的文件夹
-                            av_folder_name = new_folder or ""
-                            if av_folder_name:
-                                av_cid = Client115Service.ensure_path(
-                                    cookies, [av_folder_name], sub_cid
-                                )
-                                if av_cid:
-                                    final_target_cid = av_cid
-                                    ok = Client115Service.move(
-                                        cookies, [file_info["file_id"]], av_cid
-                                    )
-                                else:
-                                    result["errors"].append({
-                                        "name": orig_name,
-                                        "error": f"创建 AV 目录「{av_folder_name}」失败",
-                                    })
-                                    continue
-                            else:
-                                ok = Client115Service.move(
-                                    cookies, [file_info["file_id"]], sub_cid
-                                )
+
+                    rename_results.append({
+                        "item": item, "skip_move": False,
+                        "renamed_to": renamed_to, "new_folder": new_folder,
+                        "season_folder": season_folder, "media_info": media_info,
+                        "sub_cid": sub_cid, "category": category,
+                    })
+
+            logger.info(f"[organize] 阶段 1/2 完成：重命名和 ffprobe 探测结束")
+
+            # ===== 阶段 2：统一移动所有文件 =====
+            logger.info(f"[organize] 阶段 2/2：开始统一移动文件")
+            for rr in rename_results:
+                if rr.get("skip_move"):
+                    # 处理已存在文件的移动
+                    if rr.get("skip_reason") == "existing":
+                        item = rr["item"]
+                        file_info = item["file"]
+                        orig_name = file_info["name"]
+                        ok_exist = Client115Service.move(cookies, [file_info["file_id"]], existing_cid)
+                        if ok_exist:
+                            result["organized"].append({
+                                "name": orig_name,
+                                "category": item["category"],
+                                "from": file_info.get("parent_path", ""),
+                                "to": f"已存在影视/{orig_name}",
+                                "renamed_to": "",
+                                "media_type": item.get("media_type", "movie"),
+                            })
                         else:
-                            # 电影：创建电影文件夹
-                            movie_folder_name = new_folder or ""
-                            if tmdb_info:
-                                movie_folder_name = apply_rename_template(
-                                    rename_rules.get("movie_folder", "{title} ({year})"),
-                                    tmdb_info, orig_name, None, None, None, None, media_info, prefer_filename
-                                ) or movie_folder_name
-                            if movie_folder_name:
-                                movie_cid = Client115Service.ensure_path(
-                                    cookies, [movie_folder_name], sub_cid
-                                )
-                                if movie_cid:
-                                    final_target_cid = movie_cid
-                                    ok = Client115Service.move(
-                                        cookies, [file_info["file_id"]], movie_cid
-                                    )
-                                else:
-                                    result["errors"].append({
-                                        "name": orig_name,
-                                        "error": f"创建电影目录「{movie_folder_name}」失败",
-                                    })
-                                    continue
+                            result["errors"].append({"name": orig_name, "error": "移动到已存在影视目录失败"})
+                    continue
+
+                item = rr["item"]
+                file_info = item["file"]
+                tmdb_info = item.get("tmdb_info")
+                media_type = item.get("media_type", "movie")
+                orig_name = file_info["name"]
+                renamed_to = rr.get("renamed_to", "")
+                new_folder = rr.get("new_folder", "")
+                season_folder = rr.get("season_folder", "")
+                media_info = rr.get("media_info")
+                sub_cid = rr.get("sub_cid", "")
+                category = rr.get("category", item["category"])
+
+                final_target_cid = sub_cid
+
+                # 根据类型创建子目录并移动
+                if rename_rules and tmdb_info:
+                    if media_type == "tv" and season_folder:
+                        tv_folder_name = new_folder or ""
+                        if tmdb_info:
+                            tv_folder_name = apply_rename_template(
+                                rename_rules.get("tv_folder", "{first_letter}-{title} ({year})"),
+                                tmdb_info, orig_name, None, None, None, None, media_info, rr.get("prefer_filename", prefer_filename)
+                            ) or tv_folder_name
+                        if tv_folder_name:
+                            season_cid = Client115Service.ensure_path(cookies, [tv_folder_name, season_folder], sub_cid)
+                            if season_cid:
+                                final_target_cid = season_cid
+                        else:
+                            final_target_cid = sub_cid
+                    elif media_type == "av":
+                        av_folder_name = new_folder or ""
+                        if av_folder_name:
+                            av_cid = Client115Service.ensure_path(cookies, [av_folder_name], sub_cid)
+                            if av_cid:
+                                final_target_cid = av_cid
+                    else:
+                        # 电影
+                        movie_folder_name = new_folder or ""
+                        if tmdb_info:
+                            movie_folder_name = apply_rename_template(
+                                rename_rules.get("movie_folder", "{title} ({year})"),
+                                tmdb_info, orig_name, None, None, None, None, media_info, rr.get("prefer_filename", prefer_filename)
+                            ) or movie_folder_name
+                        if movie_folder_name:
+                            movie_cid = Client115Service.ensure_path(cookies, [movie_folder_name], sub_cid)
+                            if movie_cid:
+                                final_target_cid = movie_cid
+
+                # 执行移动
+                ok = Client115Service.move(cookies, [file_info["file_id"]], final_target_cid)
+                if ok:
+                    logger.info(f"[organize] 移动成功: {orig_name} -> {category}/{renamed_to or orig_name}")
+                    season_num, episode_num = extract_season_episode(orig_name)
+                    result["organized"].append({
+                        "name": orig_name,
+                        "category": category,
+                        "from": file_info.get("parent_path", ""),
+                        "to": f"{category}/",
+                        "renamed_to": renamed_to or "",
+                        "media_type": media_type,
+                        "season": season_num,
+                        "episode": episode_num,
+                    })
+
+                    # 移动关联的媒体数据文件（字幕等）到视频所在目录
+                    if data_files:
+                        video_base = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
+                        new_base = (renamed_to.rsplit(".", 1)[0] if renamed_to and "." in renamed_to
+                                    else (renamed_to or video_base))
+                        video_parent_id = file_info.get("parent_id", "")
+                        for df in data_files:
+                            if df["file_id"] in moved_data_file_ids:
+                                continue
+                            if df.get("parent_id", "") != video_parent_id:
+                                continue
+                            df_base = df["name"].rsplit(".", 1)[0] if "." in df["name"] else df["name"]
+                            if df_base != video_base:
+                                continue
+                            # 视频被重命名时，数据文件同步重命名
+                            if renamed_to and renamed_to != orig_name:
+                                df_ext = ("." + df["name"].rsplit(".", 1)[-1]) if "." in df["name"] else ""
+                                new_df_name = new_base + df_ext
+                                if new_df_name != df["name"]:
+                                    Client115Service.rename(cookies, df["file_id"], new_df_name)
+                                    logger.info(f"[organize] 关联数据文件重命名: {df['name']} -> {new_df_name}")
+                            ok_df = Client115Service.move(cookies, [df["file_id"]], final_target_cid)
+                            if ok_df:
+                                moved_data_file_ids.add(df["file_id"])
+                                logger.info(f"[organize] 关联数据文件已移动: {df['name']} -> {category}/")
                             else:
-                                ok = Client115Service.move(
-                                    cookies, [file_info["file_id"]], sub_cid
-                                )
-                    else:
-                        ok = Client115Service.move(
-                            cookies, [file_info["file_id"]], sub_cid
-                        )
+                                logger.warning(f"[organize] 关联数据文件移动失败: {df['name']}")
+                else:
+                    logger.warning(f"[organize] 移动失败: {orig_name}")
+                    result["errors"].append({"name": orig_name, "error": "移动失败"})
 
-                    if ok:
-                        logger.info(f"[organize] 移动成功: {orig_name} -> {category}/{renamed_to or orig_name}")
-                        # 提取季集信息用于汇总
-                        season_num, episode_num = extract_season_episode(orig_name)
-                        result["organized"].append({
-                            "name": orig_name,
-                            "category": category,
-                            "from": file_info.get("parent_path", ""),
-                            "to": f"{category}/",
-                            "renamed_to": renamed_to or "",
-                            "media_type": media_type,
-                            "season": season_num,
-                            "episode": episode_num,
-                        })
-
-                        # 移动关联的媒体数据文件（字幕等）到视频所在目录
-                        if data_files:
-                            video_base = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
-                            new_base = (renamed_to.rsplit(".", 1)[0] if renamed_to and "." in renamed_to
-                                        else (renamed_to or video_base))
-                            video_parent_id = file_info.get("parent_id", "")
-                            for df in data_files:
-                                if df["file_id"] in moved_data_file_ids:
-                                    continue
-                                if df.get("parent_id", "") != video_parent_id:
-                                    continue
-                                df_base = df["name"].rsplit(".", 1)[0] if "." in df["name"] else df["name"]
-                                if df_base != video_base:
-                                    continue
-                                # 视频被重命名时，数据文件同步重命名（保持同名的 basename）
-                                if renamed_to and renamed_to != orig_name:
-                                    df_ext = ("." + df["name"].rsplit(".", 1)[-1]) if "." in df["name"] else ""
-                                    new_df_name = new_base + df_ext
-                                    if new_df_name != df["name"]:
-                                        Client115Service.rename(cookies, df["file_id"], new_df_name)
-                                        logger.info(f"[organize] 关联数据文件重命名: {df['name']} -> {new_df_name}")
-                                # 移动到视频所在目录
-                                ok_df = Client115Service.move(cookies, [df["file_id"]], final_target_cid)
-                                if ok_df:
-                                    moved_data_file_ids.add(df["file_id"])
-                                    logger.info(f"[organize] 关联数据文件已移动: {df['name']} -> {category}/")
-                                else:
-                                    logger.warning(f"[organize] 关联数据文件移动失败: {df['name']}")
-                    else:
-                        logger.warning(f"[organize] 移动失败: {orig_name}")
-                        result["errors"].append({
-                            "name": orig_name,
-                            "error": "移动失败",
-                        })
+            logger.info(f"[organize] 阶段 2/2 完成：文件移动结束")
         else:
             # 没有全量同步目录，只记录不移动
             logger.warning(f"[organize] 未配置全量同步目录（target_cid 为空），文件不会被移动")
@@ -2021,12 +2010,8 @@ class OrganizeService:
                     elif "first_air_date" in tmdb_info and tmdb_info.get("first_air_date"):
                         sub_category = category_helper.get_tv_category(tmdb_info)
                         return (f"{tv_root}/{sub_category}" if sub_category else tv_root, tmdb_info, "tv")
-            # 回退到内置分类
-            logger.warning(f"[organize] 强制AI模式识别失败: '{name}'，回退到简单分类")
-            if builtin == "movie":
-                return (movie_root, None, "movie")
-            elif builtin == "tvshow":
-                return (tv_root, None, "tv")
+            # TMDB 未找到 → 移到识别不准的目录
+            logger.warning(f"[organize] 强制AI模式识别失败: '{name}'，移到识别不准的目录")
             return (None, None, None)
 
         # ===== 正常模式 / 辅助 AI 模式 =====
@@ -2061,12 +2046,8 @@ class OrganizeService:
                     logger.info(f"[organize] AI 辅助识别成功: '{name}' -> {tmdb_info.get('title') or tmdb_info.get('name', '')}")
 
             if not tmdb_info:
-                # 回退到简单分类
-                logger.warning(f"[organize] TMDB 未找到 '{name}'，回退到简单分类")
-                if builtin == "movie":
-                    return (movie_root, None, "movie")
-                elif builtin == "tvshow":
-                    return (tv_root, None, "tv")
+                # TMDB 未找到 → 移到识别不准的目录
+                logger.warning(f"[organize] TMDB 未找到 '{name}'，移到识别不准的目录")
                 return (None, None, None)
 
         # 判断是电影还是电视剧
