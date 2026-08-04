@@ -121,7 +121,8 @@ ring_handler = RingBufferHandler(capacity=500)
 
 def setup_logging():
     """配置日志，将 uvicorn 和应用日志写入环形缓冲"""
-    ring_handler.setFormatter(logging.Formatter("%(name)s - %(message)s"))
+    # 消息本身已带业务前缀（如 [sync]、[115]），formatter 不再拼模块全名，减少冗余
+    ring_handler.setFormatter(logging.Formatter("%(message)s"))
     ring_handler.setLevel(logging.INFO)
 
     root = logging.getLogger()

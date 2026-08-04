@@ -86,6 +86,7 @@ class SyncService:
 
         logger.info(f"[sync] 全量同步开始: source_cid={source_cid}, local_dir={local_media_dir}, video_exts={video_exts}, image_exts={image_exts}, data_exts={data_exts}, min_size={min_size_bytes}")
         cls._log_rate_config()
+        _start_ts = time.time()
 
         result = {
             "total": 0,
@@ -145,13 +146,16 @@ class SyncService:
             # 文件间等待
             _interval = get_api_intervals().get("sync_file_interval", 0.3)
             if _interval > 0:
+                # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
+                if _interval >= 1.0:
+                    logger.info(f"[sync] 文件间等待 {_interval}s...")
                 time.sleep(_interval)
 
         # 保存清单
         cls._save_manifest(local_root, manifest)
 
         summary = f"共 {result['total']} 个文件，成功 {len(result['synced'])}，跳过 {result['skipped']}，失败 {len(result['errors'])}"
-        logger.info(f"[sync] 全量同步完成: {summary}")
+        logger.info(f"[sync] 全量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
         return result
@@ -188,6 +192,7 @@ class SyncService:
 
         logger.info(f"[sync] 增量同步开始: source_cid={source_cid}, local_dir={local_media_dir}")
         cls._log_rate_config()
+        _start_ts = time.time()
 
         result = {
             "total": 0,
@@ -325,6 +330,9 @@ class SyncService:
             # 文件间等待
             _interval = get_api_intervals().get("sync_file_interval", 0.3)
             if _interval > 0:
+                # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
+                if _interval >= 1.0:
+                    logger.info(f"[sync] 文件间等待 {_interval}s...")
                 time.sleep(_interval)
 
         # 检测已删除的文件
@@ -334,7 +342,7 @@ class SyncService:
         cls._save_manifest(local_root, new_manifest)
 
         summary = f"共 {result['total']} 个文件，新增同步 {len(result['synced'])}，跳过 {result['skipped']}，失败 {len(result['errors'])}"
-        logger.info(f"[sync] 增量同步完成: {summary}")
+        logger.info(f"[sync] 增量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
         return result

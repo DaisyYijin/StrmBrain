@@ -343,7 +343,15 @@ async def handle_stream(request: Request):
         client = "Kodi"
     else:
         client = ua[:20] or "未知客户端"
-    play_label = f"[proxy] 302 播放: {file_name} (客户端: {client})"
+    # 客户端 IP（直接连接反代时取 socket 地址；经主应用转发时取 X-Forwarded-For 首个地址）
+    client_ip = ""
+    if request.client:
+        client_ip = request.client.host or ""
+    if not client_ip:
+        fwd = request.headers.get("X-Forwarded-For", "")
+        if fwd:
+            client_ip = fwd.split(",")[0].strip()
+    play_label = f"[proxy] 302 播放: {file_name} (客户端: {client}, IP: {client_ip or '未知'})"
 
     # 判断是否为 STRM 文件
     if emby_path.lower().endswith(".strm"):

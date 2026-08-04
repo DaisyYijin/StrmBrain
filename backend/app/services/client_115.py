@@ -49,6 +49,10 @@ def _apply_rate_limit(operation: str = ""):
         with _rate_limit_stats_lock:
             _rate_limit_stats["count"] += 1
             _rate_limit_stats["total_wait"] += _interval
+        # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
+        if _interval >= 1.0:
+            op = f" ({operation})" if operation else ""
+            logger.info(f"[115] API 请求间隔等待 {_interval}s{op}...")
         _time.sleep(_interval)
 
 
@@ -61,6 +65,9 @@ def _apply_file_list_interval():
     """文件列表分页间隔（跟随用户配置，默认 0.3s）"""
     _interval = get_api_intervals().get("file_list_interval", 0.3)
     if _interval > 0:
+        # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
+        if _interval >= 1.0:
+            logger.info(f"[115] 文件列表分页等待 {_interval}s...")
         _time.sleep(_interval)
 
 

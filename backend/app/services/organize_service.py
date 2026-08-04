@@ -917,6 +917,7 @@ class OrganizeService:
         }
 
         logger.info(f"[organize] 整理开始: source_cid={source_cid}, target_cid={target_cid}, existing_cid={existing_cid}, redundant_cid={redundant_cid}, unrecognized_cid={unrecognized_cid}")
+        _organize_start_ts = _time.time()
 
         # 检查 API 速率限制配置并在实时日志显示
         from app.core.db_helper import get_api_intervals
@@ -1086,6 +1087,7 @@ class OrganizeService:
                         logger.info(f"[organize] 源目录已清空")
                 except Exception as e:
                     logger.warning(f"[organize] 清理源目录失败: {e}")
+            logger.info(f"[organize] 整理完成: 无视频文件, 耗时 {_time.time() - _organize_start_ts:.1f}s")
             return result
 
         # 2. 分类：冗余文件 / 可识别 / 不可识别
@@ -1179,7 +1181,8 @@ class OrganizeService:
             logger.info(
                 f"[organize] 预览完成: 共 {result['total']} 个文件，"
                 f"可整理 {len(result['organized'])}，冗余 {len(result['redundant'])}，"
-                f"无法识别 {len(result['unrecognized'])}"
+                f"无法识别 {len(result['unrecognized'])}，"
+                f"耗时 {_time.time() - _organize_start_ts:.1f}s"
             )
             return result
 
@@ -1694,6 +1697,16 @@ class OrganizeService:
             except Exception as e:
                 logger.warning(f"[organize] 清理源目录失败: {e}")
 
+        # 完成日志（含总耗时）
+        organized = len(result.get("organized", []))
+        redundant = len(result.get("redundant", []))
+        unrecognized = len(result.get("unrecognized", []))
+        errors = len(result.get("errors", []))
+        logger.info(
+            f"[organize] 整理完成: 成功 {organized}, 冗余 {redundant}, "
+            f"无法识别 {unrecognized}, 失败 {errors}, "
+            f"耗时 {_time.time() - _organize_start_ts:.1f}s"
+        )
         return result
 
     @classmethod
