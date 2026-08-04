@@ -525,10 +525,11 @@ class SyncService:
         if not server_url:
             return ""
         base = f"{server_url}:{server_port}" if server_port else server_url
-        from urllib.parse import quote
         # URL 中只放文件名（含扩展名），供 Emby 识别视频类型。
         # 文件实际标识是 pickcode，完整目录路径不需要出现在 URL 中。
-        encoded_path = quote(file_name, safe="/")
+        # 保留中文明文（只编码会破坏 URL 解析的特殊字符），让用户能直接辨认影视名。
+        # 参考 Alist 等工具的做法：URL 路径中中文不编码，播放器和 HTTP 服务器都能正确处理。
+        encoded_path = file_name.replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("=", "%3D")
 
         # 获取 STRM 播放 Token（自动生成，写入 URL 供播放时验证）
         from app.services.strm_token import get_token, is_enabled
