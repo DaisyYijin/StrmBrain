@@ -20,6 +20,7 @@ class TmdbSettings(BaseModel):
     api_key: str = ""
     api_domain: str = ""
     image_domain: str = ""
+    language: str = "both"  # both=中文+英文, zh=仅中文, en=仅英文
 
 
 @router.get("/emby", response_model=ApiResponse)
@@ -58,6 +59,7 @@ async def get_tmdb_settings():
         "api_key": data.get("api_key", ""),
         "api_domain": data.get("api_domain", "") or DEFAULT_API_DOMAIN,
         "image_domain": data.get("image_domain", "") or DEFAULT_IMAGE_DOMAIN,
+        "language": data.get("language", "both"),
     })
 
 

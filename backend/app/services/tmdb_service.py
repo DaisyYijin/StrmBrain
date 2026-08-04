@@ -173,6 +173,23 @@ class TmdbService:
         return domain
 
     @classmethod
+    def _get_language(cls) -> str:
+        """获取 TMDB 搜索语言: both=中文+英文, zh=仅中文, en=仅英文"""
+        lang = cls._get_settings().get("language", "both")
+        if lang not in ("both", "zh", "en"):
+            lang = "both"
+        return lang
+
+    @classmethod
+    def _get_tmdb_language_param(cls) -> str:
+        """获取 TMDB API 的 language 参数值"""
+        lang = cls._get_language()
+        if lang == "en":
+            return "en-US"
+        # both 和 zh 都使用 zh-CN（both 模式下 TMDB 自然回退到英文）
+        return "zh-CN"
+
+    @classmethod
     async def search_media(
         cls,
         name: str,
@@ -211,7 +228,7 @@ class TmdbService:
             logger.warning(f"TMDB 搜索: 无法从文件名提取标题: {name}")
             return None
 
-        logger.info(f"TMDB 搜索: title='{title}', year={year}, media_type={media_type}, api_key={api_key[:8]}***")
+        logger.info(f"TMDB 搜索: title='{title}', year={year}, media_type={media_type}, language={cls._get_language()}, api_key={api_key[:8]}***")
 
         # 自动判断类型
         if not media_type:
@@ -289,7 +306,7 @@ class TmdbService:
             params_with_year = {
                 "api_key": cls._get_api_key(),
                 "query": title,
-                "language": "zh-CN",
+                "language": cls._get_tmdb_language_param(),
                 "page": 1,
                 "year": year,
             }
@@ -302,7 +319,7 @@ class TmdbService:
         params = {
             "api_key": cls._get_api_key(),
             "query": title,
-            "language": "zh-CN",
+            "language": cls._get_tmdb_language_param(),
             "page": 1,
         }
         logger.info(f"TMDB 搜索电影 (不带年份): query='{title}'")
@@ -337,7 +354,7 @@ class TmdbService:
             params_with_year = {
                 "api_key": cls._get_api_key(),
                 "query": title,
-                "language": "zh-CN",
+                "language": cls._get_tmdb_language_param(),
                 "page": 1,
                 "first_air_date_year": year,
             }
@@ -350,7 +367,7 @@ class TmdbService:
         params = {
             "api_key": cls._get_api_key(),
             "query": title,
-            "language": "zh-CN",
+            "language": cls._get_tmdb_language_param(),
             "page": 1,
         }
         logger.info(f"TMDB 搜索电视剧 (不带年份): query='{title}'")
@@ -407,7 +424,7 @@ class TmdbService:
         base_url = cls._get_api_domain()
         params = {
             "api_key": cls._get_api_key(),
-            "language": "zh-CN",
+            "language": cls._get_tmdb_language_param(),
             "append_to_response": "alternative_titles,translations",
         }
         data = await cls._http_get(f"{base_url}/movie/{tmdb_id}", params)
@@ -430,7 +447,7 @@ class TmdbService:
         base_url = cls._get_api_domain()
         params = {
             "api_key": cls._get_api_key(),
-            "language": "zh-CN",
+            "language": cls._get_tmdb_language_param(),
             "append_to_response": "alternative_titles,translations",
         }
         data = await cls._http_get(f"{base_url}/tv/{tmdb_id}", params)
@@ -447,15 +464,19 @@ class TmdbService:
 
         return data
 
-    @staticmethod
-    def _ensure_chinese_title(data: dict, title_key: str, original_key: str):
+    @classmethod
+    def _ensure_chinese_title(cls, data: dict, title_key: str, original_key: str):
         """
         确保数据中使用中文标题。
         如果 title/name 与 original_title/original_name 相同，且标题不包含中文字符，
         说明 TMDB 没有返回中文翻译，此时从 translations 列表中查找中文标题并替换。
         优先简体中文(zh-CN)，其次繁体中文(zh-TW)。
         注意：如果标题已经包含中文字符（如国产剧原名就是中文），则不需要替换。
+        语言设置为「仅英文」时不执行中文标题替换。
         """
+        # 仅英文模式：不需要强制中文标题
+        if cls._get_language() == "en":
+            return
         title = data.get(title_key, "") or ""
         original = data.get(original_key, "") or ""
         # 标题已包含中文字符 → 已经是中文标题，无需从 translations 替换
@@ -493,7 +514,7 @@ class TmdbService:
     async def get_season_detail(cls, tmdb_id: int, season_num: int) -> Optional[dict]:
         """获取电视剧某一季的详情（含季名、播出日期等）"""
         base_url = cls._get_api_domain()
-        params = {"api_key": cls._get_api_key(), "language": "zh-CN"}
+        params = {"api_key": cls._get_api_key(), "language": cls._get_tmdb_language_param()}
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(

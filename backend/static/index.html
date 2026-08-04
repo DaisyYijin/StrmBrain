@@ -2744,6 +2744,14 @@
                                 <label>TMDB 图片域名<span class="help-tip">?<span class="tip-text">用于拼接影视海报等图片 URL，可填写自建反代或镜像地址。</span></span></label>
                                 <input type="text" class="code" v-model="tmdb.image_domain" placeholder="https://image.tmdb.org">
                             </div>
+                            <div class="form-group">
+                                <label>识别语言<span class="help-tip">?<span class="tip-text">控制 TMDB 搜索时使用的语言。中文+英文：优先返回中文标题，无中文时回退英文。仅中文：只返回中文标题。仅英文：只返回英文标题。</span></span></label>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="ai-mode-btn" :class="{ 'ai-mode-active': tmdb.language === 'both' }" @click="tmdb.language = 'both'">中文+英文</button>
+                                    <button class="ai-mode-btn" :class="{ 'ai-mode-active': tmdb.language === 'zh' }" @click="tmdb.language = 'zh'">仅中文</button>
+                                    <button class="ai-mode-btn" :class="{ 'ai-mode-active': tmdb.language === 'en' }" @click="tmdb.language = 'en'">仅英文</button>
+                                </div>
+                            </div>
                             <div style="display:flex; gap:8px;">
                                 <button class="btn btn-primary btn-action" @click="saveTmdbSettings">保存</button>
                                 <button class="btn btn-default btn-action" @click="testTmdbSettings">测试连接</button>
@@ -4645,6 +4653,7 @@
                     api_key: '',
                     api_domain: '',
                     image_domain: '',
+                    language: 'both',
                     testing: false,
                     testResult: '',
                     testOk: false,
@@ -6674,6 +6683,7 @@ av:
                             tmdb.api_key = data.data.api_key || '';
                             tmdb.api_domain = data.data.api_domain || '';
                             tmdb.image_domain = data.data.image_domain || '';
+                            tmdb.language = data.data.language || 'both';
                         }
                     } catch (e) { console.warn('[app] 操作失败:', e); }
                 };
@@ -6686,6 +6696,7 @@ av:
                                 api_key: tmdb.api_key,
                                 api_domain: tmdb.api_domain,
                                 image_domain: tmdb.image_domain,
+                                language: tmdb.language,
                             })
                         });
                         const data = await res.json();
