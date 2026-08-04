@@ -40,22 +40,22 @@ RUN mkdir -p /app/data /app/config /app/log /media
 
 # 环境变量默认值
 ENV HOST=0.0.0.0 \
-    PORT=1024 \
+    PORT=6060 \
     AUTH_ENABLED=true \
     ADMIN_USERNAME=admin \
     ADMIN_PASSWORD=admin123 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# 暴露端口（1024 主服务，6086 Emby 反代 302 播放）
-EXPOSE 1024 6086
+# 暴露端口（6060 主服务，6086 Emby 反代 302 播放）
+EXPOSE 6060 6086
 
 # 数据持久化（运行数据、配置、日志、STRM 媒体输出）
 VOLUME ["/app/data", "/app/config", "/app/log", "/media"]
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:1024/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:6060/api/health')" || exit 1
 
 # 启动命令
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "1024"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "6060"]

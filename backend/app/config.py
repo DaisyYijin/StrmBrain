@@ -29,7 +29,7 @@ GITHUB_REPO = "DaisyYijin/STRMhub"
 
 # 服务器
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", 1024))
+PORT = int(os.getenv("PORT", 6060))
 
 # JWT 配置 — 优先使用环境变量，未设置时自动生成并持久化
 _SECRET_KEY_FILE = DATA_DIR / ".secret_key"

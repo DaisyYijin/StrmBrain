@@ -38,7 +38,7 @@ services:
     container_name: strmhub
     restart: unless-stopped
     ports:
-      - "1024:1024"
+      - "6060:6060"
     volumes:
       - strmhub_data:/app/data       # 账号、Cookie、同步清单、备份
       - strmhub_config:/app/config   # 设置、管理员账号、同步计划
@@ -58,7 +58,7 @@ volumes:
 docker compose up -d
 ```
 
-访问 `http://服务器IP:1024`，默认账号 `admin` / `admin123`。
+访问 `http://服务器IP:6060`，默认账号 `admin` / `admin123`。
 
 ### 使用流程
 
