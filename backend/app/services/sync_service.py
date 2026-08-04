@@ -526,8 +526,9 @@ class SyncService:
             return ""
         base = f"{server_url}:{server_port}" if server_port else server_url
         from urllib.parse import quote
-        full_path = f"{parent_path}/{file_name}" if parent_path else file_name
-        encoded_path = quote(full_path, safe="/")
+        # URL 中只放文件名（含扩展名），供 Emby 识别视频类型。
+        # 文件实际标识是 pickcode，完整目录路径不需要出现在 URL 中。
+        encoded_path = quote(file_name, safe="/")
 
         # 获取 STRM 播放 Token（自动生成，写入 URL 供播放时验证）
         from app.services.strm_token import get_token, is_enabled
