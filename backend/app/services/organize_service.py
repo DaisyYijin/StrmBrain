@@ -1403,6 +1403,14 @@ class OrganizeService:
                 if ok:
                     logger.info(f"[organize] 移动成功: {orig_name} -> {category}/{renamed_to or orig_name}")
                     season_num, episode_num = extract_season_episode(orig_name)
+                    # 提取剧名用于汇总显示
+                    tv_title = ""
+                    if media_type == "tv" and tmdb_info:
+                        tv_title = tmdb_info.get("name") or tmdb_info.get("title") or ""
+                        if not tv_title and new_folder:
+                            tv_title = new_folder
+                    elif media_type == "tv" and new_folder:
+                        tv_title = new_folder
                     result["organized"].append({
                         "name": orig_name,
                         "category": category,
@@ -1412,6 +1420,7 @@ class OrganizeService:
                         "media_type": media_type,
                         "season": season_num,
                         "episode": episode_num,
+                        "tv_title": tv_title,
                     })
 
                     # 移动关联的媒体数据文件（字幕等）到视频所在目录
@@ -1574,8 +1583,15 @@ class OrganizeService:
 
                     # 取第一个文件作为示例
                     sample = eps[0]
+                    # 提取剧名（取所有集中的第一个有 tv_title 的）
+                    tv_title = ""
+                    for e in eps:
+                        if e.get("tv_title"):
+                            tv_title = e["tv_title"]
+                            break
                     summary_item = {
                         "path": group_key,
+                        "tv_title": tv_title,
                         "season": season,
                         "episode_range": ep_range,
                         "episode_count": ep_count,
@@ -1585,9 +1601,10 @@ class OrganizeService:
                     }
                     tv_summary.append(summary_item)
 
+                    title_display = f"{tv_title} " if tv_title else ""
                     logger.info(
-                        f"[organize] 电视剧汇总: {group_key} {ep_range} "
-                        f"({ep_count}集, 重命名{renamed_count}个)"
+                        f"[organize] 电视剧汇总: {title_display}{ep_range} "
+                        f"({ep_count}集, 重命名{renamed_count}个) → {group_key}"
                     )
                     if sample.get("renamed_to"):
                         logger.info(f"  示例: {sample['name']} → {sample['renamed_to']}")
