@@ -35,10 +35,19 @@ async def get_emby_settings():
 
 @router.post("/emby", response_model=ApiResponse)
 async def save_emby_settings(payload: EmbySettings):
-    """保存 Emby 设置（同时清除仪表盘缓存）"""
+    """保存 Emby 设置（同时清除仪表盘缓存，并自动启动反代服务）"""
     save_setting("emby", payload.model_dump())
     from app.core.cache import invalidate
     invalidate()
+    # 配置 Emby 后自动启动反代（302 播放），无需手动开启
+    try:
+        from app.services.emby_proxy import start_proxy
+        status = start_proxy()
+        if status.get("running"):
+            return ApiResponse(message="已保存，反代服务已启动")
+    except Exception as e:
+        from app.core.logbuffer import get_logger
+        get_logger().warning(f"[settings] 保存 Emby 后启动反代失败: {e}")
     return ApiResponse(message="已保存")
 
 
