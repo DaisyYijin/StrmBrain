@@ -155,7 +155,7 @@ async def test_tmdb(payload: TmdbSettings):
 class StrmSettings(BaseModel):
     """STRM 直链配置"""
     server_url: str = ""
-    server_port: str = ""
+    server_port: str = "6060"
     overwrite_mode: str = "skip"
 
 
@@ -165,7 +165,7 @@ async def get_strm_settings():
     data = read_setting("strm")
     return ApiResponse(data={
         "server_url": data.get("server_url", ""),
-        "server_port": data.get("server_port", ""),
+        "server_port": data.get("server_port", "6060"),
         "overwrite_mode": data.get("overwrite_mode", "skip"),
     })
 

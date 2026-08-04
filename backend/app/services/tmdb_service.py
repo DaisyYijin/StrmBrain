@@ -15,7 +15,7 @@ from app.core.logbuffer import get_logger
 logger = get_logger()
 
 # 默认域名（国内可访问的镜像地址）
-DEFAULT_API_DOMAIN = "https://api.themoviedb.org"
+DEFAULT_API_DOMAIN = "https://api.tmdb.org"
 DEFAULT_IMAGE_DOMAIN = "https://image.tmdb.org"
 
 # 缓存 TMDB 搜索结果，避免重复请求（文件名 -> metadata）

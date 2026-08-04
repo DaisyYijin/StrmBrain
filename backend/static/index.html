@@ -2755,7 +2755,7 @@
                             </div>
                             <div class="form-group">
                                 <label>TMDB API 域名<span class="help-tip">?<span class="tip-text">TMDB API 的接口地址。默认为官方地址，国内访问困难时可填写反代或镜像地址（不含 /3 后缀）。</span></span></label>
-                                <input type="text" class="code" v-model="tmdb.api_domain" placeholder="https://api.themoviedb.org">
+                                <input type="text" class="code" v-model="tmdb.api_domain" placeholder="https://api.tmdb.org">
                             </div>
                             <div class="form-group">
                                 <label>TMDB 图片域名<span class="help-tip">?<span class="tip-text">用于拼接影视海报等图片 URL，可填写自建反代或镜像地址。</span></span></label>
@@ -2791,8 +2791,8 @@
 
                             <!-- 端口 -->
                             <div class="form-group">
-                                <label>端口<span class="help-tip">?<span class="tip-text">监听端口，如 8787。留空则不附加端口，适用于 HTTPS 反代场景。</span></span></label>
-                                <input type="text" v-model="strmConfig.server_port" placeholder="8787" class="code">
+                                <label>端口<span class="help-tip">?<span class="tip-text">STRM 文件内直链端口（主服务端口），默认 6060。留空则不附加端口，适用于 HTTPS 反代场景。</span></span></label>
+                                <input type="text" v-model="strmConfig.server_port" placeholder="6060" class="code">
                             </div>
 
                             <!-- 已存在时的处理方式 -->
@@ -4743,8 +4743,8 @@
                 // TMDB 配置
                 const tmdb = reactive({
                     api_key: '',
-                    api_domain: '',
-                    image_domain: '',
+                    api_domain: 'https://api.tmdb.org',
+                    image_domain: 'https://image.tmdb.org',
                     language: 'both',
                     testing: false,
                     testResult: '',
@@ -4754,7 +4754,7 @@
                 // STRM 直链配置
                 const strmConfig = reactive({
                     server_url: '',
-                    server_port: '',
+                    server_port: '6060',
                     overwrite_mode: 'skip',
                 });
                 // STRM 生成示例（响应式）
@@ -6858,7 +6858,7 @@ av:
                         if (data.code === 0 && data.data) {
                             _loadingConfig = true;
                             strmConfig.server_url = data.data.server_url || '';
-                            strmConfig.server_port = data.data.server_port || '';
+                            strmConfig.server_port = data.data.server_port || '6060';
                             strmConfig.overwrite_mode = data.data.overwrite_mode || 'skip';
                             _loadingConfig = false;
                         }
@@ -6899,7 +6899,7 @@ av:
 
                     // 302 跳转模式
                     let serverUrl = (strmConfig.server_url || 'http://192.168.1.100').trim();
-                    let serverPort = (strmConfig.server_port || '8787').trim();
+                    let serverPort = (strmConfig.server_port || '6060').trim();
                     let base = serverPort ? `${serverUrl}:${serverPort}` : serverUrl;
                     strmExample.content = `${base}/api/115/url/${samplePath}?pickcode=abc123&account_id=1`;
                 };
