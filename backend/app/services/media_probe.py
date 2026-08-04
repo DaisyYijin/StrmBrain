@@ -228,9 +228,10 @@ def probe_media_info(download_url: str, timeout: int = 30) -> Optional[dict]:
     return info
 
 
-async def probe_media_info_async(download_url: str, timeout: int = 30) -> Optional[dict]:
+async def probe_media_info_async(download_url: str, timeout: int = 30, file_name: str = "") -> Optional[dict]:
     """
     异步版本的媒体探测，使用 asyncio subprocess 避免阻塞事件循环。
+    file_name: 可选，用于日志中标识是哪个文件
     """
     ffprobe_path = get_ffprobe_path()
     if not ffprobe_path:
@@ -238,6 +239,7 @@ async def probe_media_info_async(download_url: str, timeout: int = 30) -> Option
         return None
 
     ua = _get_download_ua()
+    _label = f" ({file_name})" if file_name else ""
     try:
         proc = await asyncio.create_subprocess_exec(
             ffprobe_path,
@@ -245,6 +247,9 @@ async def probe_media_info_async(download_url: str, timeout: int = 30) -> Option
             "-print_format", "json",
             "-show_streams",
             "-show_format",
+            # 限制探测数据量，避免大文件超时（默认 ffprobe 可能读取过多数据）
+            "-analyzeduration", "10M",
+            "-probesize", "10M",
             "-headers", f"Referer: https://115.com\r\nUser-Agent: {ua}\r\n",
             download_url,
             stdout=asyncio.subprocess.PIPE,
@@ -272,15 +277,15 @@ async def probe_media_info_async(download_url: str, timeout: int = 30) -> Option
                 reason = "无错误输出（可能链接失效或网络不通）"
             else:
                 reason = err_msg
-            logger.warning(f"ffprobe 返回码 {proc.returncode}（{reason}）: {download_url[:80]}")
+            logger.warning(f"ffprobe 返回码 {proc.returncode}（{reason}）{_label}: {download_url[:80]}")
             return None
 
         data = json.loads(stdout.decode("utf-8"))
     except asyncio.TimeoutError:
-        logger.warning(f"ffprobe 异步超时（{timeout}s）")
+        logger.warning(f"ffprobe 异步超时（{timeout}s）{_label}")
         return None
     except Exception as e:
-        logger.warning(f"ffprobe 异步执行异常: {e}")
+        logger.warning(f"ffprobe 异步执行异常: {e}{_label}")
         return None
 
     streams = data.get("streams", [])

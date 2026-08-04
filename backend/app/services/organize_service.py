@@ -1259,7 +1259,7 @@ class OrganizeService:
                             download_url = Client115Service.get_download_url(cookies, file_info.get("pickcode", ""))
                             if download_url:
                                 logger.info(f"ffprobe 探测: {orig_name}")
-                                media_info = await probe_media_info_async(download_url, timeout=30)
+                                media_info = await probe_media_info_async(download_url, timeout=30, file_name=orig_name)
                                 if media_info:
                                     logger.info(f"ffprobe 结果: pix={media_info.get('resource_pix')}, enc={media_info.get('video_encode')}, audio={media_info.get('audio_encode')}, fps={media_info.get('fps')}")
                         except Exception as e:
