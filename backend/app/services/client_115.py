@@ -38,6 +38,29 @@ _cache_lock = threading.Lock()
 _RATE_LIMIT_WAIT = 30  # 秒
 _MAX_RETRIES = 3
 
+# 速率限制统计计数器（线程安全）
+_rate_limit_stats = {"count": 0, "total_wait": 0.0}
+_rate_limit_stats_lock = threading.Lock()
+
+
+def _apply_rate_limit(operation: str = ""):
+    """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）"""
+    _interval = get_api_intervals().get("download_url_interval", 0.3)
+    if _interval > 0:
+        with _rate_limit_stats_lock:
+            _rate_limit_stats["count"] += 1
+            _rate_limit_stats["total_wait"] += _interval
+        _time.sleep(_interval)
+
+
+def get_rate_limit_stats() -> dict:
+    """获取速率限制统计并重置计数器"""
+    with _rate_limit_stats_lock:
+        stats = dict(_rate_limit_stats)
+        _rate_limit_stats["count"] = 0
+        _rate_limit_stats["total_wait"] = 0.0
+    return stats
+
 
 def _run_in_thread(func, *args, **kwargs):
     """在线程池中运行同步函数"""
@@ -394,6 +417,7 @@ class Client115Service:
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
                 return cached["url"]
         # 实时获取（指定 user_agent，下载时必须用同一个）
+        _apply_rate_limit("download_url")
         try:
             client = cls.create_client_from_cookies(cookies)
             result = client.download_url(pickcode, user_agent=cls.DOWNLOAD_USER_AGENT)
@@ -563,6 +587,7 @@ class Client115Service:
         """
         新建目录，返回目录 ID。如已存在则返回已存在目录 ID。
         """
+        _apply_rate_limit("mkdir")
         client = cls.create_client_from_cookies(cookies)
         try:
             resp = client.fs_mkdir({"cname": name, "pid": parent_id})
@@ -625,6 +650,7 @@ class Client115Service:
         注意：fs_rename 接受单个元组 (file_id, new_name) 或 dict，
         不能传列表。返回 dict 含 state 字段，需检查。
         """
+        _apply_rate_limit("rename")
         client = cls.create_client_from_cookies(cookies)
         try:
             resp = client.fs_rename((file_id, new_name))
@@ -646,6 +672,7 @@ class Client115Service:
         返回 dict 含 state 字段，需检查。
         遇到"操作尚未执行完成"时自动等待重试。
         """
+        _apply_rate_limit("move")
         client = cls.create_client_from_cookies(cookies)
         max_retries = 5
         for attempt in range(max_retries):

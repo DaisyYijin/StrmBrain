@@ -907,6 +907,16 @@ class OrganizeService:
 
         logger.info(f"[organize] 整理开始: source_cid={source_cid}, target_cid={target_cid}, existing_cid={existing_cid}, redundant_cid={redundant_cid}, unrecognized_cid={unrecognized_cid}")
 
+        # 检查 API 速率限制配置并在实时日志显示
+        from app.core.db_helper import get_api_intervals
+        from app.services.client_115 import get_rate_limit_stats
+        _api_intervals = get_api_intervals()
+        _rate_interval = _api_intervals.get("download_url_interval", 0)
+        if _rate_interval > 0:
+            logger.info(f"[organize] 已启用 API 速率限制: 间隔 {_rate_interval}s/次（重命名、移动、创建目录等操作均受限流）")
+        else:
+            logger.info(f"[organize] API 速率限制未启用")
+
         # 检查 TMDB API Key 是否已配置（未配置时在实时日志显示警告，已配置则不显示）
         from app.services.tmdb_service import TmdbService
         tmdb_api_key = TmdbService._get_api_key()
@@ -1066,6 +1076,13 @@ class OrganizeService:
                         logger.info(f"[organize] 源目录已清空")
                 except Exception as e:
                     logger.warning(f"[organize] 清理源目录失败: {e}")
+            # 速率限制统计
+            _rl_stats = get_rate_limit_stats()
+            if _rl_stats["count"] > 0:
+                logger.info(
+                    f"[organize] 速率限制统计: 本次整理共 {_rl_stats['count']} 次 API 操作受限流，"
+                    f"累计等待 {_rl_stats['total_wait']:.1f}s"
+                )
             return result
 
         # 2. 分类：冗余文件 / 可识别 / 不可识别
@@ -1673,6 +1690,14 @@ class OrganizeService:
                     logger.info(f"[organize] 源目录已清空")
             except Exception as e:
                 logger.warning(f"[organize] 清理源目录失败: {e}")
+
+        # 速率限制统计
+        _rl_stats = get_rate_limit_stats()
+        if _rl_stats["count"] > 0:
+            logger.info(
+                f"[organize] 速率限制统计: 本次整理共 {_rl_stats['count']} 次 API 操作受限流，"
+                f"累计等待 {_rl_stats['total_wait']:.1f}s"
+            )
 
         return result
 
