@@ -55,7 +55,7 @@ async def test_emby(payload: EmbySettings):
 class EmbyProxySettings(BaseModel):
     """Emby 反代配置"""
     enabled: bool = False
-    port: int = 8787
+    port: int = 6086
 
 
 @router.get("/emby-proxy", response_model=ApiResponse)
@@ -64,8 +64,8 @@ async def get_emby_proxy_settings():
     from app.services.emby_proxy import get_status
     status = get_status()
     return ApiResponse(data={
-        "enabled": status.get("enabled", False),
-        "port": status.get("port", 8787),
+        "enabled": status.get("enabled", True),
+        "port": status.get("port", 6086),
         "running": status.get("running", False),
         "emby_configured": status.get("emby_configured", False),
         "current_port": status.get("current_port", 0),

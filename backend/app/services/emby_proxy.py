@@ -13,7 +13,7 @@ Emby 反代服务 — 参考 qmediasync emby302 方案
 
 使用方式：
 - Emby 客户端（或 Emby 设置中的服务器地址）改为 http://反代地址:端口
-- 反代端口默认 8787，可在设置页修改
+- 反代端口默认 6086，可在设置页修改
 """
 import re
 import threading
@@ -64,8 +64,9 @@ def _get_config() -> dict:
     data = read_setting("emby_proxy")
     emby_data = read_setting("emby")
     return {
-        "enabled": data.get("enabled", False),
-        "port": int(data.get("port", 8787) or 8787),
+        # 从未保存过配置时默认启用（内置自带），用户主动关闭则尊重
+        "enabled": data.get("enabled", True),
+        "port": int(data.get("port", 6086) or 6086),
         "emby_host": (emby_data.get("host", "") or "").rstrip("/"),
         "emby_api_key": (emby_data.get("api_key", "") or "").strip(),
     }
@@ -463,8 +464,8 @@ def get_status() -> dict:
     with _proxy_state["lock"]:
         cfg = _get_config()
         return {
-            "enabled": cfg.get("enabled", False),
-            "port": cfg.get("port", 8787),
+            "enabled": cfg.get("enabled", True),
+            "port": cfg.get("port", 6086),
             "running": _proxy_state["running"],
             "emby_configured": bool(cfg.get("emby_host")),
             "current_port": _proxy_state["port"],
@@ -503,7 +504,7 @@ def start_proxy() -> dict:
         if _proxy_state["running"]:
             return _state_snapshot()
 
-        port = cfg.get("port", 8787)
+        port = cfg.get("port", 6086)
         try:
             import uvicorn
             config = uvicorn.Config(
@@ -535,8 +536,8 @@ def _state_snapshot() -> dict:
     """构造状态快照（不获取锁，仅供已持锁的调用方使用）"""
     cfg = _get_config()
     return {
-        "enabled": cfg.get("enabled", False),
-        "port": cfg.get("port", 8787),
+        "enabled": cfg.get("enabled", True),
+        "port": cfg.get("port", 6086),
         "running": _proxy_state["running"],
         "emby_configured": bool(cfg.get("emby_host")),
         "current_port": _proxy_state["port"],

@@ -4767,10 +4767,10 @@
                     has_token: false,
                 });
 
-                // Emby 反代配置
+                // Emby 反代配置（内置自带，默认启用；从未保存配置时自动运行）
                 const embyProxy = reactive({
-                    enabled: false,
-                    port: 8787,
+                    enabled: true,
+                    port: 6086,
                     running: false,
                     emby_configured: false,
                     current_port: 0,
@@ -6965,7 +6965,7 @@ av:
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
                             embyProxy.enabled = data.data.enabled === true;
-                            embyProxy.port = data.data.port || 8787;
+                            embyProxy.port = data.data.port || 6086;
                             embyProxy.running = data.data.running === true;
                             embyProxy.emby_configured = data.data.emby_configured === true;
                             embyProxy.current_port = data.data.current_port || 0;
@@ -6978,7 +6978,7 @@ av:
                         const res = await api('/api/settings/emby-proxy', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ enabled: embyProxy.enabled, port: embyProxy.port || 8787 })
+                            body: JSON.stringify({ enabled: embyProxy.enabled, port: embyProxy.port || 6086 })
                         });
                         const data = await res.json();
                         if (data.code === 0) {

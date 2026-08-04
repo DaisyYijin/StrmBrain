@@ -47,8 +47,8 @@ ENV HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# 暴露端口
-EXPOSE 8000 8787
+# 暴露端口（8000 主服务，6086 Emby 反代 302 播放）
+EXPOSE 8000 6086
 
 # 数据持久化（运行数据、配置、日志、STRM 媒体输出）
 VOLUME ["/app/data", "/app/config", "/app/log", "/media"]
