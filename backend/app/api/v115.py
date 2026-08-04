@@ -1,7 +1,7 @@
 """
 API 路由 - 115 扫码登录
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.core.json_storage import upsert_account, find_account, find_account_by_user_id, get_first_valid_account
 from app.services import Client115Service
@@ -102,6 +102,7 @@ async def get_download_url(
     pickcode: str,
     account_id: int,
     t: str = "",
+    request: Request = None,
 ):
     """
     获取 115 文件下载链接（302 重定向）
