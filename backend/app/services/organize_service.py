@@ -1010,7 +1010,7 @@ class OrganizeService:
                 # 移动媒体图片和媒体数据文件到冗余目录
                 for img_f in image_files:
                     try:
-                        ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid)
+                        ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid, context=img_f["name"])
                         if ok_img:
                             logger.info(f"[organize] 残留媒体图片移到冗余: {img_f['name']}")
                             result["redundant"].append({"name": img_f["name"], "reason": "残留媒体图片文件"})
@@ -1020,7 +1020,7 @@ class OrganizeService:
                         logger.warning(f"[organize] 媒体图片移动异常: {img_f['name']}: {e}")
                 for df in data_files:
                     try:
-                        ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid)
+                        ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid, context=df["name"])
                         if ok_df:
                             logger.info(f"[organize] 残留媒体数据移到冗余: {df['name']}")
                             result["redundant"].append({"name": df["name"], "reason": "残留媒体数据文件"})
@@ -1043,7 +1043,7 @@ class OrganizeService:
                             if not item_id:
                                 continue
                             try:
-                                ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                 if ok:
                                     moved += 1
                                     logger.info(f"[organize] 残留移到冗余目录: {item_name}")
@@ -1062,7 +1062,7 @@ class OrganizeService:
                                 item_id = item.get("id", "")
                                 item_name = item.get("name", "")
                                 try:
-                                    ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                    ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                     if ok:
                                         moved += 1
                                         logger.info(f"[organize] 残留重试成功: {item_name}")
@@ -1279,7 +1279,7 @@ class OrganizeService:
                     media_info = None
                     if use_ffprobe and is_ffprobe_available() and (rename_rules or (wash_config and wash_config.get("enabled"))):
                         try:
-                            download_url = Client115Service.get_download_url(cookies, file_info.get("pickcode", ""))
+                            download_url = Client115Service.get_download_url(cookies, file_info.get("pickcode", ""), context=orig_name)
                             if download_url:
                                 logger.info(f"ffprobe 探测: {orig_name}")
                                 media_info = await probe_media_info_async(download_url, timeout=30, file_name=orig_name)
@@ -1304,7 +1304,7 @@ class OrganizeService:
                             for old_file in old_files_to_replace:
                                 old_name = old_file.get("name", "")
                                 logger.info(f"[organize] 洗版替换: 移走旧文件 '{old_name}' → 冗余目录")
-                                ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid)
+                                ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid, context=old_name)
                                 if ok_old:
                                     result["redundant"].append({"name": old_name, "reason": f"洗版被替换: {wash_reason}"})
                                 else:
@@ -1327,7 +1327,7 @@ class OrganizeService:
                         logger.info(f"[organize] 重命名计算: orig='{orig_name}', new_name='{new_name}', folder='{new_folder}', season='{season_folder}'")
                         # 执行重命名
                         if new_name and new_name != orig_name:
-                            ok_rename = Client115Service.rename(cookies, file_info["file_id"], new_name)
+                            ok_rename = Client115Service.rename(cookies, file_info["file_id"], new_name, context=orig_name)
                             if ok_rename:
                                 renamed_to = new_name
                                 logger.info(f"[organize] 重命名: {orig_name} -> {new_name}")
@@ -1359,7 +1359,7 @@ class OrganizeService:
                         item = rr["item"]
                         file_info = item["file"]
                         orig_name = file_info["name"]
-                        ok_exist = Client115Service.move(cookies, [file_info["file_id"]], existing_cid)
+                        ok_exist = Client115Service.move(cookies, [file_info["file_id"]], existing_cid, context=orig_name)
                         if ok_exist:
                             result["organized"].append({
                                 "name": orig_name,
@@ -1422,7 +1422,7 @@ class OrganizeService:
                                 final_target_cid = movie_cid
 
                 # 执行移动
-                ok = Client115Service.move(cookies, [file_info["file_id"]], final_target_cid)
+                ok = Client115Service.move(cookies, [file_info["file_id"]], final_target_cid, context=orig_name)
                 if ok:
                     logger.info(f"[organize] 移动成功: {orig_name} -> {category}/{renamed_to or orig_name}")
                     season_num, episode_num = extract_season_episode(orig_name)
@@ -1465,9 +1465,9 @@ class OrganizeService:
                                 df_ext = ("." + df["name"].rsplit(".", 1)[-1]) if "." in df["name"] else ""
                                 new_df_name = new_base + df_ext
                                 if new_df_name != df["name"]:
-                                    Client115Service.rename(cookies, df["file_id"], new_df_name)
+                                    Client115Service.rename(cookies, df["file_id"], new_df_name, context=df["name"])
                                     logger.info(f"[organize] 关联数据文件重命名: {df['name']} -> {new_df_name}")
-                            ok_df = Client115Service.move(cookies, [df["file_id"]], final_target_cid)
+                            ok_df = Client115Service.move(cookies, [df["file_id"]], final_target_cid, context=df["name"])
                             if ok_df:
                                 moved_data_file_ids.add(df["file_id"])
                                 logger.info(f"[organize] 关联数据文件已移动: {df['name']} -> {category}/")
@@ -1494,7 +1494,8 @@ class OrganizeService:
         if redundant_cid and to_redundant:
             for item in to_redundant:
                 ok = Client115Service.move(
-                    cookies, [item["file"]["file_id"]], redundant_cid
+                    cookies, [item["file"]["file_id"]], redundant_cid,
+                    context=item["file"]["name"],
                 )
                 if ok:
                     result["redundant"].append({
@@ -1517,7 +1518,8 @@ class OrganizeService:
         if unrecognized_cid and to_unrecognized:
             for item in to_unrecognized:
                 ok = Client115Service.move(
-                    cookies, [item["file"]["file_id"]], unrecognized_cid
+                    cookies, [item["file"]["file_id"]], unrecognized_cid,
+                    context=item["file"]["name"],
                 )
                 if ok:
                     result["unrecognized"].append({
@@ -1542,7 +1544,7 @@ class OrganizeService:
         if not dry_run and redundant_cid:
             for img_f in image_files:
                 try:
-                    ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid)
+                    ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid, context=img_f["name"])
                     if ok_img:
                         logger.info(f"[organize] 媒体图片移到冗余: {img_f['name']}")
                         result["redundant"].append({"name": img_f["name"], "reason": "媒体图片文件"})
@@ -1555,7 +1557,7 @@ class OrganizeService:
                 if df["file_id"] in moved_data_file_ids:
                     continue
                 try:
-                    ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid)
+                    ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid, context=df["name"])
                     if ok_df:
                         logger.info(f"[organize] 未关联媒体数据移到冗余: {df['name']}")
                         result["redundant"].append({"name": df["name"], "reason": "未关联的媒体数据文件"})
@@ -1652,7 +1654,7 @@ class OrganizeService:
                         if not item_id:
                             continue
                         try:
-                            ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                            ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                             if ok:
                                 moved += 1
                                 logger.info(f"[organize] 残留移到冗余目录: {item_name}")
@@ -1671,7 +1673,7 @@ class OrganizeService:
                             item_id = item.get("id", "")
                             item_name = item.get("name", "")
                             try:
-                                ok = Client115Service.move(cookies, [item_id], redundant_cid)
+                                ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                 if ok:
                                     moved += 1
                                     logger.info(f"[organize] 残留重试成功: {item_name}")

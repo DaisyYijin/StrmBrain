@@ -42,8 +42,10 @@ _rate_limit_stats = {"count": 0, "total_wait": 0.0}
 _rate_limit_stats_lock = threading.Lock()
 
 
-def _apply_rate_limit(operation: str = ""):
-    """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）"""
+def _apply_rate_limit(operation: str = "", context: str = ""):
+    """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）
+    context: 可选的操作对象（如文件名），用于等待日志展示当前处理进度
+    """
     _interval = get_api_intervals().get("download_url_interval", 0.3)
     if _interval > 0:
         with _rate_limit_stats_lock:
@@ -52,7 +54,8 @@ def _apply_rate_limit(operation: str = ""):
         # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
         if _interval >= 1.0:
             op = f" ({operation})" if operation else ""
-            logger.info(f"[115] API 请求间隔等待 {_interval}s{op}...")
+            ctx = f" - {context}" if context else ""
+            logger.info(f"[115] API 请求间隔等待 {_interval}s{op}{ctx}...")
         _time.sleep(_interval)
 
 
@@ -61,13 +64,16 @@ def _get_retry_cooldown() -> float:
     return get_api_intervals().get("retry_cooldown", 30.0)
 
 
-def _apply_file_list_interval():
-    """文件列表分页间隔（跟随用户配置，默认 0.3s）"""
+def _apply_file_list_interval(context: str = ""):
+    """文件列表分页间隔（跟随用户配置，默认 0.3s）
+    context: 可选的操作对象（如目录名），用于等待日志展示当前进度
+    """
     _interval = get_api_intervals().get("file_list_interval", 0.3)
     if _interval > 0:
         # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
         if _interval >= 1.0:
-            logger.info(f"[115] 文件列表分页等待 {_interval}s...")
+            ctx = f" - {context}" if context else ""
+            logger.info(f"[115] 文件列表分页等待 {_interval}s{ctx}...")
         _time.sleep(_interval)
 
 
@@ -426,8 +432,10 @@ class Client115Service:
     DOWNLOAD_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     @classmethod
-    def get_download_url(cls, cookies: str, pickcode: str, account_id: int = 0) -> Optional[str]:
-        """获取 115 文件下载链接，带 TTL 缓存"""
+    def get_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
+        """获取 115 文件下载链接，带 TTL 缓存
+        context: 可选的操作对象（如文件名），用于等待日志展示当前进度
+        """
         if not pickcode:
             return None
         # 检查缓存
@@ -436,7 +444,7 @@ class Client115Service:
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
                 return cached["url"]
         # 实时获取（指定 user_agent，下载时必须用同一个）
-        _apply_rate_limit("download_url")
+        _apply_rate_limit("download_url", context)
         try:
             client = cls.create_client_from_cookies(cookies)
             result = client.download_url(pickcode, user_agent=cls.DOWNLOAD_USER_AGENT)
@@ -465,11 +473,12 @@ class Client115Service:
             return None
 
     @classmethod
-    def get_download_url_with_headers(cls, cookies: str, pickcode: str, account_id: int = 0) -> Optional[dict]:
+    def get_download_url_with_headers(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[dict]:
         """
         获取 115 文件下载链接及所需的 user_agent。
         返回 {"url": str, "user_agent": str} 或 None
         115 CDN 要求下载时的 user-agent 必须与获取直链时一致（f=1 参数控制）
+        context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
         if not pickcode:
             return None
@@ -479,7 +488,7 @@ class Client115Service:
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
                 return {"url": cached["url"], "user_agent": cached.get("user_agent", cls.DOWNLOAD_USER_AGENT)}
         # 调用 get_download_url 填充缓存
-        url = cls.get_download_url(cookies, pickcode, account_id)
+        url = cls.get_download_url(cookies, pickcode, account_id, context=context)
         if not url:
             return None
         with _cache_lock:
@@ -546,10 +555,8 @@ class Client115Service:
                 offset += len(items)
                 if offset >= total:
                     break
-                # 分页请求间隔，由用户配置
-                _interval = get_api_intervals().get("file_list_interval", 0.3)
-                if _interval > 0:
-                    _time.sleep(_interval)
+                # 分页请求间隔，由用户配置（>=1s 时显示当前目录进度）
+                _apply_file_list_interval(context=dir_rel_path or "根目录")
 
         _walk(cid, "")
         return videos
@@ -594,9 +601,7 @@ class Client115Service:
                 offset += len(items)
                 if offset >= total:
                     break
-                _interval = get_api_intervals().get("file_list_interval", 0.3)
-                if _interval > 0:
-                    _time.sleep(_interval)
+                _apply_file_list_interval(context=dir_rel_path or "根目录")
 
         _walk(cid, "")
         return results
@@ -644,7 +649,7 @@ class Client115Service:
                 if offset >= total:
                     break
                 # 分页请求间隔（跟随用户配置，与文件列表一致）
-                _apply_file_list_interval()
+                _apply_file_list_interval(context=f"查找目录 {name}")
         except Exception:
             pass
         return None
@@ -665,13 +670,14 @@ class Client115Service:
         return current
 
     @classmethod
-    def rename(cls, cookies: str, file_id: str, new_name: str) -> bool:
+    def rename(cls, cookies: str, file_id: str, new_name: str, context: str = "") -> bool:
         """重命名文件或目录
 
         注意：fs_rename 接受单个元组 (file_id, new_name) 或 dict，
         不能传列表。返回 dict 含 state 字段，需检查。
+        context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
-        _apply_rate_limit("rename")
+        _apply_rate_limit("rename", context)
         client = cls.create_client_from_cookies(cookies)
         try:
             resp = client.fs_rename((file_id, new_name))
@@ -684,7 +690,7 @@ class Client115Service:
             return False
 
     @classmethod
-    def move(cls, cookies: str, file_ids: list[str], dest_id: str) -> bool:
+    def move(cls, cookies: str, file_ids: list[str], dest_id: str, context: str = "") -> bool:
         """移动文件到目标目录
 
         注意：fs_move 的第一个参数是位置参数 payload，
@@ -692,8 +698,9 @@ class Client115Service:
         不能传 {"fid": [...]} 因为 API 不接受 fid 为列表。
         返回 dict 含 state 字段，需检查。
         遇到"操作尚未执行完成"时自动等待重试。
+        context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
-        _apply_rate_limit("move")
+        _apply_rate_limit("move", context)
         client = cls.create_client_from_cookies(cookies)
         # 异步操作等待基础值（跟随用户配置的直链间隔，避免低于配置）
         base_wait = max(get_api_intervals().get("download_url_interval", 0.3), 1.0)
@@ -885,10 +892,8 @@ class Client115Service:
                 offset += len(items)
                 if offset >= total:
                     break
-                # 分页请求间隔，由用户配置
-                _interval = get_api_intervals().get("file_list_interval", 0.3)
-                if _interval > 0:
-                    _time.sleep(_interval)
+                # 分页请求间隔，由用户配置（>=1s 时显示当前目录进度）
+                _apply_file_list_interval(context=dir_rel_path or "根目录")
             return subdirs
 
         # BFS + 并发：用线程池并发处理目录
@@ -912,10 +917,11 @@ class Client115Service:
         return results
 
     @classmethod
-    def download_file(cls, cookies: str, pickcode: str, local_path: str) -> bool:
+    def download_file(cls, cookies: str, pickcode: str, local_path: str, context: str = "") -> bool:
         """
         下载 115 文件到本地（用于元数据/字幕文件下载）
         遇到 403 时自动清除缓存并重试（链接可能已过期或 CDN 临时拒绝）
+        context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
         if not pickcode:
             return False
@@ -932,7 +938,7 @@ class Client115Service:
                     cls.invalidate_download_url_cache(pickcode)
                     _time.sleep(retry_wait)
 
-                dl_info = cls.get_download_url_with_headers(cookies, pickcode)
+                dl_info = cls.get_download_url_with_headers(cookies, pickcode, context=context)
                 if not dl_info or not dl_info.get("url"):
                     last_error = "获取下载链接失败"
                     continue
@@ -1011,9 +1017,7 @@ class Client115Service:
                 if offset >= total:
                     break
                 # 分页请求间隔，由用户配置
-                _interval = get_api_intervals().get("file_list_interval", 0.3)
-                if _interval > 0:
-                    _time.sleep(_interval)
+                _apply_file_list_interval(context="遍历目录")
 
         _walk(cid)
         return items
@@ -1281,9 +1285,7 @@ class Client115Service:
                 offset += len(items)
                 if offset >= total:
                     break
-                _interval = get_api_intervals().get("file_list_interval", 0.3)
-                if _interval > 0:
-                    _time.sleep(_interval)
+                _apply_file_list_interval(context="扫描空目录")
             return subdirs
 
         def _is_empty(cid: str) -> bool:

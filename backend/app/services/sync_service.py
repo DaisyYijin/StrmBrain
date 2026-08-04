@@ -128,6 +128,13 @@ class SyncService:
         manifest = {}
         for idx, f in enumerate(filtered):
             cls._safe_schedule(loop, progress_manager.update_progress(idx, f["name"]))
+            _cur_no = idx + 1
+            _cur_name = f.get("name", "")
+
+            # 处理文件前输出当前进度（间隔 >= 1s 时，让用户知道正在同步哪个文件）
+            _interval = get_api_intervals().get("sync_file_interval", 0.3)
+            if _interval >= 1.0:
+                logger.info(f"[sync] 正在处理第 {_cur_no}/{len(filtered)} 个文件: {_cur_name}")
 
             synced, entry = cls._sync_single_file(
                 cookies, f, local_root, video_exts, image_exts, data_exts,
@@ -144,11 +151,7 @@ class SyncService:
                 result["errors"].append(entry)
 
             # 文件间等待
-            _interval = get_api_intervals().get("sync_file_interval", 0.3)
             if _interval > 0:
-                # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
-                if _interval >= 1.0:
-                    logger.info(f"[sync] 文件间等待 {_interval}s...")
                 time.sleep(_interval)
 
         # 保存清单
@@ -249,6 +252,10 @@ class SyncService:
             pickcode = f.get("pickcode", "")
 
             processed += 1
+            # 间隔 >= 1s 时输出当前处理进度（让用户知道正在处理哪个文件）
+            _interval = get_api_intervals().get("sync_file_interval", 0.3)
+            if _interval >= 1.0:
+                logger.info(f"[sync] 正在处理第 {processed}/{len(all_files)} 个文件: {name}")
             if processed % 10 == 0:
                 cls._safe_schedule(loop, progress_manager.update_progress(processed, name))
 
@@ -327,12 +334,8 @@ class SyncService:
             elif entry:
                 result["errors"].append(entry)
 
-            # 文件间等待
-            _interval = get_api_intervals().get("sync_file_interval", 0.3)
+            # 文件间等待（_interval 已在循环开头定义）
             if _interval > 0:
-                # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
-                if _interval >= 1.0:
-                    logger.info(f"[sync] 文件间等待 {_interval}s...")
                 time.sleep(_interval)
 
         # 检测已删除的文件
@@ -460,7 +463,7 @@ class SyncService:
             elif ext in image_exts or ext in data_exts:
                 # 图片/数据文件：直接下载
                 local_path = local_dir / name
-                ok = Client115Service.download_file(cookies, pickcode, str(local_path))
+                ok = Client115Service.download_file(cookies, pickcode, str(local_path), context=name)
                 if ok:
                     return {
                         "name": name, "type": "download",
