@@ -4757,7 +4757,10 @@
                 // 整理功能
                 const organizeTab = ref(localStorage.getItem('strmhub_organize_tab') || 'main');
                 Vue.watch(organizeTab, (v) => localStorage.setItem('strmhub_organize_tab', v));
-                const syncTab = ref(localStorage.getItem('strmhub_sync_tab') || 'full');
+                // 校验 syncTab 值有效性，防止 localStorage 残留已删除的 tab 导致空白
+                const _validSyncTabs = ['full', 'incremental'];
+                const _savedSyncTab = localStorage.getItem('strmhub_sync_tab');
+                const syncTab = ref(_validSyncTabs.includes(_savedSyncTab) ? _savedSyncTab : 'full');
                 Vue.watch(syncTab, (v) => localStorage.setItem('strmhub_sync_tab', v));
 
                 // Cron 预览
