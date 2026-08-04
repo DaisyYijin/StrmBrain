@@ -148,6 +148,42 @@ def _resolve_strm_target(content: str) -> str:
     return target
 
 
+def _is_self_strm_url(target: str) -> bool:
+    """判断 STRM 内容是否指向本服务的 302 播放接口（/api/115/url/）
+    参考 emby2Alist redirectStrmLastLinkRule：STRM 内部链接指向自身反代/接口时，
+    由服务器端跟随跳转获取最终直链，避免客户端访问不到内部地址（如 172.17.0.1）。
+    """
+    return "/api/115/url/" in target
+
+
+async def _follow_strm_url(target: str) -> Optional[str]:
+    """服务器端跟随 STRM 内部链接（参考 emby2Alist fetchLastLink）。
+    当 STRM 内容指向本服务 302 接口时，由反代在服务器端请求主应用获取 115 直链，
+    再返回给客户端。客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
+    返回最终直链 URL，失败返回 None。
+    """
+    if not _is_self_strm_url(target):
+        return None
+    # 提取路径部分（含 query），host 无关紧要（可能是 172.17.0.1 / 局域网IP / 域名）
+    m = re.match(r"https?://[^/]+(/api/115/url/.*)$", target)
+    if not m:
+        return None
+    path_with_query = m.group(1)
+    from app.config import PORT as MAIN_PORT
+    upstream = f"http://127.0.0.1:{MAIN_PORT}{path_with_query}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=10, pool=5)) as client:
+            resp = await client.get(upstream, follow_redirects=False)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("location", "")
+            if loc:
+                return loc
+        logger.warning(f"[proxy] 跟随 STRM 链接未返回重定向: {target[:80]} (HTTP {resp.status_code})")
+    except Exception as e:
+        logger.warning(f"[proxy] 跟随 STRM 链接失败 {target[:80]}: {e}")
+    return None
+
+
 # ===== Emby API 调用 =====
 
 async def _get_emby_path(cfg: dict, item_id: str, media_source_id: str, api_key: str) -> str:
@@ -364,6 +400,23 @@ async def handle_stream(request: Request):
         if content:
             target = _resolve_strm_target(content)
             if target:
+                # 服务器端跟随：STRM 内容指向本服务 302 接口时，由反代请求主应用
+                # 获取 115 直链，再 302 给客户端（参考 emby2Alist fetchLastLink）。
+                # 客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
+                if _is_self_strm_url(target):
+                    final_url = await _follow_strm_url(target)
+                    if final_url:
+                        logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
+                        response = RedirectResponse(url=final_url, status_code=302)
+                        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                        response.headers["Pragma"] = "no-cache"
+                        response.headers["Expires"] = "0"
+                        response.headers["Referrer-Policy"] = "no-referrer"
+                        return response
+                    # 跟随失败则回源，让 Emby 处理（避免把不可达的内部地址给客户端）
+                    logger.warning(f"[proxy] 服务器端跟随失败，回源: {play_label}")
+                    return await proxy_origin(request)
+                # 普通直链（如 115 CDN 等客户端可访问的地址）直接 307 跳转
                 logger.info(f"{play_label} -> {target[:120]}")
                 response = RedirectResponse(url=target, status_code=307)
                 # 禁止缓存，避免过期直链被缓存
