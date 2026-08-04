@@ -909,7 +909,6 @@ class OrganizeService:
 
         # 检查 API 速率限制配置并在实时日志显示
         from app.core.db_helper import get_api_intervals
-        from app.services.client_115 import get_rate_limit_stats
         _api_intervals = get_api_intervals()
         _rate_interval = _api_intervals.get("download_url_interval", 0)
         if _rate_interval > 0:
@@ -1076,13 +1075,6 @@ class OrganizeService:
                         logger.info(f"[organize] 源目录已清空")
                 except Exception as e:
                     logger.warning(f"[organize] 清理源目录失败: {e}")
-            # 速率限制统计
-            _rl_stats = get_rate_limit_stats()
-            if _rl_stats["count"] > 0:
-                logger.info(
-                    f"[organize] 速率限制统计: 本次整理共 {_rl_stats['count']} 次 API 操作受限流，"
-                    f"累计等待 {_rl_stats['total_wait']:.1f}s"
-                )
             return result
 
         # 2. 分类：冗余文件 / 可识别 / 不可识别
@@ -1690,14 +1682,6 @@ class OrganizeService:
                     logger.info(f"[organize] 源目录已清空")
             except Exception as e:
                 logger.warning(f"[organize] 清理源目录失败: {e}")
-
-        # 速率限制统计
-        _rl_stats = get_rate_limit_stats()
-        if _rl_stats["count"] > 0:
-            logger.info(
-                f"[organize] 速率限制统计: 本次整理共 {_rl_stats['count']} 次 API 操作受限流，"
-                f"累计等待 {_rl_stats['total_wait']:.1f}s"
-            )
 
         return result
 
