@@ -451,13 +451,19 @@ class TmdbService:
     def _ensure_chinese_title(data: dict, title_key: str, original_key: str):
         """
         确保数据中使用中文标题。
-        如果 title/name 与 original_title/original_name 相同，说明 TMDB 没有返回中文翻译，
-        此时从 translations 列表中查找中文标题并替换。
+        如果 title/name 与 original_title/original_name 相同，且标题不包含中文字符，
+        说明 TMDB 没有返回中文翻译，此时从 translations 列表中查找中文标题并替换。
         优先简体中文(zh-CN)，其次繁体中文(zh-TW)。
+        注意：如果标题已经包含中文字符（如国产剧原名就是中文），则不需要替换。
         """
         title = data.get(title_key, "") or ""
         original = data.get(original_key, "") or ""
-        # 标题与原标题相同，且原标题非空 → 可能没有中文翻译
+        # 标题已包含中文字符 → 已经是中文标题，无需从 translations 替换
+        # （国产剧/中文剧的 original_name 本身就是中文，title == original 是正常的）
+        has_chinese = bool(re.search(r'[\u4e00-\u9fff]', title))
+        if has_chinese:
+            return
+        # 标题与原标题相同，且原标题非空，且标题不含中文 → 可能没有中文翻译
         if title and original and title == original:
             translations = data.get("translations", {}).get("translations", [])
             # 先找 zh-CN，再找 zh-TW，最后找任意 zh
