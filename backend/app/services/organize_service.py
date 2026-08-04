@@ -12,6 +12,17 @@ from app.services.tmdb_service import TmdbService
 from app.services.category_helper import CategoryHelper
 from app.services.media_probe import probe_media_info_async, is_ffprobe_available
 from app.core.logbuffer import get_logger
+from app.core.db_helper import get_api_intervals
+
+
+def _organize_write_interval() -> float:
+    """整理写操作间隔（跟随用户配置的 API 请求间隔）"""
+    return max(get_api_intervals().get("download_url_interval", 0.3), 0.3)
+
+
+def _organize_retry_cooldown() -> float:
+    """整理重试冷却时间（跟随用户配置的冷却时间）"""
+    return max(get_api_intervals().get("retry_cooldown", 30.0), 1.0)
 
 logger = get_logger("app.services.organize_service")
 
@@ -1040,11 +1051,11 @@ class OrganizeService:
                             except Exception as e:
                                 logger.warning(f"[organize] 残留移动异常: {item_name}: {e}")
                                 failed_items.append(item)
-                            _time.sleep(1)
+                            _time.sleep(_organize_write_interval())
                         # 第二轮：重试第一轮失败的项（等待更长时间）
                         if failed_items:
-                            logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待 10s 后重试...")
-                            _time.sleep(10)
+                            logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待冷却后重试...")
+                            _time.sleep(_organize_retry_cooldown())
                             still_failed = []
                             for item in failed_items:
                                 item_id = item.get("id", "")
@@ -1060,7 +1071,7 @@ class OrganizeService:
                                 except Exception as e:
                                     still_failed.append(item)
                                     logger.warning(f"[organize] 残留重试异常: {item_name}: {e}")
-                                _time.sleep(1)
+                                _time.sleep(_organize_write_interval())
                             # 仍然失败的项记录到结果中
                             if still_failed:
                                 result["cleanup_failed"] = [
@@ -1647,11 +1658,11 @@ class OrganizeService:
                         except Exception as e:
                             logger.warning(f"[organize] 残留移动异常: {item_name}: {e}")
                             failed_items.append(item)
-                        _time.sleep(1)
+                        _time.sleep(_organize_write_interval())
                     # 第二轮：重试第一轮失败的项（等待更长时间）
                     if failed_items:
-                        logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待 10s 后重试...")
-                        _time.sleep(10)
+                        logger.info(f"[organize] {len(failed_items)} 个残留项移动失败，等待冷却后重试...")
+                        _time.sleep(_organize_retry_cooldown())
                         still_failed = []
                         for item in failed_items:
                             item_id = item.get("id", "")
@@ -1667,7 +1678,7 @@ class OrganizeService:
                             except Exception as e:
                                 still_failed.append(item)
                                 logger.warning(f"[organize] 残留重试异常: {item_name}: {e}")
-                            _time.sleep(1)
+                            _time.sleep(_organize_write_interval())
                         # 仍然失败的项记录到结果中
                         if still_failed:
                             result["cleanup_failed"] = [

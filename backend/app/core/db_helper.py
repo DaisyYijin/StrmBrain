@@ -22,10 +22,17 @@ def get_api_intervals() -> dict:
     """
     读取 API 请求间隔配置，返回间隔值（秒）。
     用于同步服务等需要控制 115 API 请求频率的场景。
+
+    返回字段:
+    - file_list_interval: 文件列表分页间隔
+    - sync_file_interval: 同步文件间处理间隔
+    - download_url_interval: 直链获取/写操作间隔
+    - retry_cooldown: 限流/错误重试的冷却等待时间（秒）
     """
     data = read_setting("api_interval")
     return {
         "file_list_interval": float(data.get("interval", 0.3)),
         "sync_file_interval": float(data.get("interval", 0.3)),
         "download_url_interval": float(data.get("interval", 0.3)),
+        "retry_cooldown": float(data.get("retry_cooldown", 30.0)),
     }

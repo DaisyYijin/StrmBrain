@@ -2734,6 +2734,12 @@
                                 </button>
                                 <span style="font-size:12px; color:#c0c4cc;">控制对 115 网盘的请求频率，避免触发限制</span>
                             </div>
+                            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px;">
+                                <label style="font-size:14px; color:#606266; white-space:nowrap;">限流冷却时间</label>
+                                <input type="number" v-model="apiInterval.retryCooldown" step="1" min="1" max="300" style="width:80px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; text-align:center;">
+                                <span style="font-size:13px; color:#909399;">秒</span>
+                                <span style="font-size:12px; color:#c0c4cc;">被限流后等待多久再重试（默认 30 秒），整理/同步/下载均生效</span>
+                            </div>
                         </div>
                     </div>
                     </div>
@@ -6273,6 +6279,7 @@ av:
                 // API 请求间隔配置
                 const apiInterval = reactive({
                     value: 0.3,
+                    retryCooldown: 30,
                     saving: false,
                 });
 
@@ -6469,6 +6476,7 @@ av:
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
                             apiInterval.value = data.data.interval ?? 0.3;
+                            apiInterval.retryCooldown = data.data.retry_cooldown ?? 30;
                         }
                     } catch (e) { console.warn('[app] 操作失败:', e); }
                 };
@@ -6482,6 +6490,7 @@ av:
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 interval: parseFloat(apiInterval.value) || 0,
+                                retry_cooldown: parseFloat(apiInterval.retryCooldown) || 30,
                             })
                         });
                         const data = await res.json();

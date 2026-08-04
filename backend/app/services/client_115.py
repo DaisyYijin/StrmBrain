@@ -34,8 +34,7 @@ _DOWNLOAD_URL_CACHE: dict[str, dict] = {}
 _DOWNLOAD_URL_TTL = 600  # 10 分钟
 _cache_lock = threading.Lock()
 
-# 115 限流等待时间
-_RATE_LIMIT_WAIT = 30  # 秒
+# 115 限流重试次数
 _MAX_RETRIES = 3
 
 # 速率限制统计计数器（线程安全）
@@ -50,6 +49,18 @@ def _apply_rate_limit(operation: str = ""):
         with _rate_limit_stats_lock:
             _rate_limit_stats["count"] += 1
             _rate_limit_stats["total_wait"] += _interval
+        _time.sleep(_interval)
+
+
+def _get_retry_cooldown() -> float:
+    """获取限流/错误重试的冷却等待时间（秒），跟随用户配置"""
+    return get_api_intervals().get("retry_cooldown", 30.0)
+
+
+def _apply_file_list_interval():
+    """文件列表分页间隔（跟随用户配置，默认 0.3s）"""
+    _interval = get_api_intervals().get("file_list_interval", 0.3)
+    if _interval > 0:
         _time.sleep(_interval)
 
 
@@ -82,6 +93,7 @@ def _is_method_not_allowed(exc) -> bool:
 
 def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) -> dict:
     """带限流重试的 fs_files 调用，405 时依次降级: fs_files → fs_files_app → fs_files_aps"""
+    cooldown = _get_retry_cooldown()  # 冷却时间跟随用户配置
     for attempt in range(max_retries):
         try:
             return client.fs_files(params)
@@ -98,18 +110,18 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
                             return client.fs_files_aps(params)
                         except Exception as e3:
                             if _is_rate_limited(e3) and attempt < max_retries - 1:
-                                logger.warning(f"[115] fs_files_aps 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
-                                _time.sleep(_RATE_LIMIT_WAIT)
+                                logger.warning(f"[115] fs_files_aps 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                                _time.sleep(cooldown)
                                 continue
                             raise
                     if _is_rate_limited(e2) and attempt < max_retries - 1:
-                        logger.warning(f"[115] fs_files_app 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
-                        _time.sleep(_RATE_LIMIT_WAIT)
+                        logger.warning(f"[115] fs_files_app 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                        _time.sleep(cooldown)
                         continue
                     raise
             if _is_rate_limited(e) and attempt < max_retries - 1:
-                logger.warning(f"[115] 访问频率过高，等待 {_RATE_LIMIT_WAIT}s 后重试 (attempt {attempt+1}/{max_retries})")
-                _time.sleep(_RATE_LIMIT_WAIT)
+                logger.warning(f"[115] 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                _time.sleep(cooldown)
                 continue
             raise
     return {}
@@ -624,6 +636,8 @@ class Client115Service:
                 offset += len(items)
                 if offset >= total:
                     break
+                # 分页请求间隔（跟随用户配置，与文件列表一致）
+                _apply_file_list_interval()
         except Exception:
             pass
         return None
@@ -674,6 +688,8 @@ class Client115Service:
         """
         _apply_rate_limit("move")
         client = cls.create_client_from_cookies(cookies)
+        # 异步操作等待基础值（跟随用户配置的直链间隔，避免低于配置）
+        base_wait = max(get_api_intervals().get("download_url_interval", 0.3), 1.0)
         max_retries = 5
         for attempt in range(max_retries):
             try:
@@ -682,7 +698,7 @@ class Client115Service:
                     err_msg = resp.get("error", "")
                     # 115 移动操作是异步的，连续操作可能返回"操作尚未执行完成"
                     if "尚未执行完成" in err_msg and attempt < max_retries - 1:
-                        wait = 2 * (attempt + 1)
+                        wait = max(base_wait * (attempt + 1), 2 * (attempt + 1))
                         logger.warning(f"[115] move 等待重试 ({attempt+1}/{max_retries}), {wait}s 后重试: {err_msg}")
                         _time.sleep(wait)
                         continue
@@ -899,13 +915,15 @@ class Client115Service:
         import os
         os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
 
+        # 重试等待时间：跟随用户配置的直链间隔（默认 0.3s），至少 1 秒
+        retry_wait = max(get_api_intervals().get("download_url_interval", 0.3) * 5, 1.0)
         last_error = None
         for attempt in range(3):
             try:
                 # 重试时清除缓存，强制获取新链接
                 if attempt > 0:
                     cls.invalidate_download_url_cache(pickcode)
-                    _time.sleep(2)
+                    _time.sleep(retry_wait)
 
                 dl_info = cls.get_download_url_with_headers(cookies, pickcode)
                 if not dl_info or not dl_info.get("url"):
@@ -935,7 +953,7 @@ class Client115Service:
                 last_error = str(e)
                 if attempt < 2:
                     cls.invalidate_download_url_cache(pickcode)
-                    _time.sleep(2)
+                    _time.sleep(retry_wait)
 
         logger.warning(f"[115] download_file 失败 {local_path}: {last_error}")
         return False
