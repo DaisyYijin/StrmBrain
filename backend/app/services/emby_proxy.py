@@ -50,7 +50,7 @@ _proxy_state = {
     "thread": None,       # 后台线程
     "port": 0,            # 当前监听端口
     "running": False,     # 是否运行中
-    "lock": threading.Lock(),
+    "lock": threading.RLock(),  # 可重入锁（start_proxy 内部嵌套调用 get_status 不会死锁）
 }
 
 # 反代 FastAPI 应用
@@ -483,16 +483,17 @@ def start_proxy() -> dict:
     启动反代服务（非阻塞模式）。
     后台线程运行 uvicorn，主线程立即返回，绝不阻塞主应用启动。
     log_config=None 防止子线程 uvicorn 重配全局日志系统（避免与主应用冲突）。
+    注意：内部返回状态时使用 _state_snapshot() 避免锁内嵌套调用 get_status。
     """
     with _proxy_state["lock"]:
         cfg = _get_config()
         if not cfg.get("enabled"):
-            return get_status()
+            return _state_snapshot()
         if not cfg.get("emby_host") or not cfg.get("emby_api_key"):
             logger.warning("[proxy] Emby 未配置完整，反代服务未启动")
-            return get_status()
+            return _state_snapshot()
         if _proxy_state["running"]:
-            return get_status()
+            return _state_snapshot()
 
         port = cfg.get("port", 8787)
         try:
@@ -519,7 +520,19 @@ def start_proxy() -> dict:
         except Exception as e:
             logger.warning(f"[proxy] 反代服务启动失败: {e}")
             _proxy_state["running"] = False
-        return get_status()
+        return _state_snapshot()
+
+
+def _state_snapshot() -> dict:
+    """构造状态快照（不获取锁，仅供已持锁的调用方使用）"""
+    cfg = _get_config()
+    return {
+        "enabled": cfg.get("enabled", False),
+        "port": cfg.get("port", 8787),
+        "running": _proxy_state["running"],
+        "emby_configured": bool(cfg.get("emby_host")),
+        "current_port": _proxy_state["port"],
+    }
 
 
 def _run_server_safe(server):
