@@ -578,6 +578,9 @@ class SyncService:
                         "name": new_name, "type": "strm_relocated",
                         "path": str(new_strm_path.relative_to(local_root)),
                     })
+                    # 清理迁移后可能变空的旧目录
+                    if old_parent_path and old_local_dir != new_local_dir:
+                        cls._cleanup_empty_dirs(local_root, old_local_dir)
                 else:
                     # 旧 STRM 不存在，重新生成（复用 _sync_single_file）
                     logger.info(f"[sync] 旧 STRM 不存在，重新生成: {new_parent_path}/{new_strm_name}")
@@ -605,6 +608,9 @@ class SyncService:
                         "name": new_name, "type": "relocated",
                         "path": str(new_file_path.relative_to(local_root)),
                     })
+                    # 清理迁移后可能变空的旧目录
+                    if old_parent_path and old_local_dir != new_local_dir:
+                        cls._cleanup_empty_dirs(local_root, old_local_dir)
                 else:
                     # 旧文件不存在，重新下载（复用 _sync_single_file）
                     logger.info(f"[sync] 旧文件不存在，重新下载: {new_parent_path}/{new_name}")
