@@ -49,13 +49,13 @@ if errorlevel 1 (
 
 :: Start service
 echo ============================================
-echo  URL: http://localhost:8000
+echo  URL: http://localhost:1024
 echo  Press Ctrl+C to stop
 echo ============================================
 echo.
 
-start "" http://localhost:8000
+start "" http://localhost:1024
 
-"%PYTHON%" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+"%PYTHON%" -m uvicorn app.main:app --host 0.0.0.0 --port 1024
 
 pause
