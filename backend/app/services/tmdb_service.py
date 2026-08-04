@@ -470,12 +470,15 @@ class TmdbService:
         确保数据中使用中文标题。
         如果 title/name 与 original_title/original_name 相同，且标题不包含中文字符，
         说明 TMDB 没有返回中文翻译，此时从 translations 列表中查找中文标题并替换。
-        优先简体中文(zh-CN)，其次繁体中文(zh-TW)。
+        语言模式行为：
+          - both（中文+英文）：优先简体中文(zh-CN)，其次繁体中文(zh-TW)，最后任意 zh
+          - zh（仅中文）：仅使用简体中文(zh-CN)，不回退繁体，避免繁体标题
+          - en（仅英文）：不执行替换
         注意：如果标题已经包含中文字符（如国产剧原名就是中文），则不需要替换。
-        语言设置为「仅英文」时不执行中文标题替换。
         """
+        lang = cls._get_language()
         # 仅英文模式：不需要强制中文标题
-        if cls._get_language() == "en":
+        if lang == "en":
             return
         title = data.get(title_key, "") or ""
         original = data.get(original_key, "") or ""
@@ -487,7 +490,6 @@ class TmdbService:
         # 标题与原标题相同，且原标题非空，且标题不含中文 → 可能没有中文翻译
         if title and original and title == original:
             translations = data.get("translations", {}).get("translations", [])
-            # 先找 zh-CN，再找 zh-TW，最后找任意 zh
             zh_cn_title = ""
             zh_tw_title = ""
             zh_title = ""
@@ -504,8 +506,13 @@ class TmdbService:
                             zh_tw_title = candidate
                         elif not zh_title:
                             zh_title = candidate
-            # 按优先级选择
-            final = zh_cn_title or zh_tw_title or zh_title
+            # 按语言模式选择
+            if lang == "zh":
+                # 仅中文：只用简体，不回退繁体
+                final = zh_cn_title
+            else:
+                # 中文+英文：简体 → 繁体 → 任意中文
+                final = zh_cn_title or zh_tw_title or zh_title
             if final:
                 data[title_key] = final
                 logger.info(f"TMDB 从 translations 提取中文标题: {original} -> {final}")
