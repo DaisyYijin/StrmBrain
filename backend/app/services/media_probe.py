@@ -100,7 +100,26 @@ def probe_media_info(download_url: str, timeout: int = 30) -> Optional[dict]:
         )
 
         if result.returncode != 0:
-            logger.warning(f"ffprobe 返回码 {result.returncode}: {result.stderr[:200]}")
+            err_msg = result.stderr[:300] if result.stderr else ""
+            # 分析常见错误原因
+            err_lower = err_msg.lower()
+            if "403" in err_lower or "forbidden" in err_lower:
+                reason = "下载链接被拒绝(403)，可能已过期或被限流"
+            elif "404" in err_lower or "not found" in err_lower:
+                reason = "下载链接失效(404)，文件可能已被删除"
+            elif "connection refused" in err_lower or "connection reset" in err_lower:
+                reason = "连接被拒绝或重置，网络问题"
+            elif "timed out" in err_lower or "timeout" in err_lower:
+                reason = "连接超时"
+            elif "permission denied" in err_lower:
+                reason = "权限被拒绝"
+            elif "invalid data" in err_lower or "malformed" in err_lower:
+                reason = "文件格式异常或损坏"
+            elif not err_msg:
+                reason = "无错误输出（可能链接失效或网络不通）"
+            else:
+                reason = err_msg
+            logger.warning(f"ffprobe 返回码 {result.returncode}（{reason}）: {download_url[:80]}")
             return None
 
         data = json.loads(result.stdout)
@@ -234,7 +253,26 @@ async def probe_media_info_async(download_url: str, timeout: int = 30) -> Option
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
         if proc.returncode != 0:
-            logger.warning(f"ffprobe 返回码 {proc.returncode}")
+            err_msg = stderr.decode("utf-8", errors="replace")[:300] if stderr else ""
+            # 分析常见错误原因
+            err_lower = err_msg.lower()
+            if "403" in err_lower or "forbidden" in err_lower:
+                reason = "下载链接被拒绝(403)，可能已过期或被限流"
+            elif "404" in err_lower or "not found" in err_lower:
+                reason = "下载链接失效(404)，文件可能已被删除"
+            elif "connection refused" in err_lower or "connection reset" in err_lower:
+                reason = "连接被拒绝或重置，网络问题"
+            elif "timed out" in err_lower or "timeout" in err_lower:
+                reason = "连接超时"
+            elif "permission denied" in err_lower:
+                reason = "权限被拒绝"
+            elif "invalid data" in err_lower or "malformed" in err_lower:
+                reason = "文件格式异常或损坏"
+            elif not err_msg:
+                reason = "无错误输出（可能链接失效或网络不通）"
+            else:
+                reason = err_msg
+            logger.warning(f"ffprobe 返回码 {proc.returncode}（{reason}）: {download_url[:80]}")
             return None
 
         data = json.loads(stdout.decode("utf-8"))
