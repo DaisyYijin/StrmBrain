@@ -95,8 +95,17 @@ def _extract_search_title(name: str) -> tuple[str, Optional[str]]:
         if new_base == base:
             break
         base = new_base
-    # 去 SxxExx（含范围标记如 S01E01-E12）
-    base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', ' ', base)
+    # 去 SxxExx（含范围标记如 S01E01-E12）及其后的集名内容
+    # SxxExx 后面通常跟着集名（如 S01E11.行凶者），集名不是标题的一部分
+    # 直接截断 SxxExx 及其后所有内容，只保留 SxxExx 之前的标题
+    _se_match = re.search(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', base)
+    if _se_match:
+        if _se_match.start() > 0:
+            # SxxExx 前有标题内容 → 截断 SxxExx 及其后所有内容（集名等）
+            base = base[:_se_match.start()]
+        else:
+            # SxxExx 在开头 → 仅移除 SxxExx 本身，保留后面的内容
+            base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', ' ', base)
     # 去单独的 Sxx（季号，无集号）
     base = re.sub(r'(?:^|[._\s])[sS]\d{1,2}(?![eE]\d)(?:[._\s]|$)', ' ', base)
     # 去 Season N（英文季号写法）
