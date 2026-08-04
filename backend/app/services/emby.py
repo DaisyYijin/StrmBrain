@@ -16,8 +16,11 @@ class EmbyClient:
     """Emby API 客户端"""
 
     def __init__(self, host: str, api_key: str):
-        # 规范化地址，去掉尾部斜杠
-        self.host = (host or "").rstrip("/")
+        # 规范化地址：去掉尾部斜杠，自动补全缺失的 http:// 协议前缀
+        host = (host or "").strip()
+        if host and not host.lower().startswith(("http://", "https://")):
+            host = "http://" + host
+        self.host = host.rstrip("/")
         self.api_key = api_key
 
     async def _get(self, path: str, params: Optional[dict] = None, timeout: float = 30.0) -> Optional[dict]:
@@ -32,7 +35,8 @@ class EmbyClient:
                     return r.json()
                 return None
         except Exception as e:
-            logger.warning(f"请求失败 {path}: {e}", exc_info=True)
+            # 单行日志即可定位问题，避免完整堆栈刷屏
+            logger.warning(f"请求失败 {path}: {e}")
             return None
 
     async def system_info(self) -> Optional[dict]:

@@ -35,8 +35,12 @@ async def get_emby_settings():
 
 @router.post("/emby", response_model=ApiResponse)
 async def save_emby_settings(payload: EmbySettings):
-    """保存 Emby 设置（同时清除仪表盘缓存，并自动启动反代服务）"""
-    save_setting("emby", payload.model_dump())
+    """保存 Emby 设置（自动补全协议，同时清除仪表盘缓存，并自动启动反代服务）"""
+    host = (payload.host or "").strip()
+    # 自动补全缺失的 http:// 协议前缀（用户可能只填 IP:端口）
+    if host and not host.lower().startswith(("http://", "https://")):
+        host = "http://" + host
+    save_setting("emby", {"host": host, "api_key": payload.api_key.strip()})
     from app.core.cache import invalidate
     invalidate()
     # 配置 Emby 后自动启动反代（302 播放），无需手动开启

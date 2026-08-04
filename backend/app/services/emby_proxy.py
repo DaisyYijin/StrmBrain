@@ -63,11 +63,15 @@ def _get_config() -> dict:
     """读取反代配置（含 Emby 配置）"""
     data = read_setting("emby_proxy")
     emby_data = read_setting("emby")
+    emby_host = (emby_data.get("host", "") or "").strip()
+    # 自动补全缺失的 http:// 协议前缀（用户可能只填 IP:端口）
+    if emby_host and not emby_host.lower().startswith(("http://", "https://")):
+        emby_host = "http://" + emby_host
     return {
         # 反代为内置功能，始终启用（历史配置即使存了 false 也强制为 True）
         "enabled": True,
         "port": int(data.get("port", 6086) or 6086),
-        "emby_host": (emby_data.get("host", "") or "").rstrip("/"),
+        "emby_host": emby_host.rstrip("/"),
         "emby_api_key": (emby_data.get("api_key", "") or "").strip(),
     }
 
