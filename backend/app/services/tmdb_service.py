@@ -95,25 +95,34 @@ def _extract_search_title(name: str) -> tuple[str, Optional[str]]:
         if new_base == base:
             break
         base = new_base
-    # 去 SxxExx（含范围标记如 S01E01-E12）及其后的集名内容
-    # SxxExx 后面通常跟着集名（如 S01E11.行凶者），集名不是标题的一部分
-    # 直接截断 SxxExx 及其后所有内容，只保留 SxxExx 之前的标题
-    _se_match = re.search(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', base)
-    if _se_match:
-        if _se_match.start() > 0:
-            # SxxExx 前有标题内容 → 截断 SxxExx 及其后所有内容（集名等）
-            base = base[:_se_match.start()]
-        else:
-            # SxxExx 在开头 → 仅移除 SxxExx 本身，保留后面的内容
-            base = re.sub(r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?', ' ', base)
+    # 去集数标记及其后的集名内容
+    # 所有集数标记后面通常跟着集名（如 S01E11.行凶者 / 第11集.集名 / EP11.集名），
+    # 集名不是标题的一部分，直接截断标记及其后所有内容，只保留标记之前的标题
+    # 支持：SxxExx, Exx, EPxx, 第N集, 第N话, 1x01 格式
+    _episode_markers = [
+        r'[._\s]?[sS]\d{1,2}[eE]\d{1,3}(?:[-–][eE]?\d{1,3})?[._\s]?',  # S01E01 / S01E01-E12
+        r'[._\s]?[eE][pP]\d{1,3}[._\s]?',                               # EP01
+        r'[._\s]?[eE]\d{1,3}(?![a-zA-Z])[._\s]?',                       # E01 (不含EP)
+        r'[._\s]?\d{1,2}x\d{1,3}[._\s]?',                               # 1x01
+        r'[._\s]?第\d{1,3}[集话][._\s]?',                               # 第11集 / 第11话
+    ]
+    for _pat in _episode_markers:
+        _m = re.search(_pat, base)
+        if _m:
+            if _m.start() > 0:
+                # 标记前有标题内容 → 截断标记及其后所有内容（集名等）
+                base = base[:_m.start()]
+            else:
+                # 标记在开头 → 仅移除标记本身，保留后面的内容
+                base = re.sub(_pat, ' ', base)
+            break  # 只需匹配第一个集数标记
     # 去单独的 Sxx（季号，无集号）
     base = re.sub(r'(?:^|[._\s])[sS]\d{1,2}(?![eE]\d)(?:[._\s]|$)', ' ', base)
     # 去 Season N（英文季号写法）
     base = re.sub(r'[._\s]?[sS]eason\s*\d{1,2}[._\s]?', ' ', base)
     # 去年份
     base = re.sub(r'[（(]?\s*(19|20)\d{2}\s*[）)]?', ' ', base)
-    # 去中文集数/季数标记
-    base = re.sub(r'第\d{1,3}[集话]', ' ', base)
+    # 去中文季数标记
     base = re.sub(r'第\d{1,2}季', ' ', base)
     # 去「全N集」「全N话」标记
     base = re.sub(r'全\d{1,3}[集话部]', ' ', base)
