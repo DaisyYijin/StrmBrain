@@ -21,7 +21,7 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.core.logbuffer import get_logger
@@ -435,13 +435,59 @@ async def handle_stream(request: Request):
 
 # ===== 路由注册 =====
 
+async def proxy_websocket(websocket: WebSocket, path: str):
+    """WebSocket 双向代理（Emby 客户端连接服务器必需）。
+    客户端连反代 6086 时，把 WebSocket 升级请求转发到真实 Emby。
+    使用 websockets 库实现双向透传，避免客户端连不上。
+    """
+    import websockets
+    from urllib.parse import urlencode as _urlencode
+    cfg = _get_config()
+    emby_host = cfg.get("emby_host", "")
+    if not emby_host:
+        await websocket.close(code=1011, reason="Emby 未配置")
+        return
+    await websocket.accept()
+    # 构造上游 WebSocket 地址（http→ws, https→wss）
+    upstream = emby_host.replace("http://", "ws://").replace("https://", "wss://")
+    upstream += websocket.url.path
+    if websocket.url.query:
+        upstream += "?" + websocket.url.query
+    try:
+        # 传递客户端的子协议（Emby 客户端可能指定）
+        subprotocols = websocket.headers.get_all("sec-websocket-protocol") or None
+        async with websockets.connect(upstream, subprotocols=subprotocols) as upstream_ws:
+            async def client_to_upstream():
+                try:
+                    while True:
+                        msg = await websocket.receive_text()
+                        await upstream_ws.send(msg)
+                except (WebSocketDisconnect, Exception):
+                    pass
+            async def upstream_to_client():
+                try:
+                    while True:
+                        msg = await upstream_ws.recv()
+                        await websocket.send_text(msg)
+                except (WebSocketDisconnect, Exception):
+                    pass
+            import asyncio as _asyncio
+            await _asyncio.gather(client_to_upstream(), upstream_to_client())
+    except Exception as e:
+        logger.warning(f"[proxy] WebSocket 代理失败 {path[:60]}: {e}")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
 @proxy_app.api_route("/{path:path}", methods=["GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "PATCH"])
 async def proxy_catch_all(path: str, request: Request):
     """反代入口：按规则分发请求"""
     full_path = "/" + path if not path.startswith("/") else path
 
-    # 健康检查
-    if full_path in ("/", "/proxy/health"):
+    # 健康检查（独立路径，不占用根路径；根路径回源 Emby 保持客户端兼容）
+    if full_path == "/proxy/health":
         return Response(content="STRMhub Emby Proxy OK", status_code=200)
 
     # STRMhub 302 下载接口 → 转发到主应用（/api/115/url/...）
@@ -512,6 +558,13 @@ async def proxy_to_main_app(request: Request):
     except Exception as e:
         logger.warning(f"[proxy] 转发主应用失败 {request.url.path}: {e}")
         return JSONResponse(status_code=502, content={"detail": f"转发主应用失败: {e}"})
+
+
+# WebSocket 代理路由：Emby 客户端连接服务器必须建立 WebSocket，
+# 反代把 /embywebsocket 和 /socket 的升级请求转发到真实 Emby
+@proxy_app.websocket("/{path:path}")
+async def proxy_ws_route(websocket: WebSocket, path: str):
+    await proxy_websocket(websocket, path)
 
 
 # ===== 反代服务生命周期管理 =====
