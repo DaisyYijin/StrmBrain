@@ -85,6 +85,7 @@ class SyncService:
         min_size_bytes = min_video_size_mb * 1024 * 1024 if min_video_size_mb > 0 else 0
 
         logger.info(f"[sync] 全量同步开始: source_cid={source_cid}, local_dir={local_media_dir}, video_exts={video_exts}, image_exts={image_exts}, data_exts={data_exts}, min_size={min_size_bytes}")
+        cls._log_rate_config()
 
         result = {
             "total": 0,
@@ -186,6 +187,7 @@ class SyncService:
         min_size_bytes = min_video_size_mb * 1024 * 1024 if min_video_size_mb > 0 else 0
 
         logger.info(f"[sync] 增量同步开始: source_cid={source_cid}, local_dir={local_media_dir}")
+        cls._log_rate_config()
 
         result = {
             "total": 0,
@@ -478,6 +480,21 @@ class SyncService:
         """从数据库读取 STRM 直链配置"""
         from app.core.db_helper import read_setting
         return read_setting("strm")
+
+    @classmethod
+    def _log_rate_config(cls):
+        """记录当前生效的 API 请求间隔配置（仅日志，不影响业务）"""
+        try:
+            from app.core.db_helper import get_api_intervals
+            iv = get_api_intervals()
+            logger.info(
+                f"[sync] API 请求间隔: 列表 {iv.get('file_list_interval', 0.3)}s / "
+                f"文件间 {iv.get('sync_file_interval', 0.3)}s / "
+                f"写操作 {iv.get('download_url_interval', 0.3)}s，"
+                f"限流冷却 {iv.get('retry_cooldown', 30.0)}s"
+            )
+        except Exception as e:
+            logger.warning(f"[sync] 读取 API 间隔配置失败: {e}")
 
     @classmethod
     def _generate_strm_content(
