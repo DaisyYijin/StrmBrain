@@ -342,6 +342,13 @@ async def handle_playback_info(request: Request):
         src.pop("TranscodingUrl", None)
         src.pop("TranscodingSubProtocol", None)
         src.pop("TranscodingContainer", None)
+        # 删除 Path 字段：STRM 内容是内部 URL（如 http://172.17.0.1:6060/...），
+        # 客户端看到 HTTP 形式的 Path 会尝试 DirectPlay 直连该 URL。
+        # 删除后客户端只能走 DirectStreamUrl → 反代 stream 接口 → 服务器端跟随获取 CDN 直链。
+        # 参考 emby2Alist：PlaybackInfo 不影响播放流程，stream 阶段才获取路径并跟随重定向。
+        path = src.get("Path", "")
+        if path and (path.lower().endswith(".strm") or "pickcode=" in path or "account_id=" in path):
+            src.pop("Path", None)
         # DirectStreamUrl 指向反代自身的 stream 接口（相对路径，客户端基于反代地址拼接）
         src["DirectStreamUrl"] = (
             f"/Videos/{item_id}/stream?MediaSourceId={src_id}"
