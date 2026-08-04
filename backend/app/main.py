@@ -87,6 +87,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"版本检查后台任务启动失败: {e}", exc_info=True)
 
+    # 启动 Emby 反代服务（qmediasync 方案，统一接管播放请求）
+    try:
+        from app.services.emby_proxy import start_proxy
+        status = start_proxy()
+        if status.get("running"):
+            logger.info(f"Emby 反代服务已启动，端口 {status.get('current_port')}")
+    except Exception as e:
+        logger.warning(f"Emby 反代服务启动失败: {e}", exc_info=True)
+
     logger.info(f"STRMhub started (AUTH_ENABLED={AUTH_ENABLED})")
     yield
     await shutdown_scheduler()
@@ -116,6 +125,13 @@ async def lifespan(app: FastAPI):
         shutdown_upload_queue()
     except Exception as e:
         logger.warning(f"停止上传队列时异常: {e}")
+
+    # 停止 Emby 反代服务
+    try:
+        from app.services.emby_proxy import stop_proxy
+        stop_proxy()
+    except Exception as e:
+        logger.warning(f"停止 Emby 反代服务时异常: {e}")
 
     logger.info("Application closed")
 

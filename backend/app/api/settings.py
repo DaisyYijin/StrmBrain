@@ -50,6 +50,55 @@ async def test_emby(payload: EmbySettings):
     return ApiResponse(code=0 if ok else 500, message=msg)
 
 
+# ===== Emby 反代配置 =====
+
+class EmbyProxySettings(BaseModel):
+    """Emby 反代配置"""
+    enabled: bool = False
+    port: int = 8787
+
+
+@router.get("/emby-proxy", response_model=ApiResponse)
+async def get_emby_proxy_settings():
+    """获取 Emby 反代配置与状态"""
+    from app.services.emby_proxy import get_status
+    status = get_status()
+    return ApiResponse(data={
+        "enabled": status.get("enabled", False),
+        "port": status.get("port", 8787),
+        "running": status.get("running", False),
+        "emby_configured": status.get("emby_configured", False),
+        "current_port": status.get("current_port", 0),
+    })
+
+
+@router.post("/emby-proxy", response_model=ApiResponse)
+async def save_emby_proxy_settings(payload: EmbyProxySettings):
+    """保存 Emby 反代配置并应用（变更端口或启停时自动重启服务）"""
+    if payload.port < 1 or payload.port > 65535:
+        return ApiResponse(code=400, message="端口范围无效（1-65535）")
+    from app.services.emby_proxy import save_config
+    status = save_config(payload.enabled, payload.port)
+    running = status.get("running", False)
+    if payload.enabled and not running:
+        return ApiResponse(code=500, message="反代服务启动失败，请检查 Emby 配置和日志")
+    return ApiResponse(message="已保存" if not payload.enabled else "反代服务已启动")
+
+
+@router.post("/emby-proxy/restart", response_model=ApiResponse)
+async def restart_emby_proxy():
+    """重启 Emby 反代服务"""
+    from app.services.emby_proxy import get_status, start_proxy, stop_proxy
+    status = get_status()
+    if not status.get("enabled"):
+        return ApiResponse(code=400, message="反代未启用，请先启用")
+    stop_proxy()
+    status = start_proxy()
+    if status.get("running"):
+        return ApiResponse(message="反代服务已重启")
+    return ApiResponse(code=500, message="重启失败，请检查日志")
+
+
 @router.get("/tmdb", response_model=ApiResponse)
 async def get_tmdb_settings():
     """获取 TMDB 设置"""
@@ -126,6 +175,36 @@ async def save_strm_settings(payload: StrmSettings):
     """保存 STRM 配置"""
     save_setting("strm", payload.model_dump())
     return ApiResponse(message="已保存")
+
+
+# ===== STRM 播放安全配置 =====
+
+@router.get("/strm-security", response_model=ApiResponse)
+async def get_strm_security():
+    """获取 STRM 播放安全配置"""
+    from app.services.strm_token import get_security_info
+    return ApiResponse(data=get_security_info())
+
+
+class StrmSecurityUpdate(BaseModel):
+    """STRM 安全配置更新"""
+    enabled: bool = True
+
+
+@router.post("/strm-security", response_model=ApiResponse)
+async def save_strm_security(payload: StrmSecurityUpdate):
+    """更新 STRM 播放安全配置（启用/禁用 Token 验证）"""
+    from app.services.strm_token import set_enabled
+    set_enabled(payload.enabled)
+    return ApiResponse(message="已保存")
+
+
+@router.post("/strm-security/rotate", response_model=ApiResponse)
+async def rotate_strm_token():
+    """轮换 STRM 播放 Token（旧 Token 立即失效，需重新生成 STRM 文件）"""
+    from app.services.strm_token import rotate_token
+    rotate_token()
+    return ApiResponse(message="Token 已轮换，请重新执行全量同步以更新 STRM 文件")
 
 
 # ===== Emby 入库刷新配置 =====

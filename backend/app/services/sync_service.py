@@ -488,6 +488,7 @@ class SyncService:
         生成 302 跳转模式的 .strm 文件内容。
         STRM 文件指向本服务接口，播放时实时获取 115 直链并 302 重定向。
         account_id 固定使用 0（自动选择第一个有效账号），避免账号删除/重建后 STRM 失效。
+        URL 包含 token 参数用于安全验证，防止未授权访问。
         """
         settings = settings or cls._load_strm_settings()
 
@@ -499,7 +500,15 @@ class SyncService:
         from urllib.parse import quote
         full_path = f"{parent_path}/{file_name}" if parent_path else file_name
         encoded_path = quote(full_path, safe="/")
-        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id=0"
+
+        # 获取 STRM 播放 Token（自动生成，写入 URL 供播放时验证）
+        from app.services.strm_token import get_token, is_enabled
+        token_part = ""
+        if is_enabled():
+            token = get_token()
+            token_part = f"&t={token}"
+
+        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id=0{token_part}"
 
     @classmethod
     def _save_manifest(cls, local_root: Path, manifest: dict):

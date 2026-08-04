@@ -476,6 +476,17 @@
         }
         .help-tip:hover .tip-text { display: block; }
 
+        /* 状态指示灯 */
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .status-dot-on { background: #67c23a; box-shadow: 0 0 6px rgba(103,194,58,.6); }
+        .status-dot-off { background: #c0c4cc; }
+
         /* 滑轨开关 */
         .toggle-switch {
             position: relative;
@@ -2810,6 +2821,81 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- STRM 播放安全配置 -->
+                        <div class="card" style="margin-top:16px;">
+                            <div class="card-title">STRM 播放安全<span class="help-tip">?<span class="tip-text">为 302 播放接口启用 Token 验证，防止未授权的 STRM URL 被外部直接调用。轮换 Token 后需重新执行全量同步以更新所有 STRM 文件。</span></span></div>
+
+                            <div class="form-group">
+                                <label>Token 验证<span class="help-tip">?<span class="tip-text">开启后，302 播放接口会验证 URL 中的 t 参数。STRM 文件生成时自动写入当前 Token。</span></span></label>
+                                <div class="toggle-switch" @click="strmSecurity.enabled = !strmSecurity.enabled; saveStrmSecurity()">
+                                    <div class="toggle-slider" :class="{ 'toggle-right': strmSecurity.enabled }"></div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': !strmSecurity.enabled }">关闭</div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': strmSecurity.enabled }">开启</div>
+                                </div>
+                            </div>
+
+                            <div class="form-group" v-if="strmSecurity.has_token">
+                                <label>当前 Token<span class="help-tip">?<span class="tip-text">出于安全考虑仅显示前缀，轮换后旧 Token 立即失效。</span></span></label>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <code style="flex:1; font-size:12px; color:#606266; background:#f5f7fa; padding:8px 12px; border-radius:6px; word-break:break-all;">{{ strmSecurity.token_preview }}</code>
+                                    <button class="btn btn-warning" @click="rotateStrmToken" style="flex-shrink:0;">轮换 Token</button>
+                                </div>
+                            </div>
+
+                            <div class="info-box info-box--bordered" style="margin-top:12px;">
+                                <div style="font-size:12px; color:#909399; line-height:1.6;">
+                                    STRM 文件 URL 格式：<code style="word-break:break-all;">/api/115/url/video.mkv?pickcode=xxx&account_id=0&t=sh_strm_xxxx</code><br>
+                                    轮换 Token 后，旧 STRM 文件中的 Token 将失效，需重新同步。
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Emby 反代配置 -->
+                        <div class="card" style="margin-top:16px;">
+                            <div class="card-title">Emby 反代（302 播放）<span class="help-tip">?<span class="tip-text">参考 qmediasync 方案：在独立端口提供 Emby 反向代理，拦截播放请求并读取 STRM 文件内容 302/307 跳转到 115 直链，同时强制客户端直连防止转码。</span></span></div>
+
+                            <!-- 运行状态 -->
+                            <div class="form-group">
+                                <label>运行状态</label>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span class="status-dot" :class="{ 'status-dot-on': embyProxy.running, 'status-dot-off': !embyProxy.running }"></span>
+                                    <span style="font-size:13px;">
+                                        <template v-if="embyProxy.running">运行中（端口 {{ embyProxy.current_port }}）</template>
+                                        <template v-else-if="embyProxy.enabled && !embyProxy.emby_configured">已启用但 Emby 未配置完整</template>
+                                        <template v-else-if="embyProxy.enabled">未运行</template>
+                                        <template v-else>已停用</template>
+                                    </span>
+                                    <button class="btn btn-default btn-small" @click="restartEmbyProxy" v-if="embyProxy.running" style="margin-left:auto;">重启</button>
+                                </div>
+                            </div>
+
+                            <!-- 启用开关 -->
+                            <div class="form-group">
+                                <label>启用反代<span class="help-tip">?<span class="tip-text">开启后自动在独立端口启动 Emby 反代服务，Emby 客户端将播放请求发送到反代端口。</span></span></label>
+                                <div class="toggle-switch" @click="embyProxy.enabled = !embyProxy.enabled; saveEmbyProxy()">
+                                    <div class="toggle-slider" :class="{ 'toggle-right': embyProxy.enabled }"></div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': !embyProxy.enabled }">关闭</div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': embyProxy.enabled }">开启</div>
+                                </div>
+                            </div>
+
+                            <!-- 端口 -->
+                            <div class="form-group">
+                                <label>反代端口<span class="help-tip">?<span class="tip-text">Emby 客户端通过此端口访问反代服务。修改后自动重启反代。</span></span></label>
+                                <input type="number" v-model.number="embyProxy.port" min="1" max="65535" class="code" style="max-width:160px;">
+                            </div>
+
+                            <div class="info-box info-box--bordered" style="margin-top:12px;">
+                                <div style="font-size:12px; color:#909399; line-height:1.6;">
+                                    <b style="color:#606266;">使用方法：</b><br>
+                                    1. 先在「连接 Emby」中配置 Emby 地址和 API Key（反代依赖此配置）<br>
+                                    2. 开启反代后，将 Emby 客户端（或 Emby 设置中的服务器地址）改为<br>
+                                    <code style="word-break:break-all;">http://{{ windowHost }}:{{ embyProxy.port }}</code><br>
+                                    3. 反代会拦截播放请求：STRM 文件 → 读取内容 307 跳转 115 直链；本地视频 → 回源 Emby 处理
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <!-- /STRM 配置 -->
 
@@ -4667,6 +4753,23 @@
                 });
                 // STRM 生成示例（响应式）
                 const strmExample = reactive({ filename: '', content: '' });
+
+                // STRM 播放安全配置
+                const strmSecurity = reactive({
+                    enabled: true,
+                    token_preview: '',
+                    has_token: false,
+                });
+
+                // Emby 反代配置
+                const embyProxy = reactive({
+                    enabled: false,
+                    port: 8787,
+                    running: false,
+                    emby_configured: false,
+                    current_port: 0,
+                });
+                const windowHost = computed(() => window.location.hostname || 'localhost');
 
                 // Emby 入库刷新配置
                 const embySyncConfig = reactive({
@@ -6804,6 +6907,93 @@ av:
                     }
                 );
 
+                // ===== STRM 播放安全配置 =====
+                const loadStrmSecurity = async () => {
+                    try {
+                        const res = await api('/api/settings/strm-security');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmSecurity.enabled = data.data.enabled !== false;
+                            strmSecurity.token_preview = data.data.token_preview || '';
+                            strmSecurity.has_token = data.data.has_token === true;
+                        }
+                    } catch (e) { console.warn('[app] 加载 STRM 安全配置失败:', e); }
+                };
+
+                const saveStrmSecurity = async () => {
+                    try {
+                        const res = await api('/api/settings/strm-security', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: strmSecurity.enabled })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) showToast('STRM 安全配置已保存');
+                    } catch (e) { console.warn('[app] 保存 STRM 安全配置失败:', e); }
+                };
+
+                const rotateStrmToken = async () => {
+                    if (!confirm('轮换 Token 后，旧 STRM 文件中的 Token 将立即失效，需重新执行全量同步。确定轮换？')) return;
+                    try {
+                        const res = await api('/api/settings/strm-security/rotate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('Token 已轮换，请重新执行全量同步');
+                            await loadStrmSecurity();
+                        } else {
+                            showToast(data.message || '轮换失败');
+                        }
+                    } catch (e) { showToast('轮换失败: ' + e.message); }
+                };
+
+                // ===== Emby 反代配置 =====
+                const loadEmbyProxy = async () => {
+                    try {
+                        const res = await api('/api/settings/emby-proxy');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            embyProxy.enabled = data.data.enabled === true;
+                            embyProxy.port = data.data.port || 8787;
+                            embyProxy.running = data.data.running === true;
+                            embyProxy.emby_configured = data.data.emby_configured === true;
+                            embyProxy.current_port = data.data.current_port || 0;
+                        }
+                    } catch (e) { console.warn('[app] 加载 Emby 反代配置失败:', e); }
+                };
+
+                const saveEmbyProxy = async () => {
+                    try {
+                        const res = await api('/api/settings/emby-proxy', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: embyProxy.enabled, port: embyProxy.port || 8787 })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已保存');
+                            await loadEmbyProxy();
+                        } else {
+                            showToast(data.message || '保存失败');
+                            await loadEmbyProxy();
+                        }
+                    } catch (e) { console.warn('[app] 保存 Emby 反代配置失败:', e); }
+                };
+
+                const restartEmbyProxy = async () => {
+                    try {
+                        const res = await api('/api/settings/emby-proxy/restart', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                        });
+                        const data = await res.json();
+                        showToast(data.message || '已重启');
+                        await loadEmbyProxy();
+                    } catch (e) { showToast('重启失败: ' + e.message); }
+                };
+
                 // ===== Emby 入库刷新配置 =====
                 const loadEmbySyncSettings = async () => {
                     try {
@@ -7555,6 +7745,8 @@ av:
                         await loadApiInterval();
                         await loadTmdbSettings();
                         await loadStrmSettings();
+                        await loadStrmSecurity();
+                        await loadEmbyProxy();
                         await loadEmbySyncSettings();
                         await loadEmbyNotifySettings();
                         await loadNotifySettings();
@@ -8508,6 +8700,8 @@ av:
                     tmdb, loadTmdbSettings, saveTmdbSettings, testTmdbSettings,
                     // STRM 配置
                     strmConfig, strmExample, loadStrmSettings, saveStrmSettings, updateStrmExample,
+                    strmSecurity, loadStrmSecurity, saveStrmSecurity, rotateStrmToken,
+                    embyProxy, windowHost, loadEmbyProxy, saveEmbyProxy, restartEmbyProxy,
                     // Emby 入库刷新 / 通知配置
                     embySyncConfig, embyNotifyConfig, loadEmbySyncSettings, saveEmbySyncSettings, loadEmbyNotifySettings, saveEmbyNotifySettings,
                     // 通知配置

@@ -101,13 +101,20 @@ async def get_download_url(
     filename: str,
     pickcode: str,
     account_id: int,
+    t: str = "",
 ):
     """
     获取 115 文件下载链接（302 重定向）
-    URL 格式: /api/115/url/video.mp4?pickcode=xxx&account_id=1
+    URL 格式: /api/115/url/video.mp4?pickcode=xxx&account_id=0&t=token
     路径中的文件名（含扩展名）供 Emby 识别视频类型，pickcode 才是真正的文件标识。
+    t 参数为 STRM 播放 Token，用于安全验证（防止未授权 URL 被外部直接调用）。
     """
     from fastapi.responses import RedirectResponse
+
+    # Token 安全验证
+    from app.services.strm_token import verify_token
+    if not verify_token(t):
+        raise HTTPException(status_code=403, detail="Token 验证失败，请重新生成 STRM 文件")
 
     # account_id=0 时自动取第一个有效账号
     if account_id:
@@ -129,4 +136,10 @@ async def get_download_url(
         # 获取失败可能是 cookies 过期，标记账号需要检查
         raise HTTPException(status_code=502, detail="获取下载链接失败，cookies 可能已过期")
 
-    return RedirectResponse(url=url, status_code=302)
+    # 禁止缓存 302 响应，避免过期直链被缓存
+    response = RedirectResponse(url=url, status_code=302)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
