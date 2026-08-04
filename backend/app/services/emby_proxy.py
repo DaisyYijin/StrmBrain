@@ -401,39 +401,49 @@ async def handle_stream(request: Request):
             client_ip = fwd.split(",")[0].strip()
     play_label = f"[proxy] 302 播放: {file_name} (客户端: {client}, IP: {client_ip or '未知'})"
 
-    # 判断是否为 STRM 文件
-    if emby_path.lower().endswith(".strm"):
-        content = _read_strm_file(emby_path)
-        if content:
-            target = _resolve_strm_target(content)
-            if target:
-                # 服务器端跟随：STRM 内容指向本服务 302 接口时，由反代请求主应用
-                # 获取 115 直链，再 302 给客户端（参考 emby2Alist fetchLastLink）。
-                # 客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
-                if _is_self_strm_url(target):
-                    final_url = await _follow_strm_url(target)
-                    if final_url:
-                        logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
-                        response = RedirectResponse(url=final_url, status_code=302)
-                        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-                        response.headers["Pragma"] = "no-cache"
-                        response.headers["Expires"] = "0"
-                        response.headers["Referrer-Policy"] = "no-referrer"
-                        return response
-                    # 跟随失败则回源，让 Emby 处理（避免把不可达的内部地址给客户端）
-                    logger.warning(f"[proxy] 服务器端跟随失败，回源: {play_label}")
-                    return await proxy_origin(request)
-                # 普通直链（如 115 CDN 等客户端可访问的地址）直接 307 跳转
-                logger.info(f"{play_label} -> {target[:120]}")
-                response = RedirectResponse(url=target, status_code=307)
-                # 禁止缓存，避免过期直链被缓存
-                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-                response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
-                return response
-            logger.warning(f"[proxy] STRM 内容为空: {emby_path}")
+    # 判断是否为 STRM 文件。
+    # 兼容两种情况：
+    # 1) emby_path 以 .strm 结尾（常规 STRM 文件路径）
+    # 2) emby_path 本身是 URL 形式（如 ...mkv?pickcode=xxx，STRM 内容被 Emby 存成 Path）
+    is_strm = emby_path.lower().endswith(".strm") or "pickcode=" in emby_path or "account_id=" in emby_path
+    if is_strm:
+        if emby_path.lower().endswith(".strm"):
+            # 情况 1：读取 STRM 文件内容
+            content = _read_strm_file(emby_path)
+            if content:
+                target = _resolve_strm_target(content)
+            else:
+                logger.warning(f"[proxy] 读取 STRM 文件失败（回源处理）: {emby_path}")
+                return await proxy_origin(request)
         else:
-            logger.warning(f"[proxy] 读取 STRM 文件失败（回源处理）: {emby_path}")
+            # 情况 2：emby_path 本身就是 STRM 内容 URL，直接用
+            target = _resolve_strm_target(emby_path)
+        if target:
+            # 服务器端跟随：STRM 内容指向本服务 302 接口时，由反代请求主应用
+            # 获取 115 直链，再 302 给客户端（参考 emby2Alist fetchLastLink）。
+            # 客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
+            if _is_self_strm_url(target):
+                final_url = await _follow_strm_url(target)
+                if final_url:
+                    logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
+                    response = RedirectResponse(url=final_url, status_code=302)
+                    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                    response.headers["Pragma"] = "no-cache"
+                    response.headers["Expires"] = "0"
+                    response.headers["Referrer-Policy"] = "no-referrer"
+                    return response
+                # 跟随失败则回源，让 Emby 处理（避免把不可达的内部地址给客户端）
+                logger.warning(f"[proxy] 服务器端跟随失败，回源: {play_label}")
+                return await proxy_origin(request)
+            # 普通直链（如 115 CDN 等客户端可访问的地址）直接 307 跳转
+            logger.info(f"{play_label} -> {target[:120]}")
+            response = RedirectResponse(url=target, status_code=307)
+            # 禁止缓存，避免过期直链被缓存
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+        logger.warning(f"[proxy] STRM 内容为空: {emby_path}")
     else:
         logger.info(f"[proxy] 本地媒体回源: {file_name}")
 
@@ -460,8 +470,8 @@ async def proxy_websocket(websocket: WebSocket, path: str):
     if websocket.url.query:
         upstream += "?" + websocket.url.query
     try:
-        # 传递客户端的子协议（Emby 客户端可能指定）
-        subprotocols = websocket.headers.get_all("sec-websocket-protocol") or None
+        # 传递客户端的子协议（Emby 客户端可能指定）；starlette Headers 用 getlist
+        subprotocols = websocket.headers.getlist("sec-websocket-protocol") or None
         async with websockets.connect(upstream, subprotocols=subprotocols) as upstream_ws:
             async def client_to_upstream():
                 try:
