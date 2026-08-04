@@ -445,7 +445,7 @@ async def upload_sync(payload: UploadSyncRequest):
             loop=_loop,
         )
         await progress_manager.complete_task(
-            f"上传同步完成: 上传 {len(result.get('uploaded', []))}，跳过 {result.get('skipped', 0)}"
+            f"上传同步完成: 入队 {len(result.get('queued', []))}，跳过 {result.get('skipped', 0)}"
         )
         # 根据配置发送通知
         from app.core.db_helper import read_setting
@@ -496,6 +496,42 @@ async def get_sync_schedule():
     """获取已保存的同步定时计划"""
     config = SyncService.load_schedule()
     return ApiResponse(data=config)
+
+
+# ============ 上传队列状态 ============
+
+@router.get("/upload-queue/status", response_model=ApiResponse)
+async def get_upload_queue_status():
+    """获取上传队列状态统计"""
+    from app.services.upload_queue import get_upload_queue
+    queue = get_upload_queue()
+    return ApiResponse(data=queue.get_status())
+
+
+@router.get("/upload-queue/tasks", response_model=ApiResponse)
+async def get_upload_queue_tasks(limit: int = 20):
+    """获取上传队列最近的任务列表"""
+    from app.services.upload_queue import get_upload_queue
+    queue = get_upload_queue()
+    return ApiResponse(data=queue.get_recent_tasks(limit))
+
+
+@router.post("/upload-queue/clear", response_model=ApiResponse)
+async def clear_upload_queue():
+    """清除已完成/已跳过/已失败的上传任务"""
+    from app.services.upload_queue import get_upload_queue
+    queue = get_upload_queue()
+    cleared = queue.clear_finished()
+    return ApiResponse(data={"cleared": cleared})
+
+
+@router.post("/upload-queue/retry", response_model=ApiResponse)
+async def retry_failed_upload_tasks():
+    """重试所有失败的上传任务"""
+    from app.services.upload_queue import get_upload_queue
+    queue = get_upload_queue()
+    count = queue.retry_failed()
+    return ApiResponse(data={"retried": count})
 
 
 def _parse_exts_str(exts_str: str) -> set:

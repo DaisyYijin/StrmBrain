@@ -215,14 +215,14 @@ class NotificationService:
         """同步完成通知"""
         total = result.get("total", 0)
         synced = result.get("synced", [])
-        uploaded = result.get("uploaded", [])
+        queued = result.get("queued", [])
         skipped = result.get("skipped", 0)
         errors = result.get("errors", [])
 
         if sync_type == "upload":
             type_label = "上传同步"
-            action_label = "上传"
-            items = uploaded
+            action_label = "入队"
+            items = queued
         elif sync_type == "full":
             type_label = "全量同步"
             action_label = "新增同步"

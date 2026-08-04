@@ -72,6 +72,40 @@ async def add_task(payload: AddTaskRequest):
     return ApiResponse(data=result)
 
 
+# ===== 目录文件就绪检测 =====
+
+class CheckDirReadyRequest(BaseModel):
+    account_id: int = 0
+    cid: str = ""
+
+
+@router.post("/check_dir_ready", response_model=ApiResponse)
+async def check_dir_ready(payload: CheckDirReadyRequest):
+    """检查指定 115 目录下是否有文件（转存/下载就绪检测）"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.cid:
+        return ApiResponse(code=400, message="请提供目录 cid")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.list_files(cookies, payload.cid, 0, 10)
+
+    if isinstance(result, dict) and result.get("_error"):
+        return ApiResponse(code=500, message=f"检测失败: {result['_error']}")
+
+    # 115 返回格式: {data: [...], count: N}
+    data_list = result.get("data", []) if isinstance(result, dict) else []
+    file_count = len(data_list) if isinstance(data_list, list) else 0
+
+    return ApiResponse(data={
+        "ready": file_count > 0,
+        "file_count": file_count,
+    })
+
+
 @router.post("/list", response_model=ApiResponse)
 async def list_tasks(payload: ListTaskRequest):
     """获取离线下载任务列表"""

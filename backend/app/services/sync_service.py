@@ -696,7 +696,7 @@ class SyncService:
         except Exception as e:
             logger.warning(f"[sync] 清理空目录失败: {e}")
 
-    # ============ 上传同步 ============
+    # ============ 上传同步（队列化） ============
 
     # 默认上传后缀（Emby 刮削产生的元数据文件）
     DEFAULT_UPLOAD_EXTS = {".nfo", ".jpg", ".jpeg", ".png", ".srt", ".ass", ".ssa", ".sub", ".idx"}
@@ -713,22 +713,24 @@ class SyncService:
         loop: Optional[asyncio.AbstractEventLoop] = None,
     ) -> dict:
         """
-        上传同步：将本地目录中的元数据文件（nfo、图片、字幕等）上传到 115 网盘
+        上传同步：将本地目录中的元数据文件（nfo、图片、字幕等）加入持久化上传队列
 
         - 扫描本地目录下匹配 upload_exts 的文件
-        - 跳过 .strm 文件和清单文件
+        - 跳过 .strm 文件
         - 对比 115 网盘已有文件，跳过已存在的（或按 overwrite 配置覆盖）
-        - 自动创建不存在的目录
+        - 自动创建不存在的网盘目录
+        - 将待上传文件加入持久化队列，由后台 worker 异步执行上传
         - loop: 主事件循环，用于进度上报
         """
         from app.core.progress import progress_manager
+        from app.services.upload_queue import UploadQueue, UploadTask
 
         upload_exts = upload_exts or cls.DEFAULT_UPLOAD_EXTS
-        logger.info(f"[sync-upload] 上传同步开始: source_cid={source_cid}, local_dir={local_media_dir}, exts={upload_exts}, overwrite={overwrite}")
+        logger.info(f"[sync-upload] 上传同步开始（队列模式）: source_cid={source_cid}, local_dir={local_media_dir}, exts={upload_exts}, overwrite={overwrite}")
 
         result = {
             "total": 0,
-            "uploaded": [],
+            "queued": [],
             "skipped": 0,
             "errors": [],
         }
@@ -741,7 +743,7 @@ class SyncService:
             except Exception as e:
                 logger.warning(f"[sync-upload] 无法创建本地媒体目录: {local_media_dir} - {e}")
                 return {
-                    "total": 0, "uploaded": [], "skipped": 0,
+                    "total": 0, "queued": [], "skipped": 0,
                     "errors": [{"name": "", "error": f"无法创建本地媒体目录: {e}"}],
                 }
 
@@ -766,14 +768,14 @@ class SyncService:
 
         # 2. 列出 115 网盘已有文件（用于去重判断）
         logger.info(f"[sync-upload] 正在扫描 115 网盘已有文件...")
-        existing_files: dict[str, str] = {}  # "parent_path/filename" → file_id
+        existing_files: set[str] = set()  # "parent_path/filename"
         try:
             remote_files = Client115Service.list_all_files_with_meta(
                 cookies, source_cid, upload_exts, min_size=0, recursive=True
             )
             for f in remote_files:
                 key = f"{f.get('parent_path', '')}/{f['name']}"
-                existing_files[key] = f.get("file_id", "")
+                existing_files.add(key)
             logger.info(f"[sync-upload] 115 网盘已有 {len(existing_files)} 个匹配文件")
         except Exception as e:
             logger.warning(f"[sync-upload] 扫描 115 文件列表失败: {e}")
@@ -784,7 +786,10 @@ class SyncService:
         # 更新进度总数
         cls._safe_schedule(loop, progress_manager.update_total(len(local_files)))
 
-        # 4. 逐个上传
+        # 4. 生成上传任务并加入队列
+        queue = UploadQueue.get_instance()
+        tasks_to_add: list[UploadTask] = []
+
         for idx, local_file in enumerate(local_files):
             rel_path = local_file.relative_to(local_root)
             rel_path_str = str(rel_path).replace("\\", "/")
@@ -795,18 +800,11 @@ class SyncService:
 
             # 检查是否已存在
             exist_key = f"{parent_path}/{filename}"
-            exist_file_id = existing_files.get(exist_key)
-
-            if exist_file_id and not overwrite:
+            if exist_key in existing_files and not overwrite:
                 result["skipped"] += 1
                 continue
 
             try:
-                # 覆盖模式：先删除旧文件
-                if exist_file_id and overwrite:
-                    Client115Service.delete_files(cookies, [exist_file_id])
-                    logger.info(f"[sync-upload] 已删除旧文件: {exist_key}")
-
                 # 查找或创建目标目录
                 if parent_path in dir_cid_cache:
                     dest_cid = dir_cid_cache[parent_path]
@@ -819,22 +817,35 @@ class SyncService:
                         result["errors"].append({"name": filename, "error": "创建网盘目录失败"})
                         continue
 
-                # 上传文件
-                ok = Client115Service.upload_file(cookies, str(local_file), filename, dest_cid)
-                if ok:
-                    result["uploaded"].append({"name": filename, "path": rel_path_str})
-                else:
-                    result["errors"].append({"name": filename, "error": "上传失败"})
+                # 获取文件大小
+                try:
+                    file_size = local_file.stat().st_size
+                except Exception:
+                    file_size = 0
+
+                # 创建上传任务
+                task = UploadTask(
+                    local_path=str(local_file),
+                    filename=filename,
+                    parent_path=parent_path,
+                    dest_cid=dest_cid,
+                    cookies=cookies,
+                    account_id=account_id,
+                    file_size=file_size,
+                    overwrite=overwrite,
+                )
+                tasks_to_add.append(task)
+                result["queued"].append({"name": filename, "path": rel_path_str})
 
             except Exception as e:
                 result["errors"].append({"name": filename, "error": str(e)})
 
-            # 文件间等待
-            _interval = get_api_intervals().get("sync_file_interval", 0.3)
-            if _interval > 0:
-                time.sleep(_interval)
+        # 批量加入队列
+        if tasks_to_add:
+            added = queue.add_tasks(tasks_to_add)
+            logger.info(f"[sync-upload] {added}/{len(tasks_to_add)} 个任务已加入上传队列（去重后）")
 
-        summary = f"共 {result['total']} 个文件，上传 {len(result['uploaded'])}，跳过 {result['skipped']}，失败 {len(result['errors'])}"
+        summary = f"共 {result['total']} 个文件，入队 {len(result['queued'])}，跳过 {result['skipped']}，失败 {len(result['errors'])}"
         logger.info(f"[sync-upload] 上传同步完成: {summary}")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
@@ -857,7 +868,7 @@ class SyncService:
         读取 emby_sync 配置中的 auto_upload 和 upload_delay：
         - auto_upload=False 时直接返回
         - 等待 upload_delay 秒让 Emby 完成刮削
-        - 调用 upload_sync 执行实际上传
+        - 调用 upload_sync 将文件加入持久化上传队列，由后台 worker 异步执行
         """
         from app.core.db_helper import read_setting
 
@@ -874,7 +885,7 @@ class SyncService:
             logger.info(f"[sync-upload] 等待 {delay} 秒后开始上传（等待 Emby 刮削完成）")
             await asyncio.sleep(delay)
 
-        logger.info("[sync-upload] 开始执行刮削后自动上传")
+        logger.info("[sync-upload] 开始执行刮削后自动上传（队列模式）")
         try:
             result = await asyncio.to_thread(
                 cls.upload_sync,
@@ -885,7 +896,7 @@ class SyncService:
                 loop=loop,
             )
             logger.info(
-                f"[sync-upload] 自动上传完成: 上传 {len(result.get('uploaded', []))}, "
+                f"[sync-upload] 自动上传任务已入队: 入队 {len(result.get('queued', []))}, "
                 f"跳过 {result.get('skipped', 0)}, 失败 {len(result.get('errors', []))}"
             )
             return result

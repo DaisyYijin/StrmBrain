@@ -1,36 +1,53 @@
+# ============================================================
+# STRMhub Docker Compose 部署配置(全注释版)
+# 用法:docker compose up -d   停止:docker compose down
+# 数据存储:全部使用宿主机相对路径挂载(bind mount),
+#          数据保存在 <docker-compose.yml所在目录>/strmhub/ 文件夹下
+# 备份/迁移:直接拷贝整个 strmhub/ 文件夹即可,无需 docker volume 命令
+# ============================================================
+
+# 顶层 services:定义要运行的服务(可扩展多个服务,此处只有 strmhub 一个)
 services:
+  # 服务名 strmhub
   strmhub:
-    # 方式一：使用 GitHub Actions 自动构建的镜像（推荐，无需本地构建）
+    # 方式一:使用 GitHub Actions 自动构建的镜像(推荐,无需本地构建)
+    # 镜像支持 amd64 / arm64 双架构,升级时用 docker compose pull 拉新版本
     image: ghcr.io/daisyyijin/strmhub:latest
 
-    # 方式二：本地构建（注释掉 image，取消注释 build）
+    # 方式二:本地构建(注释掉 image,取消注释 build,使用本地 Dockerfile)
     # build: .
 
+    # 容器名:docker ps 中显示的名字
     container_name: strmhub
+
+    # 重启策略:除非手动 docker stop,否则容器崩溃或服务器重启后自动拉起
     restart: unless-stopped
+
+    # 端口映射:宿主机 8000 端口 → 容器 8000 端口
+    # 改左侧数字可换访问端口,如 "9000:8000" 则用 http://IP:9000 访问
     ports:
       - "8000:8000"
-    volumes:
-      # 运行数据持久化（账号、Cookie、同步清单、备份等）
-      - strmhub_data:/app/data
-      # 核心配置持久化（settings.json、local_account.json、sync_schedule.json 等）
-      - strmhub_config:/app/config
-      # 日志持久化（运行日志文件）
-      - strmhub_log:/app/log
-      # STRM 文件输出目录（供 Emby/Jellyfin 等媒体服务器读取）
-      - strmhub_media:/media
-    environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - AUTH_ENABLED=true
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin123
-      - SECRET_KEY=
-      - CORS_ORIGINS=
-      - TZ=Asia/Shanghai
 
-volumes:
-  strmhub_data:
-  strmhub_config:
-  strmhub_log:
-  strmhub_media:
+    # 数据持久化:全部使用宿主机相对路径挂载(bind mount)
+    # 路径相对于 docker-compose.yml 所在目录,数据直接落在 <compose目录>/strmhub/ 下
+    # 目录不存在时 Docker 会自动创建;不使用命名卷,因此无需顶层 volumes 声明
+    volumes:
+      # 运行数据(115 账号、Cookie、同步清单、备份等)
+      - strmhub/data:/app/data
+      # 核心配置(settings.json、local_account.json、sync_schedule.json 等)
+      - strmhub/config:/app/config
+      # 运行日志(直接打开宿主机文件夹即可查看)
+      - strmhub/log:/app/log
+      # STRM 文件输出目录(供 Emby/Jellyfin 等媒体服务器读取)
+      - strmhub/media:/media
+
+    # 环境变量:与 backend/.env.example 一致,可在此覆盖默认值
+    environment:
+      - HOST=0.0.0.0            # 监听地址,0.0.0.0 表示允许所有网卡访问
+      - PORT=8000               # 监听端口,需与上方 ports 右侧一致
+      - AUTH_ENABLED=true       # 登录验证开关,true 开启 / false 关闭
+      - ADMIN_USERNAME=admin    # 管理员账号(建议修改)
+      - ADMIN_PASSWORD=admin123 # 管理员密码(首次登录后请立即修改!)
+      - SECRET_KEY=             # JWT 签名密钥,留空则首次启动自动生成并保存
+      - CORS_ORIGINS=           # 允许跨域来源(逗号分隔),同源部署留空即可
+      - TZ=Asia/Shanghai        # 时区:容器内时间显示为北京时间

@@ -61,6 +61,13 @@ async def overview():
             "avatar_url": acc.get("avatar_url", ""),
         }
 
+    # 上传队列状态
+    try:
+        from app.services.upload_queue import get_upload_queue
+        result["upload_queue"] = get_upload_queue().get_status()
+    except Exception:
+        result["upload_queue"] = None
+
     return ApiResponse(data=result)
 
 

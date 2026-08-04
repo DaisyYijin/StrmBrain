@@ -67,6 +67,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"通知管理器初始化失败: {e}")
 
+    # 初始化上传队列
+    try:
+        from app.services.upload_queue import init_upload_queue
+        init_upload_queue()
+        logger.info("上传队列已初始化")
+    except Exception as e:
+        logger.warning(f"上传队列初始化失败: {e}")
+
     # 启动版本检查后台任务
     try:
         import asyncio
@@ -101,6 +109,13 @@ async def lifespan(app: FastAPI):
             global_watcher_manager.stop_all()
     except Exception as e:
         logger.warning(f"停止文件监控时异常: {e}", exc_info=True)
+
+    # 停止上传队列
+    try:
+        from app.services.upload_queue import shutdown_upload_queue
+        shutdown_upload_queue()
+    except Exception as e:
+        logger.warning(f"停止上传队列时异常: {e}")
 
     logger.info("Application closed")
 

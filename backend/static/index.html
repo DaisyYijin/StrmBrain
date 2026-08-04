@@ -4188,7 +4188,7 @@
                             <textarea v-model="clouddownload.urls" style="width:100%; min-height:100px; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-family:monospace; font-size:13px; resize:vertical;" placeholder="每行一个链接，自动识别类型&#10;115分享: https://115.com/s/xxxxx?password=yyyy&#10;磁力: magnet:?xt=urn:btih:xxxxx&#10;HTTP: https://example.com/file.zip"></textarea>
                         </div>
                         <div class="form-group">
-                            <label>保存目录<span class="help-tip">?<span class="tip-text">转存或下载的文件保存到此 115 网盘目录，留空=根目录。转存成功后会自动整理此目录中的文件。</span></span></label>
+                            <label>保存目录<span class="help-tip">?<span class="tip-text">转存或下载的文件保存到此 115 网盘目录，留空=根目录。转存或下载完成后会自动整理此目录中的文件。</span></span></label>
                             <div class="dir-picker" @click="openDirPicker('clouddownload_save')">
                                 <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
                                 <span>{{ clouddownload.savePath || '点击选择 115 网盘目录（留空=根目录）' }}</span>
@@ -4241,7 +4241,7 @@
                     <!-- 下载完成检测中提示 -->
                     <div v-if="clouddownload.pollingDownload" class="card" style="text-align:center; padding:20px; color:#e6a23c;">
                         <svg viewBox="0 0 24 24" style="width:24px; height:24px; animation:spin 1s linear infinite; vertical-align:middle; margin-right:8px;"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" fill="currentColor"/></svg>
-                        <template v-if="clouddownload.pollType === 'transfer'">正在等待 115 处理转存文件，完成后将自动整理</template>
+                        <template v-if="clouddownload.pollType === 'transfer'">正在等待 115 处理文件，检测到文件后将自动整理</template>
                         <template v-else>正在检测下载状态：{{ clouddownload.downloadCompleted }}/{{ clouddownload.downloadTotal }} 已完成，完成后将自动整理</template>
                         <button class="btn btn-sm" @click="stopDownloadPolling" style="margin-left:12px; padding:2px 12px;">取消</button>
                     </div>
@@ -4293,11 +4293,11 @@
                     </div>
                     <div class="dock-item" :class="{ active: tab === 'accounts' }" @click="tab = 'accounts'">
                         <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/></svg>
-                        <span>账号</span>
+                        <span>配置</span>
                     </div>
-                    <div class="dock-item" :class="{ active: tab === 'notification' }" @click="tab = 'notification'">
-                        <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-                        <span>通知</span>
+                    <div class="dock-item" :class="{ active: tab === 'clouddownload' }" @click="tab = 'clouddownload'">
+                        <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+                        <span>下载</span>
                     </div>
                     <div class="dock-item" :class="{ active: tab === 'organize' }" @click="tab = 'organize'">
                         <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
@@ -4307,13 +4307,13 @@
                         <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
                         <span>同步</span>
                     </div>
+                    <div class="dock-item" :class="{ active: tab === 'notification' }" @click="tab = 'notification'">
+                        <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                        <span>通知</span>
+                    </div>
                     <div class="dock-item" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">
                         <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
                         <span>工具</span>
-                    </div>
-                    <div class="dock-item" :class="{ active: tab === 'clouddownload' }" @click="tab = 'clouddownload'">
-                        <svg class="dock-item-icon" viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
-                        <span>下载</span>
                     </div>
                 </div>
             </nav>
@@ -8068,10 +8068,10 @@ av:
                                     } else if (downloadHashes.length > 0) {
                                         showToast(`已添加 ${ok} 个离线下载任务，将自动检测下载完成后整理`);
                                     } else {
-                                        showToast(`已添加 ${ok} 个离线下载任务，下载完成后请在整理页面手动整理`);
+                                        showToast(`已添加 ${ok} 个离线下载任务，将自动整理`);
                                     }
                                 } else {
-                                    showToast('离线下载添加成功，下载完成后请在整理页面手动整理');
+                                    showToast('离线下载添加成功，将自动整理');
                                 }
                             } else {
                                 showToast(data.message || '离线下载添加失败', 4000);
@@ -8084,6 +8084,9 @@ av:
                         // 有有效的 info_hash 时启动轮询检测
                         if (downloadHashes.length > 0 && clouddownload.saveCid) {
                             startDownloadPolling(downloadHashes);
+                        } else if (clouddownload.saveCid) {
+                            // 无 info_hash 但有保存目录，延迟后自动整理（类似转存流程）
+                            startTransferWait();
                         }
                     }
 
@@ -8189,7 +8192,11 @@ av:
                     clouddownload.receiving = false;
                 };
 
-                // 离线下载完成检测：只检查一次，完成后自动整理
+                // 离线下载完成检测：115 秒下载，短间隔快速确认
+                const POLL_INTERVAL = 5000;       // 轮询间隔 5 秒
+                const POLL_MAX_ATTEMPTS = 6;      // 最多轮询 6 次（约 30 秒）
+                let pollAttemptCount = 0;
+
                 const startDownloadPolling = (infoHashes) => {
                     if (clouddownload.pollTimer) {
                         clearTimeout(clouddownload.pollTimer);
@@ -8201,12 +8208,17 @@ av:
                     clouddownload.downloadCompleted = 0;
                     clouddownload.downloadProgress = `0/${infoHashes.length}`;
                     clouddownload.pollingDownload = true;
-                    showToast(`已添加 ${infoHashes.length} 个下载任务，等待 15 秒后检测完成状态...`);
-                    // 延迟 15 秒后执行一次性检测（给下载启动时间）
-                    clouddownload.pollTimer = setTimeout(pollDownloadStatus, 15000);
+                    pollAttemptCount = 0;
+                    showToast(`已添加 ${infoHashes.length} 个下载任务，检测完成后将自动整理`);
+                    // 3 秒后开始检测（115 离线下载通常秒级完成）
+                    clouddownload.pollTimer = setTimeout(pollDownloadStatus, 3000);
                 };
 
-                // 转存完成后等待 115 处理，再自动整理
+                // 转存/下载完成后轮询保存目录，确认有文件后再自动整理
+                const TRANSFER_CHECK_INTERVAL = 3000;   // 目录检测间隔 3 秒
+                const TRANSFER_MAX_CHECKS = 10;         // 最多检测 10 次（约 30 秒）
+                let transferCheckCount = 0;
+
                 const startTransferWait = () => {
                     if (clouddownload.pollTimer) {
                         clearTimeout(clouddownload.pollTimer);
@@ -8217,13 +8229,63 @@ av:
                     clouddownload.downloadCompleted = 0;
                     clouddownload.downloadProgress = '';
                     clouddownload.pollingDownload = true;
-                    showToast('转存成功，等待 115 处理文件...');
-                    // 等待 5 秒让 115 后端处理转存文件
-                    clouddownload.pollTimer = setTimeout(async () => {
+                    transferCheckCount = 0;
+                    // 3 秒后开始检测目录
+                    clouddownload.pollTimer = setTimeout(checkTransferReady, TRANSFER_CHECK_INTERVAL);
+                };
+
+                // 轮询检测保存目录是否有文件
+                const checkTransferReady = async () => {
+                    if (!clouddownload.pollingDownload) return;
+
+                    const accId = getDefaultAccountId();
+                    if (!accId || !clouddownload.saveCid) {
                         clouddownload.pollingDownload = false;
-                        showToast('文件已就绪，开始自动整理...', 3000);
-                        await triggerAutoOrganize();
-                    }, 5000);
+                        showToast('自动整理跳过：未找到有效账号或未选择保存目录');
+                        return;
+                    }
+
+                    transferCheckCount++;
+                    try {
+                        const res = await api('/api/clouddownload/check_dir_ready', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                account_id: accId,
+                                cid: clouddownload.saveCid,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            if (data.data.ready) {
+                                // 目录中有文件，开始自动整理
+                                clouddownload.pollingDownload = false;
+                                showToast(`检测到 ${data.data.file_count} 个文件已就绪，开始自动整理...`, 3000);
+                                await triggerAutoOrganize();
+                            } else if (transferCheckCount >= TRANSFER_MAX_CHECKS) {
+                                // 超过最大检测次数（约 30 秒），停止检测
+                                clouddownload.pollingDownload = false;
+                                showToast('文件就绪检测超时，请在整理页面手动整理', 5000);
+                            } else {
+                                // 目录仍为空，继续等待
+                                clouddownload.pollTimer = setTimeout(checkTransferReady, TRANSFER_CHECK_INTERVAL);
+                            }
+                        } else {
+                            if (transferCheckCount >= TRANSFER_MAX_CHECKS) {
+                                clouddownload.pollingDownload = false;
+                                showToast('文件就绪检测持续失败，请在整理页面手动整理', 5000);
+                            } else {
+                                clouddownload.pollTimer = setTimeout(checkTransferReady, TRANSFER_CHECK_INTERVAL);
+                            }
+                        }
+                    } catch (e) {
+                        if (transferCheckCount >= TRANSFER_MAX_CHECKS) {
+                            clouddownload.pollingDownload = false;
+                            showToast('文件就绪检测持续失败，请在整理页面手动整理', 5000);
+                        } else {
+                            clouddownload.pollTimer = setTimeout(checkTransferReady, TRANSFER_CHECK_INTERVAL);
+                        }
+                    }
                 };
 
                 const stopDownloadPolling = () => {
@@ -8234,7 +8296,7 @@ av:
                     clouddownload.pollingDownload = false;
                 };
 
-                // 离线下载状态检测：仅检查一次
+                // 离线下载状态检测：快速轮询直到完成或超时
                 const pollDownloadStatus = async () => {
                     if (!clouddownload.pollingDownload || clouddownload.downloadInfoHashes.length === 0) {
                         clouddownload.pollingDownload = false;
@@ -8248,6 +8310,7 @@ av:
                         return;
                     }
 
+                    pollAttemptCount++;
                     try {
                         const res = await api('/api/clouddownload/check_status', {
                             method: 'POST',
@@ -8261,10 +8324,8 @@ av:
                         if (data.code === 0 && data.data) {
                             const tasks = data.data.tasks || {};
                             let completed = 0;
-                            let totalPercent = 0;
                             for (const [hash, info] of Object.entries(tasks)) {
                                 if (info.completed) completed++;
-                                totalPercent += (info.percent || 0);
                             }
                             clouddownload.downloadCompleted = completed;
                             clouddownload.downloadProgress = `${completed}/${clouddownload.downloadTotal}`;
@@ -8272,19 +8333,31 @@ av:
                             if (data.data.all_completed) {
                                 // 全部完成，自动整理
                                 clouddownload.pollingDownload = false;
-                                showToast(`所有下载任务已完成（${completed}/${clouddownload.downloadTotal}），开始自动整理...`, 4000);
+                                showToast(`下载已完成（${completed}/${clouddownload.downloadTotal}），开始自动整理...`, 4000);
                                 await triggerAutoOrganize();
-                            } else {
-                                // 未全部完成，停止检测，提示手动整理
+                            } else if (pollAttemptCount >= POLL_MAX_ATTEMPTS) {
+                                // 超时（约 30 秒），停止检测
                                 clouddownload.pollingDownload = false;
-                                const avgPercent = clouddownload.downloadTotal > 0
-                                    ? Math.round(totalPercent / clouddownload.downloadTotal) : 0;
-                                showToast(`下载未完成：${completed}/${clouddownload.downloadTotal} 已完成，平均进度 ${avgPercent}%，请稍后手动整理`, 6000);
+                                showToast(`下载未在 30 秒内完成（${completed}/${clouddownload.downloadTotal}），请稍后手动整理`, 5000);
+                            } else {
+                                // 继续轮询
+                                clouddownload.pollTimer = setTimeout(pollDownloadStatus, POLL_INTERVAL);
+                            }
+                        } else {
+                            if (pollAttemptCount >= POLL_MAX_ATTEMPTS) {
+                                clouddownload.pollingDownload = false;
+                                showToast('下载状态检查持续失败，请稍后手动整理', 4000);
+                            } else {
+                                clouddownload.pollTimer = setTimeout(pollDownloadStatus, POLL_INTERVAL);
                             }
                         }
                     } catch (e) {
-                        clouddownload.pollingDownload = false;
-                        showToast('下载状态检查失败，请稍后手动整理', 4000);
+                        if (pollAttemptCount >= POLL_MAX_ATTEMPTS) {
+                            clouddownload.pollingDownload = false;
+                            showToast('下载状态检查持续失败，请稍后手动整理', 4000);
+                        } else {
+                            clouddownload.pollTimer = setTimeout(pollDownloadStatus, POLL_INTERVAL);
+                        }
                     }
                 };
 
