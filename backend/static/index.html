@@ -2014,18 +2014,6 @@
         .channel-type-badge.webhook { background: #ede7f6; color: #673ab7; }
         .channel-type-badge.wechat_work { background: #e8f5e9; color: #07c160; }
 
-        /* ===== 文件监控路径 ===== */
-        .watcher-path-item {
-            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-            border: 1px solid #ebeef5; border-radius: 6px; margin-bottom: 8px;
-        }
-        .watcher-path { flex: 1; font-size: 13px; color: #303133; word-break: break-all; }
-        .watcher-dot {
-            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-        }
-        .watcher-dot.active { background: #67c23a; }
-        .watcher-dot.inactive { background: #dcdfe6; }
-
         /* ===== 空状态 ===== */
         .feature-empty {
             text-align: center; padding: 40px 20px; color: #c0c4cc; font-size: 14px;
@@ -3689,14 +3677,12 @@
                 <div v-show="tab === 'sync'">
                     <div class="page-header">
                         <h2>同步归档</h2>
-                        <p>全量/增量同步将 115 网盘影视文件同步到本地生成 STRM；上传同步将本地 Emby 刮削的元数据文件回传到 115 网盘。</p>
+                        <p>全量/增量同步将 115 网盘影视文件同步到本地生成 STRM 文件。</p>
                     </div>
                     <!-- 同步子菜单 -->
                     <div class="config-tabs">
                         <div class="config-tab" :class="{ active: syncTab === 'full' }" @click="syncTab = 'full'">全量同步</div>
                         <div class="config-tab" :class="{ active: syncTab === 'incremental' }" @click="syncTab = 'incremental'">增量同步</div>
-                        <div class="config-tab" :class="{ active: syncTab === 'upload' }" @click="syncTab = 'upload'">上传同步</div>
-                        <div class="config-tab" :class="{ active: syncTab === 'watcher' }" @click="syncTab = 'watcher'">文件监控</div>
                     </div>
 
                     <!-- ===== 全量同步 ===== -->
@@ -3810,116 +3796,6 @@
                         </div>
                     </div>
 
-                    <!-- ===== 上传同步 ===== -->
-                    <div v-show="syncTab === 'upload'">
-                        <div class="card-title" style="margin-bottom:16px;">上传同步<span class="help-tip">?<span class="tip-text">将本地目录中 Emby 刮削产生的元数据文件（nfo、图片、字幕等）上传到 115 网盘，保持网盘与本地元数据同步。自动跳过 .strm 文件和视频文件。</span></span></div>
-
-                        <!-- 上传目标目录（只读，来自全量同步配置） -->
-                        <div class="form-group">
-                            <label>上传目标目录<span class="help-tip">?<span class="tip-text">元数据将上传到全量同步配置的 115 源目录中，与视频文件保持同级目录结构。</span></span></label>
-                            <div class="dir-picker" style="cursor:default;">
-                                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-                                <span>{{ organize.sync_source_path || '请先在全量同步中配置源目录' }}</span>
-                            </div>
-                        </div>
-
-                        <!-- 本地目录（只读，来自全量同步配置） -->
-                        <div class="form-group">
-                            <label>本地媒体目录<span class="help-tip">?<span class="tip-text">从此本地目录扫描待上传的元数据文件，目录结构与 115 网盘一致。</span></span></label>
-                            <div class="dir-picker" style="cursor:default;">
-                                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-                                <span>{{ organize.local_media_dir || '请先在全量同步中配置本地目录' }}</span>
-                            </div>
-                        </div>
-
-                        <!-- 上传文件后缀 -->
-                        <div class="form-group">
-                            <label>上传文件后缀（点击 × 删除，输入后回车或逗号添加）<span class="help-tip">?<span class="tip-text">仅上传匹配这些后缀的文件。默认包含 nfo、jpg、png、srt 等常见元数据格式。.strm 文件始终跳过。</span></span></label>
-                            <div class="tag-input">
-                                <span v-for="(ext, idx) in (organize.upload_exts_list || [])" :key="'u'+idx" class="tag-item">
-                                    {{ ext }}
-                                    <span class="tag-remove" @click="removeExt('upload', idx)" title="删除">×</span>
-                                </span>
-                                <input type="text" v-model="organize.upload_exts_input" @keydown.enter.prevent="addExt('upload', organize.upload_exts_input)" placeholder="如 .nfo" style="flex:1; min-width:80px; border:none; outline:none; padding:6px 4px; font-size:13px;">
-                            </div>
-                        </div>
-
-                        <!-- 覆盖模式 -->
-                        <div class="form-group">
-                            <label>已存在文件的处理方式<span class="help-tip">?<span class="tip-text">跳过：网盘已有同名文件时不重复上传。覆盖：先删除网盘旧文件再上传新文件，确保元数据为最新。</span></span></label>
-                            <div class="toggle-switch" @click="organize.upload_overwrite = organize.upload_overwrite === 'skip' ? 'overwrite' : 'skip'">
-                                <div class="toggle-slider" :class="{ 'toggle-right': organize.upload_overwrite === 'overwrite' }"></div>
-                                <div class="toggle-label" :class="{ 'toggle-active': organize.upload_overwrite === 'skip' }">跳过</div>
-                                <div class="toggle-label" :class="{ 'toggle-active': organize.upload_overwrite === 'overwrite' }">覆盖</div>
-                            </div>
-                        </div>
-
-                        <!-- 说明 -->
-                        <div class="info-box info-box--bordered" style="margin-top:16px;">
-                            <div class="info-box-title">上传说明</div>
-                            <div class="info-box-content">
-                                • 上传同步会将本地 Emby 刮削产生的 nfo、图片等元数据文件回传到 115 网盘<br>
-                                • 文件将按照本地目录结构上传到网盘对应位置<br>
-                                • .strm 文件和视频文件始终跳过，不会上传<br>
-                                • 需要先在全量同步中配置源目录和本地目录
-                            </div>
-                        </div>
-
-                        <!-- 操作按钮 -->
-                        <div style="display:flex; gap:8px; margin-top:8px;">
-                            <button class="btn btn-primary btn-action" @click="runUploadSync" :disabled="organize.syncing">
-                                {{ organize.syncing ? '同步中...' : '开始上传同步' }}
-                            </button>
-                        </div>
-                        <div v-if="organize.syncing && syncTab === 'upload'" style="margin-top:12px; color:#909399; font-size:13px;">
-                            正在扫描和上传文件，请耐心等待...
-                        </div>
-                    </div>
-
-                    <!-- ===== 文件监控 ===== -->
-                    <div v-show="syncTab === 'watcher'">
-                        <div class="feature-card">
-                            <div class="feature-card-header">
-                                <div class="feature-card-title">文件监控</div>
-                                <div style="display:flex; gap:8px;">
-                                    <button v-if="watcher.paths.length > 0" class="btn btn-danger btn-small" @click="stopAllWatching">停止全部</button>
-                                    <button class="btn btn-small" @click="loadWatcherPaths" :disabled="watcher.loading" style="border:1px solid #dcdfe6;">刷新</button>
-                                </div>
-                            </div>
-                            <p style="font-size:13px; color:#909399; margin-bottom:16px;">监控本地影视目录，当有新文件添加时自动触发同步生成 STRM。</p>
-                            <!-- 添加监控路径 -->
-                            <div style="margin-bottom:16px;">
-                                <div class="form-group">
-                                    <label>监控路径</label>
-                                    <input type="text" v-model="watcher.newPath" placeholder="输入要监控的本地目录路径">
-                                </div>
-                                <div class="form-group">
-                                    <label>监控的文件扩展名</label>
-                                    <div class="tag-input-group">
-                                        <span v-for="ext in watcher.newExtensions" :key="ext" class="tag-item">
-                                            {{ ext }}
-                                            <span class="tag-remove" @click="removeWatcherExt(ext)">x</span>
-                                        </span>
-                                        <input type="text" class="tag-input" placeholder="输入扩展名后回车" @keydown.enter="(e) => { if(e.target.value.trim()) { watcher.newExtensions.push(e.target.value.trim().toLowerCase().replace('.','')); e.target.value=''; } }">
-                                    </div>
-                                </div>
-                                <button class="btn btn-primary btn-small" @click="startWatching" :disabled="watcher.adding || !watcher.newPath.trim()">
-                                    {{ watcher.adding ? '添加中...' : '开始监控' }}
-                                </button>
-                            </div>
-                            <!-- 监控列表 -->
-                            <div v-if="watcher.paths.length === 0 && !watcher.loading" class="feature-empty">
-                                暂无监控路径
-                            </div>
-                            <div v-else>
-                                <div v-for="path in watcher.paths" :key="path" class="watcher-path-item">
-                                    <span class="watcher-dot active"></span>
-                                    <span class="watcher-path">{{ path }}</span>
-                                    <button class="btn btn-danger btn-small" @click="stopWatching(path)">停止</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- ===== 特色工具 ===== -->
@@ -5135,9 +5011,6 @@
                     image_exts_input: '',
                     data_exts_list: ['.nfo', '.srt', '.ass', '.ssa', '.sub'],
                     data_exts_input: '',
-                    upload_exts_list: ['.nfo', '.jpg', '.jpeg', '.png', '.srt', '.ass', '.ssa', '.sub', '.idx'],
-                    upload_exts_input: '',
-                    upload_overwrite: 'skip',
                     min_video_size_mb: 0,
                     sync_cron: '*/20 * * * *',
                     category_roots: { movie: '电影', tv: '电视剧', av: 'AV' },
@@ -5897,37 +5770,6 @@ av:
                         }
                     } catch (e) {
                         showToast('增量同步失败：网络错误', 4000);
-                    } finally {
-                        organize.syncing = false;
-                    }
-                };
-
-                // 上传同步
-                const runUploadSync = async () => {
-                    const accId = getDefaultAccountId();
-                    if (!accId) { showToast('请先在核心配置中添加 115 账号'); return; }
-                    if (!organize.sync_source_cid) { showToast('请先在全量同步中配置源目录'); return; }
-                    if (!organize.local_media_dir.trim()) { showToast('请先在全量同步中配置本地目录'); return; }
-                    organize.syncing = true;
-                    try {
-                        const res = await api('/api/organize/sync/upload', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                account_id: accId,
-                                upload_exts: organize.upload_exts_list || [],
-                                overwrite: organize.upload_overwrite === 'overwrite',
-                            })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            const r = data.data;
-                            showToast(`上传同步完成：共 ${r.total} 个文件，上传 ${r.uploaded.length} 个，跳过 ${r.skipped} 个` + (r.errors.length ? `，失败 ${r.errors.length} 个` : ''));
-                        } else {
-                            showToast(data.message || '上传同步失败', 4000);
-                        }
-                    } catch (e) {
-                        showToast('上传同步失败：网络错误', 4000);
                     } finally {
                         organize.syncing = false;
                     }
@@ -7708,7 +7550,6 @@ av:
                         await checkFfprobeStatus();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
-                        if (syncTab.value === 'watcher') await loadWatcherPaths();
                     } catch (e) {
                         console.error('初始化数据加载异常:', e);
                     } finally {
@@ -8111,109 +7952,6 @@ av:
                     aiConfig.testing = false;
                 };
 
-                // 7. 文件监控
-                const watcher = reactive({
-                    paths: [],
-                    loading: false,
-                    adding: false,
-                    newPath: '',
-                    newExtensions: ['mp4', 'mkv', 'avi', 'ts', 'rmvb'],
-                });
-
-                const loadWatcherPaths = async () => {
-                    watcher.loading = true;
-                    try {
-                        const res = await api('/api/watcher/paths');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            watcher.paths = data.data.paths || data.data || [];
-                        }
-                    } catch (e) {
-                        console.warn('[app] 加载监控路径失败:', e);
-                    }
-                    watcher.loading = false;
-                };
-
-                const startWatching = async () => {
-                    if (!watcher.newPath.trim()) {
-                        showToast('请输入监控路径');
-                        return;
-                    }
-                    watcher.adding = true;
-                    try {
-                        const res = await api('/api/watcher/start', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                path: watcher.newPath,
-                                extensions: watcher.newExtensions,
-                                event_type: 'created',
-                            })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('已开始监控');
-                            watcher.newPath = '';
-                            loadWatcherPaths();
-                        } else {
-                            showToast(data.message || '启动失败');
-                        }
-                    } catch (e) {
-                        showToast('启动失败');
-                    }
-                    watcher.adding = false;
-                };
-
-                const stopWatching = async (path) => {
-                    try {
-                        const res = await api('/api/watcher/stop', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ path })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('已停止监控');
-                            loadWatcherPaths();
-                        } else {
-                            showToast(data.message || '停止失败');
-                        }
-                    } catch (e) {
-                        showToast('停止失败');
-                    }
-                };
-
-                const stopAllWatching = async () => {
-                    if (!confirm('确定要停止所有监控吗？')) return;
-                    try {
-                        const res = await api('/api/watcher/stop-all', { method: 'POST' });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('已停止所有监控');
-                            loadWatcherPaths();
-                        } else {
-                            showToast(data.message || '停止失败');
-                        }
-                    } catch (e) {
-                        showToast('停止失败');
-                    }
-                };
-
-                const addWatcherExt = (ext) => {
-                    if (!ext) return;
-                    const normalized = ext.trim().toLowerCase().replace(/^\./, '');
-                    if (normalized && !watcher.newExtensions.includes(normalized)) {
-                        watcher.newExtensions.push(normalized);
-                    }
-                };
-
-                const removeWatcherExt = (ext) => {
-                    const idx = watcher.newExtensions.indexOf(ext);
-                    if (idx > -1) {
-                        watcher.newExtensions.splice(idx, 1);
-                    }
-                };
-
                 // 通用辅助函数
                 const formatTimestamp = (ts) => {
                     if (!ts) return '-';
@@ -8248,13 +7986,6 @@ av:
                 Vue.watch(configTab, (newTab) => {
                     if (newTab === 'emby_notify') {
                         loadEmbyNotifySettings();
-                    }
-                });
-
-                // 切换同步子标签时加载文件监控
-                Vue.watch(syncTab, (newTab) => {
-                    if (newTab === 'watcher') {
-                        loadWatcherPaths();
                     }
                 });
 
@@ -8680,7 +8411,7 @@ av:
                     openOrganizeDirPicker, runOrganize, saveOrganizeConfig, loadOrganizeConfig,
                     applyRulePreset, previewRename, previewFolder, previewRule,
                     autoResizeTextarea, autoResizeRule,
-                    runFullSync, runIncrementalSync, runUploadSync, saveSyncSchedule,
+                    runFullSync, runIncrementalSync, saveSyncSchedule,
                     addExt, removeExt, onExtKeydown,
                     addWashTag, removeWashTag, onWashKeydown,
                     exportWashConfig, importWashConfig,
@@ -8713,7 +8444,6 @@ av:
                     apiInterval, loadApiInterval, saveApiInterval,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
-                    watcher, loadWatcherPaths, startWatching, stopWatching, stopAllWatching, addWatcherExt, removeWatcherExt,
                     formatTimestamp, formatBytes,
                     // 认证 & 网络 & 加载状态
                     initLoading, initLoadingText,
