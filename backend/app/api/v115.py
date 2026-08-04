@@ -130,7 +130,18 @@ async def get_download_url(
         raise HTTPException(status_code=503, detail="账号 cookies 已失效，请重新登录")
 
     cookies = account.get("cookies", "")
-    url = Client115Service.get_download_url(cookies, pickcode, account.get("id", 0))
+
+    # 115 直链要求下载 UA 与获取 UA 一致（f=1 参数控制）。
+    # 播放器（浏览器/Infuse 等）会用自己的 UA 直连 115 CDN，
+    # 因此获取直链时必须使用播放器客户端的 UA，否则 115 拒绝 → 播放器报 NoCompatibleStream。
+    # 参考 emby2Alist fetchLastLink：携带客户端 UA 换取绑定该 UA 的直链。
+    import re as _re
+    request_ua = request.headers.get("User-Agent", "")
+    if request_ua and not _re.search(r"(?i)httpx|python", request_ua):
+        # 仅当反代/服务器端跟随（httpx）时不覆盖；真实客户端 UA 才用于换直链
+        url = Client115Service.get_download_url_with_ua(cookies, pickcode, request_ua, account.get("id", 0))
+    else:
+        url = Client115Service.get_download_url(cookies, pickcode, account.get("id", 0))
 
     if not url:
         # 获取失败可能是 cookies 过期，标记账号需要检查

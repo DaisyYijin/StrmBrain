@@ -494,7 +494,8 @@ class Client115Service:
             result = client.download_url(pickcode, user_agent=cls.DOWNLOAD_USER_AGENT)
             # p115client 可能返回 str 或 dict，统一提取 URL
             if isinstance(result, dict):
-                url = result.get("url") or result.get("data", {}).get("url") if isinstance(result.get("data"), dict) else None
+                # 注意：or/if 三元表达式有优先级陷阱，必须用括号分隔
+                url = result.get("url") or (result.get("data", {}).get("url") if isinstance(result.get("data"), dict) else None)
                 if not url:
                     url = str(result) if result else None
             else:
@@ -538,6 +539,44 @@ class Client115Service:
         with _cache_lock:
             cached = _DOWNLOAD_URL_CACHE.get(pickcode, {})
             return {"url": cached.get("url"), "user_agent": cached.get("user_agent", cls.DOWNLOAD_USER_AGENT)}
+
+    @classmethod
+    def get_download_url_with_ua(cls, cookies: str, pickcode: str, ua: str, account_id: int = 0, context: str = "") -> Optional[str]:
+        """
+        使用指定 UA 获取 115 下载链接（带 TTL 缓存，缓存 key 含 UA）。
+        115 直链要求下载 UA 与获取 UA 一致（f=1 参数控制），播放器用自己的
+        UA 直连时，必须用该 UA 换取直链，否则 115 拒绝 → NoCompatibleStream。
+        参考 emby2Alist fetchLastLink：携带客户端 UA 换直链。
+        """
+        if not pickcode or not ua:
+            return None
+        # 缓存 key 区分 UA，避免不同客户端互相污染
+        cache_key = f"{pickcode}|{ua}"
+        with _cache_lock:
+            cached = _DOWNLOAD_URL_CACHE.get(cache_key)
+            if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
+                return cached["url"]
+        _apply_rate_limit("download_url", context)
+        try:
+            client = cls.create_client_from_cookies(cookies)
+            result = client.download_url(pickcode, user_agent=ua)
+            if isinstance(result, dict):
+                # 注意：or/if 三元表达式有优先级陷阱，必须用括号分隔
+                url = result.get("url") or (result.get("data", {}).get("url") if isinstance(result.get("data"), dict) else None)
+                if not url:
+                    url = str(result) if result else None
+            else:
+                url = str(result) if result else None
+            if url:
+                with _cache_lock:
+                    _DOWNLOAD_URL_CACHE[cache_key] = {
+                        "url": url, "ts": _time.time(), "account_id": account_id,
+                        "user_agent": ua,
+                    }
+            return url
+        except Exception as e:
+            logger.warning(f"[115] get_download_url_with_ua 失败 pickcode={pickcode}: {e}")
+            return None
 
     @classmethod
     def invalidate_download_url_cache(cls, pickcode: str = None):

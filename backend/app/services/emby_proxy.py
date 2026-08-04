@@ -156,10 +156,12 @@ def _is_self_strm_url(target: str) -> bool:
     return "/api/115/url/" in target
 
 
-async def _follow_strm_url(target: str) -> Optional[str]:
+async def _follow_strm_url(target: str, client_ua: str = "") -> Optional[str]:
     """服务器端跟随 STRM 内部链接（参考 emby2Alist fetchLastLink）。
     当 STRM 内容指向本服务 302 接口时，由反代在服务器端请求主应用获取 115 直链，
     再返回给客户端。客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
+    携带客户端 UA 换取直链：115 要求下载 UA 与获取 UA 一致（f=1），否则
+    播放器直连 115 会被拒绝 → NoCompatibleStream。
     返回最终直链 URL，失败返回 None。
     """
     if not _is_self_strm_url(target):
@@ -172,8 +174,11 @@ async def _follow_strm_url(target: str) -> Optional[str]:
     from app.config import PORT as MAIN_PORT
     upstream = f"http://127.0.0.1:{MAIN_PORT}{path_with_query}"
     try:
+        headers = {}
+        if client_ua:
+            headers["User-Agent"] = client_ua
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5, read=60, write=10, pool=5)) as client:
-            resp = await client.get(upstream, follow_redirects=False)
+            resp = await client.get(upstream, headers=headers, follow_redirects=False)
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("location", "")
             if loc:
@@ -423,7 +428,7 @@ async def handle_stream(request: Request):
             # 获取 115 直链，再 302 给客户端（参考 emby2Alist fetchLastLink）。
             # 客户端拿到的是 115 CDN 直链，不接触内部地址（172.17.0.1 等）。
             if _is_self_strm_url(target):
-                final_url = await _follow_strm_url(target)
+                final_url = await _follow_strm_url(target, ua)
                 if final_url:
                     logger.info(f"{play_label} -> 服务器端跟随 -> {final_url[:120]}")
                     response = RedirectResponse(url=final_url, status_code=302)
