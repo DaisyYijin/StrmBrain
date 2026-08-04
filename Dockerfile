@@ -48,7 +48,7 @@ ENV HOST=0.0.0.0 \
     PYTHONDONTWRITEBYTECODE=1
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 8000 8787
 
 # 数据持久化（运行数据、配置、日志、STRM 媒体输出）
 VOLUME ["/app/data", "/app/config", "/app/log", "/media"]

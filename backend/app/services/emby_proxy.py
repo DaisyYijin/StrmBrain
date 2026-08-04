@@ -479,7 +479,11 @@ def save_config(enabled: bool, port: int) -> dict:
 
 
 def start_proxy() -> dict:
-    """启动反代服务（后台线程运行 uvicorn）"""
+    """
+    启动反代服务（非阻塞模式）。
+    后台线程运行 uvicorn，主线程立即返回，绝不阻塞主应用启动。
+    log_config=None 防止子线程 uvicorn 重配全局日志系统（避免与主应用冲突）。
+    """
     with _proxy_state["lock"]:
         cfg = _get_config()
         if not cfg.get("enabled"):
@@ -493,17 +497,20 @@ def start_proxy() -> dict:
         port = cfg.get("port", 8787)
         try:
             import uvicorn
-            server = uvicorn.Server(
-                uvicorn.Config(proxy_app, host="0.0.0.0", port=port, log_level="warning")
+            config = uvicorn.Config(
+                proxy_app,
+                host="0.0.0.0",
+                port=port,
+                log_level="warning",
+                log_config=None,      # 关键：不重配全局日志，避免与主应用日志系统冲突
+                access_log=False,     # 反代请求日志不输出，避免刷屏
             )
-            thread = threading.Thread(target=server.run, daemon=True, name="emby-proxy")
+            server = uvicorn.Server(config)
+            thread = threading.Thread(
+                target=_run_server_safe, args=(server,),
+                daemon=True, name="emby-proxy",
+            )
             thread.start()
-            # 等待启动完成
-            import time
-            for _ in range(50):
-                if server.started:
-                    break
-                time.sleep(0.1)
             _proxy_state["server"] = server
             _proxy_state["thread"] = thread
             _proxy_state["port"] = port
@@ -511,7 +518,22 @@ def start_proxy() -> dict:
             logger.info(f"[proxy] Emby 反代服务已启动，端口 {port}")
         except Exception as e:
             logger.warning(f"[proxy] 反代服务启动失败: {e}")
+            _proxy_state["running"] = False
         return get_status()
+
+
+def _run_server_safe(server):
+    """在子线程中运行 uvicorn Server，捕获所有异常防止静默崩溃"""
+    try:
+        server.run()
+    except Exception as e:
+        logger.warning(f"[proxy] 反代服务线程异常退出: {e}")
+        # 线程退出后重置状态
+        with _proxy_state["lock"]:
+            if _proxy_state["server"] is server:
+                _proxy_state["running"] = False
+                _proxy_state["server"] = None
+                _proxy_state["port"] = 0
 
 
 def _stop_proxy_locked():

@@ -87,14 +87,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"版本检查后台任务启动失败: {e}", exc_info=True)
 
-    # 启动 Emby 反代服务（qmediasync 方案，统一接管播放请求）
+    # 启动 Emby 反代服务（后台线程执行，绝不影响主应用启动流程）
     try:
-        from app.services.emby_proxy import start_proxy
-        status = start_proxy()
-        if status.get("running"):
-            logger.info(f"Emby 反代服务已启动，端口 {status.get('current_port')}")
+        import threading as _threading
+
+        def _start_proxy_bg():
+            try:
+                from app.services.emby_proxy import start_proxy
+                status = start_proxy()
+                if status.get("running"):
+                    logger.info(f"Emby 反代服务已启动，端口 {status.get('current_port')}")
+            except Exception as e:
+                logger.warning(f"Emby 反代服务启动失败: {e}", exc_info=True)
+
+        _proxy_thread = _threading.Thread(target=_start_proxy_bg, daemon=True, name="emby-proxy-starter")
+        _proxy_thread.start()
     except Exception as e:
-        logger.warning(f"Emby 反代服务启动失败: {e}", exc_info=True)
+        logger.warning(f"启动 Emby 反代服务线程异常: {e}")
 
     logger.info(f"STRMhub started (AUTH_ENABLED={AUTH_ENABLED})")
     yield
