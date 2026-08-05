@@ -2836,11 +2836,12 @@
                                 <input type="text" class="code" v-model="tmdb.image_domain" placeholder="https://image.tmdb.org" @blur="autoSaveAndTestTmdb">
                             </div>
                             <div class="form-group">
-                                <label>识别语言<span class="help-tip">?<span class="tip-text">控制 TMDB 搜索时使用的语言。开启为中文：优先返回中文标题；关闭为英文：只返回英文标题。切换后自动保存。</span></span></label>
-                                <div class="tool-toggle" :class="{ 'toggle-on': tmdb.language === 'zh' }" @click="toggleTmdbLanguage">
-                                    <div class="toggle-knob"></div>
+                                <label>识别语言<span class="help-tip">?<span class="tip-text">控制 TMDB 搜索时使用的语言。中文：优先返回中文标题；英文：只返回英文标题。切换后自动保存。</span></span></label>
+                                <div class="toggle-switch">
+                                    <div class="toggle-slider" :class="{ 'toggle-right': tmdb.language === 'en' }"></div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': tmdb.language === 'zh' }" @click="selectTmdbLanguage('zh')">中文</div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': tmdb.language === 'en' }" @click="selectTmdbLanguage('en')">英文</div>
                                 </div>
-                                <span style="font-size:13px; margin-left:8px; color:#606266;">{{ tmdb.language === 'zh' ? '中文' : '英文' }}</span>
                             </div>
                             <!-- 保存/测试结果通过顶部滑出通知显示 -->
                         </div>
@@ -2866,10 +2867,10 @@
                             <!-- 已存在时的处理方式 -->
                             <div class="form-group">
                                 <label>本地已存在 .strm 文件时<span class="help-tip">?<span class="tip-text">全量同步时遇到本地已有同名 .strm 文件的处理方式。跳过可避免重复生成，覆盖则每次同步都重新写入内容。</span></span></label>
-                                <div class="toggle-switch" @click="strmConfig.overwrite_mode = strmConfig.overwrite_mode === 'skip' ? 'overwrite' : 'skip'">
+                                <div class="toggle-switch">
                                     <div class="toggle-slider" :class="{ 'toggle-right': strmConfig.overwrite_mode === 'overwrite' }"></div>
-                                    <div class="toggle-label" :class="{ 'toggle-active': strmConfig.overwrite_mode === 'skip' }">跳过</div>
-                                    <div class="toggle-label" :class="{ 'toggle-active': strmConfig.overwrite_mode === 'overwrite' }">覆盖</div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': strmConfig.overwrite_mode === 'skip' }" @click="strmConfig.overwrite_mode = 'skip'">跳过</div>
+                                    <div class="toggle-label" :class="{ 'toggle-active': strmConfig.overwrite_mode === 'overwrite' }" @click="strmConfig.overwrite_mode = 'overwrite'">覆盖</div>
                                 </div>
                             </div>
 
@@ -6403,6 +6404,7 @@ av:
                 };
 
                 // 顶部滑出通知（type: success / error / info）
+                // ms 传 0 表示持续显示，直到下一次 showTopNotice 替换或手动关闭
                 const topNotice = reactive({ show: false, message: '', type: 'info' });
                 let _topNoticeTimer = null;
                 const showTopNotice = (msg, type = 'info', ms = 3000) => {
@@ -6410,7 +6412,11 @@ av:
                     topNotice.type = type;
                     topNotice.show = true;
                     if (_topNoticeTimer) clearTimeout(_topNoticeTimer);
-                    _topNoticeTimer = setTimeout(() => { topNotice.show = false; }, ms);
+                    if (ms > 0) {
+                        _topNoticeTimer = setTimeout(() => { topNotice.show = false; }, ms);
+                    } else {
+                        _topNoticeTimer = null;
+                    }
                 };
                 
                 const qrStatusClass = computed(() => {
@@ -6934,7 +6940,8 @@ av:
                         return false;
                     }
                     tmdb.testing = true;
-                    showTopNotice('正在测试 TMDB 连接...', 'info', 1500);
+                    // 持续显示"正在测试"直到测试结果返回（ms=0 不自动消失）
+                    showTopNotice('正在测试 TMDB 连接...', 'info', 0);
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 15000);
                     try {
@@ -6971,11 +6978,12 @@ av:
                         await testTmdbSettings();
                     }
                 };
-                // 切换识别语言（滑块）：中文 ⇄ 英文，切换后自动保存
-                const toggleTmdbLanguage = async () => {
-                    tmdb.language = tmdb.language === 'zh' ? 'en' : 'zh';
+                // 选择识别语言（滑块：点击哪个选哪个）：中文 ⇄ 英文，切换后自动保存
+                const selectTmdbLanguage = async (lang) => {
+                    if (tmdb.language === lang) return;
+                    tmdb.language = lang;
                     await saveTmdbSettings();
-                    showTopNotice(`识别语言已切换为${tmdb.language === 'zh' ? '中文' : '英文'}`, 'success');
+                    showTopNotice(`识别语言已切换为${lang === 'zh' ? '中文' : '英文'}`, 'success');
                 };
 
                 // ===== STRM 配置 =====
@@ -8753,7 +8761,7 @@ av:
                     // 仪表盘
                     emby, dash, openEmbyModal, saveEmby, saveEmbyFromConfig, testEmby,
                     // TMDB
-                    tmdb, loadTmdbSettings, saveTmdbSettings, testTmdbSettings, autoSaveAndTestTmdb, toggleTmdbLanguage,
+                    tmdb, loadTmdbSettings, saveTmdbSettings, testTmdbSettings, autoSaveAndTestTmdb, selectTmdbLanguage,
                     // STRM 配置
                     strmConfig, strmExample, loadStrmSettings, saveStrmSettings, updateStrmExample,
                     windowHost,
