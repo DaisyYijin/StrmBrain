@@ -2774,7 +2774,7 @@
                                 <button class="btn btn-primary btn-small" @click="saveApiInterval" :disabled="apiInterval.saving">
                                     {{ apiInterval.saving ? '保存中...' : '保存' }}
                                 </button>
-                                <span style="font-size:12px; color:#c0c4cc;">控制对 115 网盘的请求频率，避免触发限制</span>
+                                <span style="font-size:12px; color:#c0c4cc;">控制对 115 网盘的请求频率，避免触发限制（默认 3 秒）</span>
                             </div>
                             <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px;">
                                 <label style="font-size:14px; color:#606266; white-space:nowrap;">限流冷却时间</label>
@@ -6547,7 +6547,7 @@ av:
                         const res = await api('/api/settings/api-interval');
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
-                            apiInterval.value = data.data.interval ?? 0.3;
+                            apiInterval.value = data.data.interval ?? 3;
                             apiInterval.retryCooldown = data.data.retry_cooldown ?? 30;
                         }
                     } catch (e) { console.warn('[app] 操作失败:', e); }

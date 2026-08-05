@@ -26,13 +26,13 @@ def get_api_intervals() -> dict:
     返回字段:
     - file_list_interval: 文件列表分页间隔
     - sync_file_interval: 同步文件间处理间隔
-    - download_url_interval: 直链获取/写操作间隔
+    - download_url_interval: 直链获取/写操作间隔（默认 3 秒，降低 115 风控概率）
     - retry_cooldown: 限流/错误重试的冷却等待时间（秒）
     """
     data = read_setting("api_interval")
     return {
-        "file_list_interval": float(data.get("interval", 0.3)),
-        "sync_file_interval": float(data.get("interval", 0.3)),
-        "download_url_interval": float(data.get("interval", 0.3)),
+        "file_list_interval": float(data.get("interval", 3.0)),
+        "sync_file_interval": float(data.get("interval", 3.0)),
+        "download_url_interval": float(data.get("interval", 3.0)),
         "retry_cooldown": float(data.get("retry_cooldown", 30.0)),
     }

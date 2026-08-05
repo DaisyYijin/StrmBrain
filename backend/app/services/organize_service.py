@@ -17,7 +17,7 @@ from app.core.db_helper import get_api_intervals
 
 def _organize_write_interval() -> float:
     """整理写操作间隔（跟随用户配置的 API 请求间隔）"""
-    return max(get_api_intervals().get("download_url_interval", 0.3), 0.3)
+    return max(get_api_intervals().get("download_url_interval", 3.0), 0.3)
 
 
 def _organize_retry_cooldown() -> float:

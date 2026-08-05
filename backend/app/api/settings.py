@@ -279,7 +279,7 @@ async def save_emby_notify_settings(payload: EmbyNotifySettings):
 
 class ApiIntervalSettings(BaseModel):
     """115 API 请求间隔配置"""
-    interval: float = 0.3
+    interval: float = 3.0
     retry_cooldown: float = 30.0  # 限流/错误重试的冷却等待时间（秒）
 
 
@@ -288,7 +288,7 @@ async def get_api_interval_settings():
     """获取 API 请求间隔配置"""
     data = read_setting("api_interval")
     return ApiResponse(data={
-        "interval": data.get("interval", 0.3),
+        "interval": data.get("interval", 3.0),
         "retry_cooldown": data.get("retry_cooldown", 30.0),
     })
 

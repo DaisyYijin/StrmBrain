@@ -52,7 +52,7 @@ def _apply_rate_limit(operation: str = "", context: str = ""):
     """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）
     context: 可选的操作对象（如文件名），用于等待日志展示当前处理进度
     """
-    _interval = get_api_intervals().get("download_url_interval", 0.3)
+    _interval = get_api_intervals().get("download_url_interval", 3.0)
     if _interval > 0:
         with _rate_limit_stats_lock:
             _rate_limit_stats["count"] += 1
@@ -74,7 +74,7 @@ def _apply_file_list_interval(context: str = ""):
     """文件列表分页间隔（跟随用户配置，默认 0.3s）
     context: 可选的操作对象（如目录名），用于等待日志展示当前进度
     """
-    _interval = get_api_intervals().get("file_list_interval", 0.3)
+    _interval = get_api_intervals().get("file_list_interval", 3.0)
     if _interval > 0:
         # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
         if _interval >= 1.0:
@@ -144,6 +144,89 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
                 continue
             raise
     return {}
+
+
+def _extract_download_url(result) -> str:
+    """从 p115client 各种下载接口返回值中提取直链 URL（兼容多端点返回格式）"""
+    if result is None:
+        return ""
+    # P115URL / str：直接转字符串
+    if isinstance(result, str):
+        s = str(result).strip()
+        return s if s.startswith("http") else ""
+    if isinstance(result, dict):
+        # 1. 直接 url 字段
+        u = result.get("url")
+        if isinstance(u, str) and u.strip().startswith("http"):
+            return u.strip()
+        # 2. file_url_302 字段（web 接口 302 跳转链接）
+        u = result.get("file_url_302")
+        if isinstance(u, str) and u.strip().startswith("http"):
+            return u.strip()
+        # 3. data 字段（dict 或 list）
+        data = result.get("data")
+        if isinstance(data, dict):
+            u = data.get("url")
+            if isinstance(u, dict):  # {"url": "https://..."}
+                inner = u.get("url")
+                if isinstance(inner, str) and inner.strip().startswith("http"):
+                    return inner.strip()
+            elif isinstance(u, str) and u.strip().startswith("http"):
+                return u.strip()
+            u = data.get("file_url_302")
+            if isinstance(u, str) and u.strip().startswith("http"):
+                return u.strip()
+        elif isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                u = first.get("url")
+                if isinstance(u, dict):
+                    inner = u.get("url")
+                    if isinstance(inner, str) and inner.strip().startswith("http"):
+                        return inner.strip()
+                elif isinstance(u, str) and u.strip().startswith("http"):
+                    return u.strip()
+    return ""
+
+
+def _download_url_with_retry(client, pickcode: str, user_agent: str, max_retries: int = _MAX_RETRIES):
+    """
+    带限流重试的下载链接获取，405 时依次降级:
+    download_url → download_url_app → download_url_web2
+    返回原始结果（可能为 P115URL / dict / str），由 _extract_download_url 统一提取。
+    """
+    cooldown = _get_retry_cooldown()  # 冷却时间跟随用户配置
+    for attempt in range(max_retries):
+        try:
+            return client.download_url(pickcode, user_agent=user_agent)
+        except Exception as e:
+            # 405 错误：依次降级到 download_url_app、download_url_web2
+            if _is_method_not_allowed(e):
+                logger.info("[115] download_url 返回 405，降级到 download_url_app")
+                try:
+                    return client.download_url_app(pickcode, user_agent=user_agent)
+                except Exception as e2:
+                    if _is_method_not_allowed(e2):
+                        logger.info("[115] download_url_app 返回 405，降级到 download_url_web2")
+                        try:
+                            return client.download_url_web2(pickcode, user_agent=user_agent)
+                        except Exception as e3:
+                            if _is_rate_limited(e3) and attempt < max_retries - 1:
+                                logger.warning(f"[115] download_url_web2 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                                _time.sleep(cooldown)
+                                continue
+                            raise
+                    if _is_rate_limited(e2) and attempt < max_retries - 1:
+                        logger.warning(f"[115] download_url_app 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                        _time.sleep(cooldown)
+                        continue
+                    raise
+            if _is_rate_limited(e) and attempt < max_retries - 1:
+                logger.warning(f"[115] 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                _time.sleep(cooldown)
+                continue
+            raise
+    return None
 
 
 class Client115Service:
@@ -486,20 +569,15 @@ class Client115Service:
 
     @classmethod
     def _fetch_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
-        """实际请求 115 获取直链（被 get_download_url 调用，含缓存写入）"""
+        """实际请求 115 获取直链（被 get_download_url 调用，含缓存写入）
+        405 时自动降级备用端点：download_url → download_url_app → download_url_web2
+        """
         # 实时获取（指定 user_agent，下载时必须用同一个）
         _apply_rate_limit("download_url", context)
         try:
             client = cls.create_client_from_cookies(cookies)
-            result = client.download_url(pickcode, user_agent=cls.DOWNLOAD_USER_AGENT)
-            # p115client 可能返回 str 或 dict，统一提取 URL
-            if isinstance(result, dict):
-                # 注意：or/if 三元表达式有优先级陷阱，必须用括号分隔
-                url = result.get("url") or (result.get("data", {}).get("url") if isinstance(result.get("data"), dict) else None)
-                if not url:
-                    url = str(result) if result else None
-            else:
-                url = str(result) if result else None
+            result = _download_url_with_retry(client, pickcode, cls.DOWNLOAD_USER_AGENT)
+            url = _extract_download_url(result)
             if url:
                 with _cache_lock:
                     _DOWNLOAD_URL_CACHE[pickcode] = {
@@ -512,7 +590,7 @@ class Client115Service:
                         expired = [k for k, v in _DOWNLOAD_URL_CACHE.items() if v["ts"] < cutoff]
                         for k in expired:
                             _DOWNLOAD_URL_CACHE.pop(k, None)
-            return url
+            return url or None
         except Exception as e:
             logger.warning(f"[115] get_download_url 失败 pickcode={pickcode}: {e}")
             return None
@@ -786,7 +864,7 @@ class Client115Service:
         _apply_rate_limit("move", context)
         client = cls.create_client_from_cookies(cookies)
         # 异步操作等待基础值（跟随用户配置的直链间隔，避免低于配置）
-        base_wait = max(get_api_intervals().get("download_url_interval", 0.3), 1.0)
+        base_wait = max(get_api_intervals().get("download_url_interval", 3.0), 1.0)
         max_retries = 5
         for attempt in range(max_retries):
             try:
@@ -1012,7 +1090,7 @@ class Client115Service:
         os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
 
         # 重试等待时间：跟随用户配置的直链间隔（默认 0.3s），至少 1 秒
-        retry_wait = max(get_api_intervals().get("download_url_interval", 0.3) * 5, 1.0)
+        retry_wait = max(get_api_intervals().get("download_url_interval", 3.0) * 5, 1.0)
         last_error = None
         for attempt in range(3):
             try:

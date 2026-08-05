@@ -136,7 +136,7 @@ class SyncService:
 
             # 每个目录只输出一条日志，展示正在同步的影视目录名。
             # 如 "A-爱你 (2025)"、"动画/剧场版"，避免逐集刷屏。
-            _interval = get_api_intervals().get("sync_file_interval", 0.3)
+            _interval = get_api_intervals().get("sync_file_interval", 3.0)
             if _cur_dir not in _logged_dirs:
                 _logged_dirs.add(_cur_dir)
                 if _interval >= 1.0:
@@ -261,7 +261,7 @@ class SyncService:
 
             processed += 1
             # 间隔 >= 1s 时输出当前处理进度（让用户知道正在处理哪个文件）
-            _interval = get_api_intervals().get("sync_file_interval", 0.3)
+            _interval = get_api_intervals().get("sync_file_interval", 3.0)
             if _interval >= 1.0:
                 logger.info(f"[sync] 正在处理第 {processed}/{len(all_files)} 个文件: {name}")
             if processed % 10 == 0:
@@ -507,9 +507,9 @@ class SyncService:
             from app.core.db_helper import get_api_intervals
             iv = get_api_intervals()
             logger.info(
-                f"[sync] API 请求间隔: 列表 {iv.get('file_list_interval', 0.3)}s / "
-                f"文件间 {iv.get('sync_file_interval', 0.3)}s / "
-                f"写操作 {iv.get('download_url_interval', 0.3)}s，"
+                f"[sync] API 请求间隔: 列表 {iv.get('file_list_interval', 3.0)}s / "
+                f"文件间 {iv.get('sync_file_interval', 3.0)}s / "
+                f"写操作 {iv.get('download_url_interval', 3.0)}s，"
                 f"限流冷却 {iv.get('retry_cooldown', 30.0)}s"
             )
         except Exception as e:
