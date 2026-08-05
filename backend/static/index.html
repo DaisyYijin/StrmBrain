@@ -3160,7 +3160,7 @@
                                         <div class="toggle-knob"></div>
                                     </div>
                                 </div>
-                                <button class="btn btn-default btn-small" style="color:#f56c6c; flex-shrink:0;" @click="deleteChannel(ch.id)">删除</button>
+                                <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteChannel(ch.id)">删除</button>
                             </div>
                         </div>
 
@@ -3204,7 +3204,7 @@
                                         <div class="toggle-knob"></div>
                                     </div>
                                 </div>
-                                <button class="btn btn-default btn-small" style="color:#f56c6c; flex-shrink:0;" @click="deleteRule(rule.id)">删除</button>
+                                <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteRule(rule.id)">删除</button>
                             </div>
                         </div>
                         <div v-else style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无分发规则，添加后对应事件将自动通知所选渠道。</div>
@@ -3413,7 +3413,7 @@
 
                         <!-- 操作按钮 -->
                         <div style="display:flex; gap:8px; margin-top:8px;">
-                            <button class="btn btn-primary btn-action" @click="runOrganize" :disabled="organize.running" style="flex:1;">
+                            <button class="btn btn-primary btn-action" @click="runOrganize" :disabled="organize.running">
                                 {{ organize.running ? '整理中...' : '开始整理' }}
                             </button>
                         </div>
@@ -4523,6 +4523,36 @@
                             </div>
                         </div>
 
+                        <!-- 工具14：115 每日签到 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.checkin.enabled, 'tool-disabled': !toolsState.checkin.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.checkin.enabled"></span>
+                                    115 每日签到
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.checkin.enabled, 'dot-off': !toolsState.checkin.enabled }"></span>
+                                    <span :style="{ color: toolsState.checkin.enabled ? '#67c23a' : '#909399' }">{{ toolsState.checkin.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.checkin.enabled }" @click="toggleTool('checkin')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                自动领取 115 每日签到奖励，用 Cron 表达式自定义签到时间（默认每天 00:05）。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('checkin')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    签到设置
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="runToolNow('checkin')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    立即签到
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -4685,11 +4715,11 @@
                         </div>
                         <div class="form-group">
                             <label>查找字符串</label>
-                            <input type="text" v-model="strmReplace.find" placeholder="要查找的字符串" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="text" v-model="strmReplace.find" placeholder="要查找的字符串" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div class="form-group">
                             <label>替换为 <span class="help-tip">?<span class="tip-text">留空则删除匹配的字符串</span></span></label>
-                            <input type="text" v-model="strmReplace.replace" placeholder="替换后的字符串（留空则删除）" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="text" v-model="strmReplace.replace" placeholder="替换后的字符串（留空则删除）" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div v-if="strmReplace.scanResult !== null" class="result-box result-box--neutral">
                             共 {{ strmReplace.scanResult.total_strm }} 个 STRM 文件，其中 <strong style="color:#e6a23c;">{{ strmReplace.scanResult.count }}</strong> 个包含匹配内容
@@ -4805,11 +4835,11 @@
                         </div>
                         <div class="form-group">
                             <label>旧账号 ID</label>
-                            <input type="number" v-model="accountRepair.oldAccountId" placeholder="如 1234567890" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="number" v-model="accountRepair.oldAccountId" placeholder="如 1234567890" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div class="form-group">
                             <label>新账号 ID <span class="help-tip">?<span class="tip-text">新 115 账号的 user_id，可在账号管理中查看</span></span></label>
-                            <input type="number" v-model="accountRepair.newAccountId" placeholder="新账号 ID" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="number" v-model="accountRepair.newAccountId" placeholder="新账号 ID" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div v-if="accountRepair.runResult !== null" class="result-box result-box--success">
                             已替换 <strong style="color:#67c23a;">{{ accountRepair.runResult.replaced }}</strong> 个，跳过 {{ accountRepair.runResult.skipped }} 个，共 {{ accountRepair.runResult.total }} 个文件
@@ -4847,11 +4877,11 @@
                         </div>
                         <div class="form-group">
                             <label>旧地址（替换前）</label>
-                            <input type="text" v-model="baseUrlTool.oldUrl" placeholder="如 http://172.17.0.1:6060" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="text" v-model="baseUrlTool.oldUrl" placeholder="如 http://172.17.0.1:6060" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div class="form-group">
                             <label>新地址（替换后）<span class="help-tip">?<span class="tip-text">可点击上方"检测当前访问地址"自动填入</span></span></label>
-                            <input type="text" v-model="baseUrlTool.newUrl" placeholder="如 http://your.domain.com:6060" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                            <input type="text" v-model="baseUrlTool.newUrl" placeholder="如 http://your.domain.com:6060" style="width:100%; min-height:38px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;" />
                         </div>
                         <div v-if="baseUrlTool.runResult !== null" class="result-box result-box--success">
                             已替换 <strong style="color:#67c23a;">{{ baseUrlTool.runResult.replaced }}</strong> 个，跳过 {{ baseUrlTool.runResult.skipped }} 个，共 {{ baseUrlTool.runResult.total }} 个文件
@@ -5107,13 +5137,61 @@
                                     <div style="display:flex; gap:6px;">
                                         <button class="btn btn-sm" @click="autoRuleRun(rule.id)" :disabled="autoRule.runningId === rule.id" style="padding:2px 12px; font-size:12px; color:#67c23a;">{{ autoRule.runningId === rule.id ? '执行中...' : '立即执行' }}</button>
                                         <button class="btn btn-sm" @click="autoRuleToggle(rule)" style="padding:2px 12px; font-size:12px; color:#409eff;">{{ rule.is_enabled ? '停用' : '启用' }}</button>
-                                        <button class="btn btn-sm" @click="autoRuleDel(rule.id)" style="padding:2px 12px; font-size:12px; color:#f56c6c;">删除</button>
+                                        <button class="btn btn-danger btn-small" @click="autoRuleDel(rule.id)" style="padding:2px 12px;">删除</button>
                                     </div>
                                 </div>
                             </div>
                         </div>
                         <div style="font-size:12px; color:#909399; margin-top:10px; line-height:1.6;">
                             动作链按顺序执行：增量同步 → 刮削（NFO/海报）→ 整理 → Emby 刷新。Webhook 触发时外部 POST 到 <code>/api/automation/webhook/{token}</code> 即可执行该规则。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 115 每日签到配置弹窗 -->
+                <div v-if="toolConfig.show === 'checkin'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:520px;">
+                        <div class="modal-header">
+                            <span class="modal-title">115 每日签到</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <!-- 启用开关 -->
+                        <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; padding:4px 0;">
+                            <div>
+                                <div style="font-size:14px; font-weight:600; color:#303133;">启用自动签到</div>
+                                <div style="font-size:12px; color:#909399; margin-top:2px;">按下方 Cron 计划自动为所有有效 115 账号签到</div>
+                            </div>
+                            <div class="tool-toggle" :class="{ 'toggle-on': checkinTool.enabled }" @click="checkinTool.enabled = !checkinTool.enabled; saveCheckinSettings()" style="flex-shrink:0;" :style="{ opacity: checkinTool.saving ? 0.6 : 1 }">
+                                <span class="toggle-knob"></span>
+                            </div>
+                        </div>
+
+                        <!-- Cron 表达式 -->
+                        <div class="form-group">
+                            <label>签到时间（Cron 表达式）<span class="help-tip">?<span class="tip-text">标准 5 段式 Cron：分 时 日 月 周。默认 5 0 * * * 表示每天 00:05 签到。示例：30 8 * * * 每天 8:30；0 */6 * * * 每 6 小时</span></span></label>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="text" v-model="checkinTool.cron" placeholder="5 0 * * *" style="flex:1; min-height:36px; font-size:14px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                                <button class="btn btn-primary btn-small" @click="saveCheckinSettings" :disabled="checkinTool.saving">{{ checkinTool.saving ? '保存中...' : '保存' }}</button>
+                            </div>
+                        </div>
+
+                        <!-- 下次执行时间 -->
+                        <div v-if="checkinTool.enabled && checkinTool.nextRun" class="info-box info-box--bordered" style="margin-bottom:14px;">
+                            <div style="font-size:13px; color:#303133;">下次签到时间：<strong style="color:#409eff;">{{ checkinTool.nextRun }}</strong>（北京时间）</div>
+                        </div>
+                        <div v-else-if="!checkinTool.enabled" style="margin-bottom:14px;">
+                            <div style="font-size:13px; color:#909399;">自动签到已关闭，可点击下方按钮手动签到。</div>
+                        </div>
+
+                        <!-- 立即签到 -->
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <button class="tool-btn tool-btn-run" @click="runCheckinNow" :disabled="checkinTool.running" style="background:#409eff;">{{ checkinTool.running ? '签到中...' : '立即签到' }}</button>
+                            <span v-if="checkinTool.resultMessage" style="font-size:13px; color:#67c23a;">{{ checkinTool.resultMessage }}</span>
+                        </div>
+
+                        <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
+                            说明：签到为所有有效 115 账号（状态正常）逐一执行，单个账号失败不影响其他账号；结果可在实时日志中查看。
                         </div>
                     </div>
                 </div>
@@ -5138,7 +5216,7 @@
                             </div>
                         </div>
                         <div style="display:flex; gap:8px; margin-top:8px;">
-                            <button class="btn btn-primary btn-action" @click="addTask" :disabled="clouddownload.adding || clouddownload.snapping" style="flex:1;">
+                            <button class="btn btn-primary btn-action" @click="addTask" :disabled="clouddownload.adding || clouddownload.snapping">
                                 {{ clouddownload.snapping ? '获取文件列表中...' : (clouddownload.adding ? '添加中...' : '添加') }}
                             </button>
                         </div>
@@ -7310,6 +7388,7 @@ av:
                     task_console:{ enabled: localStorage.getItem('strmhub_tool_task_console') === '1' },
                     sync_del:    { enabled: localStorage.getItem('strmhub_tool_sync_del') === '1' },
                     automation:  { enabled: localStorage.getItem('strmhub_tool_automation') === '1' },
+                    checkin:     { enabled: localStorage.getItem('strmhub_tool_checkin') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -7474,6 +7553,17 @@ av:
                         webhook_token: '',
                         actionTypes: ['strm_sync'],
                     },
+                });
+
+                // 115 每日签到（特色工具）
+                const checkinTool = reactive({
+                    loading: false,
+                    saving: false,
+                    running: false,
+                    enabled: true,
+                    cron: '5 0 * * *',
+                    nextRun: '',
+                    resultMessage: '',
                 });
 
                 // 二维码弹窗状态
@@ -10409,6 +10499,64 @@ av:
                     }
                 };
 
+                // ============ 115 每日签到（特色工具） ============
+                const loadCheckinSettings = async () => {
+                    checkinTool.loading = true;
+                    try {
+                        const res = await api('/api/tools/checkin/settings');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            checkinTool.enabled = !!data.data.enabled;
+                            checkinTool.cron = data.data.cron || '5 0 * * *';
+                            checkinTool.nextRun = data.data.next_run || '';
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载签到配置失败:', e);
+                    }
+                    checkinTool.loading = false;
+                };
+                const saveCheckinSettings = async () => {
+                    checkinTool.saving = true;
+                    try {
+                        const res = await api('/api/tools/checkin/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                enabled: checkinTool.enabled,
+                                cron: checkinTool.cron.trim() || '5 0 * * *',
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已保存', 3000);
+                            await loadCheckinSettings();
+                        } else {
+                            showToast(data.message || '保存失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('保存失败：网络错误', 3000);
+                    }
+                    checkinTool.saving = false;
+                };
+                const runCheckinNow = async () => {
+                    checkinTool.running = true;
+                    checkinTool.resultMessage = '';
+                    try {
+                        const res = await api('/api/tools/checkin/run', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            checkinTool.resultMessage = data.data.accounts > 0
+                                ? `已为 ${data.data.accounts} 个账号执行签到，详情见日志`
+                                : data.data.message || '无有效账号';
+                        } else {
+                            checkinTool.resultMessage = data.message || '签到失败';
+                        }
+                    } catch (e) {
+                        checkinTool.resultMessage = '签到失败：网络错误';
+                    }
+                    checkinTool.running = false;
+                };
+
                 // ============ 特色工具 - 卡片操作方法 ============
 
                 // 切换工具启用/禁用
@@ -10428,6 +10576,7 @@ av:
                     else if (key === 'task_console') loadTasks();
                     else if (key === 'sync_del') loadSyncDel();
                     else if (key === 'automation') loadAutoRules();
+                    else if (key === 'checkin') loadCheckinSettings();
                 };
 
                 // 立即运行工具（打开对应配置弹窗）
@@ -11275,6 +11424,7 @@ av:
                     toggleTool, openToolConfig, runToolNow,
                     syncDelState, loadSyncDel, toggleSyncDel, clearSyncDelHistory,
                     autoRule, actionLabel, loadAutoRules, autoRuleAdd, autoRuleRun, autoRuleToggle, autoRuleDel,
+                    checkinTool, loadCheckinSettings, saveCheckinSettings, runCheckinNow,
                     coverGen, coverGenPreviewFirst, coverGenGenerateAll,
                     clearFolder, clearFolderScan, clearFolderRun,
                     clearRecycle, clearRecycleRun,

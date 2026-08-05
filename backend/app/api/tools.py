@@ -1217,3 +1217,86 @@ async def strmscrape_query():
         except Exception as e:
             return ApiResponse(code=500, message=f"查询索引失败: {str(e)}")
     return ApiResponse(data={"items": items, "count": len(items)})
+
+
+# ============ 工具10：115 每日签到（cron 可配置） ============
+
+class CheckinSettingsRequest(BaseModel):
+    """115 签到配置（启用 + cron 表达式）"""
+    enabled: bool = True
+    cron: str = "5 0 * * *"
+
+
+@router.get("/checkin/settings", response_model=ApiResponse)
+async def get_checkin_settings():
+    """获取 115 签到配置。
+
+    返回 {"enabled": bool, "cron": str, "next_run": str}；
+    next_run 为下次计划执行时间（北京时间），未启用/未注册时为空字符串。
+    """
+    from app.core.json_storage import read_setting
+    from app.core.scheduler import CHECKIN_SETTING_KEY, DEFAULT_CHECKIN_CRON, DAILY_CHECKIN_JOB_ID, get_scheduler
+
+    cfg = read_setting(CHECKIN_SETTING_KEY) or {}
+    enabled = bool(cfg.get("enabled", True))
+    cron = str(cfg.get("cron") or DEFAULT_CHECKIN_CRON).strip()
+
+    next_run = ""
+    try:
+        sched = get_scheduler()
+        if sched is not None:
+            job = sched.get_job(DAILY_CHECKIN_JOB_ID)
+            if job and job.next_run_time:
+                next_run = job.next_run_time.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+
+    return ApiResponse(data={"enabled": enabled, "cron": cron, "next_run": next_run})
+
+
+@router.post("/checkin/settings", response_model=ApiResponse)
+async def save_checkin_settings(payload: CheckinSettingsRequest):
+    """保存 115 签到配置并重注册定时任务。
+
+    - 保存到 settings.json 的 checkin 字段
+    - 调用 register_daily_checkin 重注册（enabled=false 或 cron 为空时取消定时）
+    """
+    from app.core.json_storage import save_setting
+    from app.core.scheduler import CHECKIN_SETTING_KEY, register_daily_checkin
+    import asyncio
+
+    cron = (payload.cron or "").strip()
+    try:
+        save_setting(CHECKIN_SETTING_KEY, {"enabled": payload.enabled, "cron": cron})
+        # 重注册定时任务（后台执行，避免阻塞请求）
+        try:
+            asyncio.create_task(register_daily_checkin())
+        except RuntimeError:
+            pass
+        if payload.enabled and cron:
+            return ApiResponse(message=f"115 签到已启用，cron={cron}")
+        return ApiResponse(message="115 签到定时任务已关闭")
+    except Exception as e:
+        return ApiResponse(code=500, message=f"保存失败: {str(e)}")
+
+
+@router.post("/checkin/run", response_model=ApiResponse)
+async def run_checkin_now():
+    """立即执行 115 签到（遍历所有有效账号逐个签到）。
+
+    返回 {"accounts": int, "message": str}；无有效账号时返回 accounts=0。
+    """
+    from app.core.json_storage import read_accounts
+    from app.core.scheduler import _run_daily_checkin
+
+    accounts = read_accounts()
+    valid = [acc for acc in accounts if acc.get("status") == 1]
+    if not valid:
+        return ApiResponse(data={"accounts": 0, "message": "无有效 115 账号，无法签到"})
+
+    try:
+        # 执行体内部遍历有效账号逐个签到并输出日志
+        await _run_daily_checkin()
+        return ApiResponse(data={"accounts": len(valid), "message": "签到已执行，详情见日志"})
+    except Exception as e:
+        return ApiResponse(code=500, message=f"签到执行异常: {str(e)}")

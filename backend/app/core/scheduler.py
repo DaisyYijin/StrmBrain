@@ -498,32 +498,56 @@ async def _run_auto_organize_after_download(cookies: str, save_cid: str, retry: 
     await _run_scheduled_organize(cookies=cookies, target_cid=organize_source_cid, logger=logger)
 
 
-# ===== E2: 115 每日签到 =====
+# ===== E2: 115 每日签到（cron 可配置，由特色工具页管理） =====
 
 # 每日签到的 Job ID
 DAILY_CHECKIN_JOB_ID = "daily_115_checkin"
 
+# 签到配置的 settings.json key
+CHECKIN_SETTING_KEY = "checkin"
+
+# 默认签到 cron（每天 00:05）
+DEFAULT_CHECKIN_CRON = "5 0 * * *"
+
 
 async def register_daily_checkin():
-    """注册每日 115 签到任务（每天 00:05 执行，cron='5 0 * * *'）"""
+    """注册 115 签到定时任务（cron 从配置读取，默认 '5 0 * * *'）
+
+    配置存储于 settings.json 的 checkin 字段：{"enabled": bool, "cron": str}。
+    - enabled=false 或 cron 为空时不注册
+    - 特色工具页修改配置后调用本函数重注册
+    """
     global _scheduler
     if _scheduler is None:
         return
 
     from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_setting
     logger = get_logger()
 
+    # 先移除旧任务（保证重注册生效）
     try:
-        trigger = CronTrigger(hour=0, minute=5)
+        _scheduler.remove_job(DAILY_CHECKIN_JOB_ID)
+    except Exception:
+        pass
+
+    try:
+        cfg = read_setting(CHECKIN_SETTING_KEY) or {}
+        enabled = cfg.get("enabled", True)
+        cron_str = str(cfg.get("cron") or DEFAULT_CHECKIN_CRON).strip()
+        if not enabled or not cron_str:
+            logger.info("115 签到定时任务未启用（enabled=false 或 cron 为空），跳过注册")
+            return
+        trigger = CronTrigger.from_crontab(cron_str)
         _scheduler.add_job(
             _run_daily_checkin,
             trigger=trigger,
             id=DAILY_CHECKIN_JOB_ID,
             replace_existing=True,
         )
-        logger.info(f"已注册每日 115 签到任务 (id={DAILY_CHECKIN_JOB_ID}, cron='5 0 * * *')")
+        logger.info(f"已注册 115 签到定时任务 (id={DAILY_CHECKIN_JOB_ID}, cron='{cron_str}')")
     except Exception as e:
-        logger.warning(f"注册每日 115 签到任务失败: {e}")
+        logger.warning(f"注册 115 签到定时任务失败: {e}")
 
 
 def _is_checkin_success(result: dict) -> bool:
