@@ -7051,6 +7051,12 @@ av:
                     }
                     if (localDirPicker.target === 'strm_replace') {
                         strmReplace.directory = localDirPicker.current;
+                    } else if (localDirPicker.target === 'strm_clean') {
+                        strmClean.directory = localDirPicker.current;
+                    } else if (localDirPicker.target === 'account_repair') {
+                        accountRepair.directory = localDirPicker.current;
+                    } else if (localDirPicker.target === 'base_url') {
+                        baseUrlTool.directory = localDirPicker.current;
                     } else {
                         organize.local_media_dir = localDirPicker.current;
                     }
