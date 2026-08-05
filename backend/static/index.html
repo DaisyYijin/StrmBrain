@@ -3871,14 +3871,14 @@
                                     <td class="rule-mono">&lt;.{resource_pix}&gt; → .2160p（有值）或 空（无值）</td>
                                 </tr>
                                 <tr>
-                                    <td><code>&lt;{{name}}...&gt;</code></td>
+                                    <td><code v-pre>&lt;{{name}}...&gt;</code></td>
                                     <td>命名块：取名并输出，之后可用 {name} 引用</td>
-                                    <td class="rule-mono">&lt;{{t}{title}}&gt; → 输出标题，{t} 也能取到</td>
+                                    <td class="rule-mono" v-pre>&lt;{{t}{title}}&gt; → 输出标题，{t} 也能取到</td>
                                 </tr>
                                 <tr>
-                                    <td><code>&lt;?{{name}}...&gt;</code></td>
+                                    <td><code v-pre>&lt;?{{name}}...&gt;</code></td>
                                     <td>静默命名块：只取名不输出</td>
-                                    <td class="rule-mono">&lt;?{{t}{title}}&gt; → 不输出，{t} 可引用</td>
+                                    <td class="rule-mono" v-pre>&lt;?{{t}{title}}&gt; → 不输出，{t} 可引用</td>
                                 </tr>
                                 <tr>
                                     <td><code>{Python表达式}</code></td>
@@ -5035,7 +5035,7 @@
                             <div v-else>
                                 <div v-for="(rec, i) in syncDelState.records" :key="i" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #f2f3f5; font-size:12px;">
                                     <span :style="{
-                                        padding:'1px 8px', borderRadius:'10px', fontSize:'11px', flexShrink:0',
+                                        padding:'1px 8px', borderRadius:'10px', fontSize:'11px', flexShrink:0,
                                         color: rec.result === 'success' ? '#67c23a' : (rec.result === 'not_found' ? '#e6a23c' : '#f56c6c'),
                                         background: rec.result === 'success' ? 'rgba(103,194,58,0.1)' : (rec.result === 'not_found' ? 'rgba(230,162,60,0.1)' : 'rgba(245,108,108,0.1)'),
                                     }">{{ rec.result === 'success' ? '成功' : (rec.result === 'not_found' ? '未匹配' : '失败') }}</span>
