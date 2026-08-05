@@ -2082,10 +2082,11 @@
                 <button class="btn btn-primary" @click="submitAuth" :disabled="loginForm.loading">
                     {{ loginForm.loading ? (loginForm.mode === 'register' ? '注册中...' : '登录中...') : (loginForm.mode === 'register' ? '注册并进入' : '登录') }}
                 </button>
-                <div class="auth-switch" v-if="loginForm.mode === 'register'" @click="switchAuthMode">
+                <!-- 已注册账号后不再提供注册入口，只有登录 -->
+                <div class="auth-switch" v-if="!authRegistered && loginForm.mode === 'register'" @click="switchAuthMode">
                     已有账号？<span class="auth-switch-link">直接登录</span>
                 </div>
-                <div class="auth-switch" v-else @click="switchAuthMode">
+                <div class="auth-switch" v-else-if="!authRegistered" @click="switchAuthMode">
                     没有账号？<span class="auth-switch-link">立即注册</span>
                 </div>
             </div>
@@ -4539,6 +4540,8 @@
                 const initLoadingText = ref('正在加载...');
                 const authRequired = ref(false);
                 const authToken = ref(localStorage.getItem('strmhub_token') || '');
+                // 是否已注册管理账号（已注册后登录页不显示注册入口，杜绝再次注册）
+                const authRegistered = ref(false);
                 const loginForm = reactive({
                     username: '',
                     password: '',
@@ -4645,6 +4648,8 @@
 
                 // ===== 登录 / 注册 =====
                 const switchAuthMode = () => {
+                    // 已注册管理账号后不允许切换到注册模式（杜绝再次注册）
+                    if (authRegistered.value) return;
                     loginForm.mode = loginForm.mode === 'register' ? 'login' : 'register';
                     loginForm.error = '';
                     loginForm.password = '';
@@ -7676,9 +7681,13 @@ av:
                         const res = await api('/api/version');
                         const data = await res.json();
                         authRequired.value = data.data?.auth_enabled === true;
+                        // 记录是否已注册管理账号（已注册后登录页不显示注册入口）
+                        authRegistered.value = data.data?.registered !== false;
                         // 未注册管理账号 → 登录页显示注册模式（首次部署引导）
-                        if (authRequired.value && data.data?.registered === false) {
+                        if (authRequired.value && !authRegistered.value) {
                             loginForm.mode = 'register';
+                        } else if (authRequired.value) {
+                            loginForm.mode = 'login';
                         }
                     } catch (e) {
                         initLoadingText.value = '无法连接服务器';
@@ -8702,7 +8711,7 @@ av:
                     formatTimestamp, formatBytes,
                     // 认证 & 网络 & 加载状态
                     initLoading, initLoadingText,
-                    authRequired, authToken, loginForm, doLogin, doRegister, switchAuthMode, submitAuth, doLogout,
+                    authRequired, authToken, authRegistered, loginForm, doLogin, doRegister, switchAuthMode, submitAuth, doLogout,
                     online, wsStatus, wsStatusClass, wsStatusText,
                     versionInfo, checkVersionUpdate,
                     // 转存下载
