@@ -1,19 +1,24 @@
 """
 API 路由 - 系统信息（版本号、实时日志、本地账号、本地目录浏览、登录认证）
+含 SSE 实时事件推送（#23）和 MCP Server 端点（#13）。
 """
 import os
+import json
 import threading
 import time
+import asyncio
 from pathlib import Path
 from fastapi import APIRouter, Query, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import bcrypt
 
-from app.core.json_storage import read_local_account, save_local_account
+from app.core.json_storage import read_local_account, save_local_account, read_setting
 from app.core.auth import (
     create_access_token, authenticate_user, require_auth, is_auth_enabled,
     verify_password, has_local_account,
 )
+from app.core.event_bus import get_event_bus, EventBus
 from app.schemas import ApiResponse
 from app.config import VERSION
 from app.core.logbuffer import ring_handler, SOURCE_LABELS, get_logger
@@ -346,3 +351,142 @@ async def browse_local_dirs(path: str = Query(default="/")):
         return ApiResponse(code=403, message=f"无权限访问: {target}")
     except Exception as e:
         return ApiResponse(code=500, message=f"浏览目录失败: {str(e)}")
+
+
+# ===== #23: SSE 实时事件推送 =====
+
+@router.get("/events/sse")
+async def events_sse(request: Request):
+    """
+    SSE 端点：实时推送事件总线事件。
+
+    - 订阅事件总线的全部事件类型
+    - 有事件时推送 `data: {json}\n\n`
+    - 每 30 秒发送心跳 `: keepalive\n\n`
+    - 客户端断开时取消订阅
+    """
+    bus = get_event_bus()
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _on_event(event_type: str, data: dict):
+        """事件回调：跨线程安全投递到 SSE 队列"""
+        event = {
+            "type": event_type,
+            "data": data,
+            "timestamp": time.time(),
+        }
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+        except RuntimeError:
+            # 事件循环已关闭（应用关闭中），忽略
+            pass
+
+    # 订阅全部事件类型
+    bus.subscribe_all(_on_event)
+
+    async def _event_stream():
+        try:
+            while True:
+                # 客户端断开时退出
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    # 30 秒无事件，发送心跳保持连接
+                    yield ": keepalive\n\n"
+        finally:
+            bus.unsubscribe_all(_on_event)
+            logger.debug("[sse] 事件 SSE 连接已断开，已取消订阅")
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Nginx 反代时禁用缓冲
+        },
+    )
+
+
+# ===== #13: MCP Server（AI 助手控制）=====
+
+def _mcp_enabled() -> bool:
+    """检查 MCP Server 是否启用（默认关闭）"""
+    cfg = read_setting("mcp_server")
+    return bool(cfg.get("enabled", False))
+
+
+@router.get("/mcp/sse")
+async def mcp_sse(request: Request):
+    """
+    MCP Server SSE 端点：返回 MCP 协议的 SSE 流。
+
+    客户端通过此 SSE 接收服务端消息（JSON-RPC 响应），
+    通过 POST /api/mcp/messages 发送 JSON-RPC 请求。
+    需在设置中启用 mcp_server.enabled。
+    """
+    if not _mcp_enabled():
+        return ApiResponse(code=403, message="MCP Server 未启用")
+
+    from app.services.mcp_server import get_mcp_server
+
+    server = get_mcp_server()
+    loop = asyncio.get_running_loop()
+    session_id = server.create_session(loop)
+
+    async def _mcp_stream():
+        try:
+            # 首条消息：告知客户端消息提交端点
+            endpoint_url = "/api/mcp/messages"
+            yield f"event: endpoint\ndata: {endpoint_url}\n\n"
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                msg = await server.wait_message(session_id, timeout=30.0)
+                if msg is not None:
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                else:
+                    yield ": keepalive\n\n"
+        finally:
+            server.close_session(session_id)
+            logger.debug(f"[mcp] SSE 会话已断开: {session_id}")
+
+    return StreamingResponse(
+        _mcp_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/mcp/messages")
+async def mcp_messages(request: Request):
+    """
+    MCP Server POST 端点：处理 JSON-RPC 请求。
+
+    - `initialize` -> 返回服务器能力
+    - `tools/list` -> 返回工具列表
+    - `tools/call` -> 执行指定工具
+    需在设置中启用 mcp_server.enabled。
+    """
+    if not _mcp_enabled():
+        return ApiResponse(code=403, message="MCP Server 未启用")
+
+    from app.services.mcp_server import get_mcp_server
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": None}
+
+    server = get_mcp_server()
+    result = await server.handle_message(body)
+    return result

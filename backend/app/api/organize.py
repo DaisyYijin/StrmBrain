@@ -189,6 +189,7 @@ async def run_organize(payload: OrganizeRequest):
             ai_mode=payload.ai_mode,
             dry_run=payload.dry_run,
             progress_callback=_progress_cb,
+            source_path=payload.source_path,  # #16: 传递源目录路径用于每目录配置覆盖
         )
         await progress_manager.complete_task(
             f"整理完成: 成功 {len(result.get('organized', []))}，"

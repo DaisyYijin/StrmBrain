@@ -382,15 +382,25 @@ async def probe_media_info_async(download_url: str, timeout: int = 30, file_name
 
 
 def _height_to_pix(height: int, width: int = 0) -> str:
-    """将视频分辨率转换为标准分辨率标签（优先看宽度，宽银幕电影高度不够但宽度达标）"""
+    """将视频分辨率转换为标准分辨率标签（优先看宽度，宽银幕电影高度不够但宽度达标）。
+
+    高度分档对齐：将实际高度对齐到最近的标准档位，避免非标准高度
+    （如 1079/718）输出非标准标签（如 "1079p"）。
+    对齐表：
+      >= 2000 -> "2160p"
+      >= 1000 -> "1080p"
+      >= 680  -> "720p"
+      >= 440  -> "480p"
+      > 0     -> f"{height}p"（无法对齐的保留原值）
+    """
     # 优先按宽度判断（4K 宽银幕电影高度可能不到 2160）
-    if width >= 3840 or height >= 2160:
+    if width >= 3840 or height >= 2000:
         return "2160p"
-    elif width >= 1920 or height >= 1080:
+    elif width >= 1920 or height >= 1000:
         return "1080p"
-    elif width >= 1280 or height >= 720:
+    elif width >= 1280 or height >= 680:
         return "720p"
-    elif width >= 854 or height >= 480:
+    elif width >= 854 or height >= 440:
         return "480p"
     elif height > 0:
         return f"{height}p"

@@ -3234,6 +3234,48 @@
                                 支持冲突检测（目标已存在时标记跳过）、剧集分组、配额限制。
                             </p>
                         </div>
+
+                        <!-- 路径映射 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">STRM 路径映射<span class="help-tip">?<span class="tip-text">生成 STRM 文件时对路径进行映射转换。支持 replace（替换）/replaceAll（全替换）/prefix（前插）/suffix（尾插）四种操作。来源类型：local=本地路径，strm_rel=STRM相对路径，strm_url=STRM内容URL，all=全部。</span></span></div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                <span style="font-size:13px; color:#909399;">共 {{ pathMapping.rules.length }} 条规则</span>
+                                <button class="btn btn-primary btn-small" @click="pathMapping.rules.push({op:'replace',source:'strm_url',from:'',to:''})">添加</button>
+                            </div>
+                            <div v-if="pathMapping.rules.length === 0" style="color:#909399; font-size:13px; padding:8px 0;">暂无规则</div>
+                            <div v-for="(rule, idx) in pathMapping.rules" :key="idx" style="display:flex; gap:4px; margin-bottom:6px; flex-wrap:wrap; align-items:center;">
+                                <select v-model="rule.op" style="padding:3px 6px; border:1px solid #dcdfe6; border-radius:4px; font-size:12px;">
+                                    <option value="replace">替换</option><option value="replaceAll">全替换</option><option value="prefix">前插</option><option value="suffix">尾插</option>
+                                </select>
+                                <select v-model="rule.source" style="padding:3px 6px; border:1px solid #dcdfe6; border-radius:4px; font-size:12px;">
+                                    <option value="all">全部</option><option value="local">本地路径</option><option value="strm_rel">STRM相对</option><option value="strm_url">STRM URL</option>
+                                </select>
+                                <input v-model="rule.from" placeholder="源" style="flex:1; min-width:80px; padding:3px 6px; border:1px solid #dcdfe6; border-radius:4px; font-size:12px;">
+                                <span style="color:#909399;">-></span>
+                                <input v-model="rule.to" placeholder="目标" style="flex:1; min-width:80px; padding:3px 6px; border:1px solid #dcdfe6; border-radius:4px; font-size:12px;">
+                                <button class="btn btn-danger btn-small" @click="pathMapping.rules.splice(idx,1)" style="padding:3px 8px;">删</button>
+                            </div>
+                            <button v-if="pathMapping.rules.length > 0" class="btn btn-primary btn-small" @click="savePathMapping" :disabled="pathMapping.saving" style="margin-top:6px;">{{ pathMapping.saving ? '保存中...' : '保存' }}</button>
+                        </div>
+
+                        <!-- P2 新增功能说明 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">P2 增强功能总览</div>
+                            <div style="font-size:13px; color:#909399; line-height:2;">
+                                <strong style="color:#303133;">已启用的 P2 功能：</strong><br>
+                                · 数据库 WAL 模式 -- 自动启用，提升 SQLite 并发读写<br>
+                                · ffprobe 高度分档对齐 -- 自动对齐 1079p->1080p 等非标准值<br>
+                                · 硬链接/软链接整理 -- 在整理配置中选择整理方式<br>
+                                · SystemInfo 端口重写 -- 反代自动重写 Emby 端口<br>
+                                · Web 跨域修复 -- 反代自动修复 115 直链跨域<br>
+                                · Jinja2 重命名模板 -- 支持 {% if %} 条件语法<br>
+                                · 关联文件整理 -- 整理时自动移动同名字幕/音轨<br>
+                                · 自动删除劣质源 -- 整理后新文件更优时删除旧文件<br>
+                                · 事件总线 + SSE -- GET /api/events/sse 实时事件流<br>
+                                · MCP Server -- GET /api/mcp/sse AI 助手控制接口<br>
+                                · Emby 媒体信息 -- 媒体信息关联缓存框架
+                            </div>
+                        </div>
                     </div>
                     <!-- /高级功能 -->
 
@@ -7652,6 +7694,7 @@ av:
                     enabled: false, token: '', allowedChatIds: '',
                     saving: false, testing: false, resultMsg: '', status: null,
                 });
+                const pathMapping = reactive({ rules: [], saving: false });
 
                 // STRM 播放安全配置
                 const strmSecurity = reactive({
@@ -8080,6 +8123,25 @@ av:
                         tgBot.resultMsg = data.code === 0 ? '测试消息已发送' : (data.message || '发送失败');
                     } catch (e) { tgBot.resultMsg = '发送失败：网络错误'; }
                     tgBot.testing = false;
+                };
+                const loadPathMapping = async () => {
+                    try {
+                        const res = await api('/api/settings/path-mapping');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) pathMapping.rules = data.data.rules || [];
+                    } catch (e) { console.warn('加载路径映射失败:', e); }
+                };
+                const savePathMapping = async () => {
+                    pathMapping.saving = true;
+                    try {
+                        const res = await api('/api/settings/path-mapping', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ rules: pathMapping.rules }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '路径映射已保存' : (data.message || '保存失败'));
+                    } catch (e) { showToast('保存失败'); }
+                    pathMapping.saving = false;
                 };
 
                 // 检测账号
@@ -9670,7 +9732,7 @@ av:
                         await loadClouddownloadConfig();
                         await checkFfprobeStatus();
                         // P1 高级功能加载
-                        loadRouteRules(); loadCacheWarmer(); loadTgBot();
+                        loadRouteRules(); loadCacheWarmer(); loadTgBot(); loadPathMapping();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
                     } catch (e) {
@@ -11722,6 +11784,7 @@ av:
                     advFeatures, loadRouteRules, addRouteRule, saveRouteRules,
                     cacheWarmer, loadCacheWarmer, saveCacheWarmer, runCacheWarmer,
                     tgBot, loadTgBot, saveTgBot, testTgBot,
+                    pathMapping, loadPathMapping, savePathMapping,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
                     formatTimestamp, formatBytes,

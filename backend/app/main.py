@@ -38,6 +38,9 @@ _PUBLIC_PREFIXES = (
     "/api/115/url/",   # 302 下载重定向（Emby 直接访问）
     "/ws/progress",    # WebSocket 进度通道
     "/api/automation/webhook/",  # 自动化规则 Webhook 触发（公开端点，token 鉴权）
+    "/api/events/sse", # SSE 实时事件推送（EventSource 无法设置 Authorization 头）
+    "/api/mcp/sse",    # MCP Server SSE 流（同上）
+    "/api/mcp/messages",  # MCP Server JSON-RPC 消息（SSE 客户端 POST 提交）
 )
 
 
@@ -46,7 +49,21 @@ async def lifespan(app: FastAPI):
     """应用生命周期"""
     setup_logging()
     logger = get_logger()
+
+    # 启用 SQLite WAL 模式（提升并发读写性能，失败不影响启动）
+    try:
+        from app.core.db_helper import enable_wal_mode
+        enable_wal_mode()
+    except Exception as e:
+        logger.warning(f"启用数据库 WAL 模式失败: {e}")
+
     from app.core.scheduler import init_scheduler, shutdown_scheduler
+
+    # 注册事件总线的 event loop 引用（供工作线程跨线程发布事件）
+    import asyncio as _asyncio
+    from app.core.event_bus import get_event_bus
+    get_event_bus().set_loop(_asyncio.get_running_loop())
+
     _version_task = None
     await init_scheduler()
 

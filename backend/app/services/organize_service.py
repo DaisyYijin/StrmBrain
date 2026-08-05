@@ -3,6 +3,8 @@
 支持基于 TMDB 元数据的二级分类（YAML 配置），整理结果保存到整理后目录
 """
 import re
+import os
+import shutil
 import time as _time
 from typing import Optional
 from collections import defaultdict
@@ -13,6 +15,15 @@ from app.services.category_helper import CategoryHelper
 from app.services.media_probe import probe_media_info_async, is_ffprobe_available
 from app.core.logbuffer import get_logger
 from app.core.db_helper import get_api_intervals
+from app.core.json_storage import read_setting, save_setting
+
+# #18: Jinja2 可用性标志（不可用时优雅降级到现有模板引擎）
+try:
+    import jinja2 as _jinja2
+    JINJA2_AVAILABLE = True
+except ImportError:  # pragma: no cover - jinja2 缺失时的降级路径
+    _jinja2 = None
+    JINJA2_AVAILABLE = False
 
 
 def _organize_write_interval() -> float:
@@ -23,6 +34,55 @@ def _organize_write_interval() -> float:
 def _organize_retry_cooldown() -> float:
     """整理重试冷却时间（跟随用户配置的冷却时间）"""
     return max(get_api_intervals().get("retry_cooldown", 30.0), 1.0)
+
+
+def _get_organize_method() -> str:
+    """读取整理文件方式配置（move/copy/hardlink/softlink），默认 move。
+
+    从 read_setting("organize_dirs") 读取 organize_method 字段，
+    非法值回退为 "move"。
+    """
+    try:
+        cfg = read_setting("organize_dirs")
+        method = cfg.get("organize_method", "move")
+        if method in ("move", "copy", "hardlink", "softlink"):
+            return method
+    except Exception:
+        pass
+    return "move"
+
+
+def _organize_file(src: str, dst: str, method: str = "move") -> None:
+    """按指定方式整理本地文件（移动/复制/硬链接/软链接）。
+
+    用于整理场景下本地 STRM/媒体文件的迁移：
+    - move: shutil.move（现有行为，移动后源文件不存在）
+    - copy: shutil.copy2（复制并保留元数据，源文件保留）
+    - hardlink: os.link 创建硬链接，失败（跨设备）降级为 copy2
+    - softlink: os.symlink 创建软链接，失败降级为 copy2
+
+    Args:
+        src: 源文件路径
+        dst: 目标文件路径
+        method: 整理方式（move/copy/hardlink/softlink）
+    """
+    if method == "copy":
+        shutil.copy2(src, dst)
+    elif method == "hardlink":
+        try:
+            os.link(src, dst)
+        except OSError:
+            # 跨设备或权限不足，降级为复制
+            shutil.copy2(src, dst)
+    elif method == "softlink":
+        try:
+            os.symlink(src, dst)
+        except OSError:
+            # 跨设备或权限不足，降级为复制
+            shutil.copy2(src, dst)
+    else:
+        # move（默认行为）
+        shutil.move(src, dst)
 
 logger = get_logger("app.services.organize_service")
 
@@ -740,6 +800,8 @@ def apply_rename_template(
     - <?{{name}}...> 静默命名块（只赋值不输出）
     - {Python表达式} 支持 .replace()/.lower()/.upper() 等
     - [[ ]] 转义为字面量 { }
+    - Jinja2 语法（{{ var }} / {% ... %}）：检测到且不含 < 条件块标记时，
+      用 jinja2.Template 渲染，context 包含现有所有变量；jinja2 不可用时降级到内置引擎。
     如果缺少必要变量，返回 None 表示跳过重命名。
     media_info: ffprobe 探测结果，用于补充文件名解析不到的资源信息。
     """
@@ -839,7 +901,38 @@ def apply_rename_template(
         "custom_regex_match": "",
     }
 
-    # Step 1: 转义 [[ ]] → 临时占位符（之后恢复为 { }）
+    # ===== #18: Jinja2 模板渲染（向后兼容，不影响现有 <条件块> 语法） =====
+    # 检测模板是否为 Jinja2 语法：含 {% 或 {{ 且不含 < 条件块标记
+    _is_jinja2_syntax = ("{%" in template or "{{" in template) and "<" not in template
+    if _is_jinja2_syntax:
+        if not JINJA2_AVAILABLE:
+            # jinja2 不可用时优雅降级：记录警告并走现有逻辑（避免完全无法重命名）
+            logger.warning("[organize] 模板疑似 Jinja2 语法，但 jinja2 未安装，回退到内置模板引擎")
+        else:
+            # 标题为空时，检查 Jinja2 模板是否依赖 TMDB 变量（与现有逻辑保持一致）
+            if not title:
+                _jinja2_dep_re = re.compile(
+                    r'\{\{\s*(title|en_title|first_letter|year|tmdb_id|season_name|season_year|episode_name)\b'
+                )
+                if _jinja2_dep_re.search(template):
+                    return None
+            try:
+                # 使用 jinja2 渲染，context 包含现有所有变量
+                _jinja2_env = _jinja2.Template(template)
+                result = _jinja2_env.render(**variables)
+                # 清理连续分隔符和首尾空白
+                result = re.sub(r'\.{2,}', '.', result)
+                result = re.sub(r'[ ]{2,}', ' ', result)
+                result = re.sub(r'^[._\s]+|[._\s]+$', '', result)
+                result = re.sub(r'\(\s*\)', '', result).strip()
+                # 去除文件系统不允许的字符
+                result = re.sub(r'[<>:"/\\|?*]', '', result)
+                return result if result else None
+            except Exception as e:
+                logger.warning(f"[organize] Jinja2 模板渲染失败: {e}")
+                return None
+
+    # Step 1: 转义 [[ ]] -> 临时占位符（之后恢复为 { }）
     template = template.replace("[[", "\x00").replace("]]", "\x01")
 
     # Step 2: 处理条件块
@@ -901,6 +994,241 @@ def apply_rename_template(
     return result if result else None
 
 
+# ===== #16: 每目录独立配置覆盖 =====
+
+# 可被目录覆盖覆盖的整理配置字段及其全局默认值
+_DIR_OVERRIDE_FIELDS = {
+    "use_ffprobe": False,
+    "skip_no_info": False,
+    "prefer_filename": False,
+    "min_organize_size_mb": 0,
+    "organize_blacklist": "",
+    "ai_mode": "off",
+    "auto_delete_inferior": False,
+}
+
+
+def get_dir_config(source_path: str) -> dict:
+    """
+    获取指定源目录的整理配置（合并全局配置和目录覆盖）。
+
+    从 read_setting("organize_dirs") 读取配置：
+    - 全局配置：organize_dirs 顶层的整理参数字段
+    - 目录覆盖：organize_dirs["dir_overrides"] 列表，每项形如 {"path": str, "config": dict}
+    合并规则：目录覆盖中的字段优先；值为 -1 或缺失时继承全局配置。
+
+    Args:
+        source_path: 源目录路径（网盘路径或本地路径，用于匹配 dir_overrides 中的 path）
+
+    Returns:
+        合并后的配置字典，包含 use_ffprobe / skip_no_info / prefer_filename /
+        min_organize_size_mb / organize_blacklist / ai_mode / auto_delete_inferior 等字段。
+    """
+    data = read_setting("organize_dirs")
+    if not isinstance(data, dict):
+        data = {}
+
+    # 1. 读取全局配置默认值
+    config = {}
+    for field, default_val in _DIR_OVERRIDE_FIELDS.items():
+        config[field] = data.get(field, default_val)
+
+    # 2. 查找匹配的目录覆盖
+    dir_overrides = data.get("dir_overrides", [])
+    if not isinstance(dir_overrides, list) or not source_path:
+        return config
+
+    # 规范化 source_path 用于前缀匹配（去尾部分隔符）
+    norm_source = source_path.rstrip("/").rstrip("\\")
+    best_match = None
+    best_match_len = -1
+
+    for entry in dir_overrides:
+        if not isinstance(entry, dict):
+            continue
+        entry_path = (entry.get("path") or "").strip()
+        if not entry_path:
+            continue
+        # 规范化覆盖路径
+        norm_entry = entry_path.rstrip("/").rstrip("\\")
+        # 匹配规则：source_path 等于 entry_path，或以 entry_path + 分隔符 开头
+        if norm_source == norm_entry or norm_source.startswith(norm_entry + "/") or norm_source.startswith(norm_entry + "\\"):
+            # 选择最长匹配（最具体的覆盖优先）
+            if len(norm_entry) > best_match_len:
+                best_match_len = len(norm_entry)
+                best_match = entry
+
+    if not best_match:
+        return config
+
+    # 3. 合并目录覆盖（-1 或缺失表示继承全局）
+    override_config = best_match.get("config", {})
+    if not isinstance(override_config, dict):
+        override_config = {}
+
+    for field in _DIR_OVERRIDE_FIELDS:
+        if field not in override_config:
+            continue
+        val = override_config[field]
+        # -1 表示继承全局（仅对数值/布尔字段有意义）
+        if val is None or val == -1:
+            continue
+        config[field] = val
+
+    logger.info(f"[organize] 目录覆盖生效: source_path='{source_path}', 匹配='{best_match.get('path', '')}'")
+    return config
+
+
+# ===== #21: 关联文件批量整理 + 自动删除劣质源 =====
+
+# 关联字幕文件扩展名
+LINKED_SUBTITLE_EXTS = {".srt", ".ass", ".ssa", ".sub", ".vtt"}
+
+# 外挂音轨扩展名
+LINKED_AUDIO_EXTS = {".mka", ".ac3", ".dts"}
+
+# 关联文件扩展名集合（字幕 + 外挂音轨）
+LINKED_FILE_EXTS = LINKED_SUBTITLE_EXTS | LINKED_AUDIO_EXTS
+
+# 分辨率优先级排名（数值越大越优）
+_PIX_RANK_MAP = {
+    "480p": 1,
+    "720p": 2,
+    "1080i": 3,
+    "1080p": 4,
+    "1440p": 5,
+    "2160i": 6,
+    "2160p": 7,
+}
+
+
+def _find_linked_files(video_path: str, dir_files: list) -> list:
+    """
+    找同目录下同名字幕文件和外挂音轨文件。
+
+    匹配规则：文件基名（不含扩展名）与视频文件基名相同，
+    且扩展名属于字幕（.srt/.ass/.ssa/.sub/.vtt）或外挂音轨（.mka/.ac3/.dts）。
+
+    Args:
+        video_path: 视频文件名（或路径，取基名部分）
+        dir_files:  同目录下的文件列表，每项为 dict（至少含 "name" 字段）
+
+    Returns:
+        关联文件路径/名称列表（list[str]）
+    """
+    # 提取视频文件基名（不含扩展名）
+    video_name = video_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    video_base = video_name.rsplit(".", 1)[0] if "." in video_name else video_name
+    if not video_base:
+        return []
+
+    linked = []
+    for f in dir_files:
+        if not isinstance(f, dict):
+            continue
+        fname = f.get("name", "")
+        if not fname or fname == video_name:
+            continue
+        # 提取扩展名（小写带点）
+        ext = ("." + fname.rsplit(".", 1)[-1].lower()) if "." in fname else ""
+        if ext not in LINKED_FILE_EXTS:
+            continue
+        # 提取文件基名
+        f_base = fname.rsplit(".", 1)[0] if "." in fname else fname
+        if f_base == video_base:
+            linked.append(fname)
+    return linked
+
+
+def _pix_rank(pix: str) -> int:
+    """获取分辨率排名（数值越大越优），未知分辨率返回 0。"""
+    return _PIX_RANK_MAP.get((pix or "").lower(), 0)
+
+
+def auto_delete_inferior_source(new_path: str, old_path: str, new_info: dict, old_info: dict) -> bool:
+    """
+    比较新旧文件的分辨率/码率，如果新文件更优则删除旧文件。
+
+    比较维度（按优先级）：
+      1. 分辨率（resource_pix）：2160p > 1080p > 720p > 480p
+      2. 码率（bitrate）：数值越大越优（来自 ffprobe 探测结果）
+    若新文件分辨率更高，或分辨率相同但码率更高，则判定为新文件更优。
+
+    配置开关：read_setting("organize_dirs") 中的 auto_delete_inferior（默认 False）。
+    开关关闭时直接返回 False（不删除）。
+
+    Args:
+        new_path:  新文件路径/名称（用于日志）
+        old_path:  旧文件路径/名称（用于日志；若为本地路径则尝试直接删除）
+        new_info:  新文件资源信息（parse_resource_info 或 ffprobe 结果）
+        old_info:  旧文件资源信息
+
+    Returns:
+        True 表示新文件更优且旧文件已被删除或应被删除；False 表示不删除。
+    """
+    # 检查配置开关
+    cfg = read_setting("organize_dirs")
+    if not isinstance(cfg, dict) or not cfg.get("auto_delete_inferior", False):
+        return False
+
+    new_info = new_info or {}
+    old_info = old_info or {}
+
+    # 1. 分辨率比较
+    new_pix_rank = _pix_rank(new_info.get("resource_pix", ""))
+    old_pix_rank = _pix_rank(old_info.get("resource_pix", ""))
+
+    if new_pix_rank > old_pix_rank:
+        logger.info(
+            f"[organize] 自动删除劣质源: 新文件分辨率更优 "
+            f"'{new_info.get('resource_pix', '')}' > '{old_info.get('resource_pix', '')}' "
+            f"new='{new_path}' old='{old_path}'"
+        )
+        _try_delete_local(old_path)
+        return True
+
+    if new_pix_rank < old_pix_rank:
+        return False
+
+    # 2. 分辨率相同，比较码率（来自 ffprobe 的 bitrate 字段）
+    new_br = 0
+    old_br = 0
+    try:
+        new_br = int(new_info.get("bitrate", 0) or 0)
+    except (ValueError, TypeError):
+        pass
+    try:
+        old_br = int(old_info.get("bitrate", 0) or 0)
+    except (ValueError, TypeError):
+        pass
+
+    if new_br > 0 and new_br > old_br:
+        logger.info(
+            f"[organize] 自动删除劣质源: 新文件码率更优 {new_br} > {old_br} "
+            f"new='{new_path}' old='{old_path}'"
+        )
+        _try_delete_local(old_path)
+        return True
+
+    return False
+
+
+def _try_delete_local(path: str) -> bool:
+    """尝试删除本地文件（若 path 为本地文件路径）。返回是否已删除。"""
+    if not path:
+        return False
+    try:
+        from pathlib import Path
+        p = Path(path)
+        if p.is_file():
+            p.unlink()
+            logger.info(f"[organize] 已删除劣质源本地文件: {path}")
+            return True
+    except Exception as e:
+        logger.debug(f"[organize] 删除本地文件失败（可能为网盘路径）: {path}: {e}")
+    return False
+
+
 class OrganizeService:
     """网盘文件整理服务"""
 
@@ -925,6 +1253,7 @@ class OrganizeService:
         ai_mode: str = "off",  # off=关闭, assist=TMDB失败时辅助, force=强制使用AI
         dry_run: bool = False,
         progress_callback=None,
+        source_path: str = "",  # #16: 源目录路径，用于每目录配置覆盖
     ) -> dict:
         """
         扫描源目录并整理文件
@@ -941,6 +1270,7 @@ class OrganizeService:
             wash_config: 洗版策略配置字典
             dry_run: True=仅预览，不实际移动/重命名文件
             progress_callback: 可选的异步回调函数 async callback(current, total, filename)
+            source_path: 源目录路径（#16 用于每目录配置覆盖）
 
         Returns:
             {
@@ -960,6 +1290,16 @@ class OrganizeService:
             "errors": [],
             "dry_run": dry_run,
         }
+
+        # #16: 每目录独立配置覆盖 - 合并全局配置和目录覆盖（目录配置优先）
+        if source_path:
+            _dir_cfg = get_dir_config(source_path)
+            use_ffprobe = _dir_cfg.get("use_ffprobe", use_ffprobe)
+            skip_no_info = _dir_cfg.get("skip_no_info", skip_no_info)
+            prefer_filename = _dir_cfg.get("prefer_filename", prefer_filename)
+            min_organize_size_mb = _dir_cfg.get("min_organize_size_mb", min_organize_size_mb)
+            organize_blacklist = _dir_cfg.get("organize_blacklist", organize_blacklist)
+            ai_mode = _dir_cfg.get("ai_mode", ai_mode)
 
         logger.info(f"[organize] 整理开始: source_cid={source_cid}, target_cid={target_cid}, existing_cid={existing_cid}, redundant_cid={redundant_cid}, unrecognized_cid={unrecognized_cid}")
         _organize_start_ts = _time.time()
@@ -1365,17 +1705,42 @@ class OrganizeService:
                         if not should_move:
                             skip_move = True
                             skip_reason = f"洗版跳过: {wash_reason}"
-                        elif old_files_to_replace and redundant_cid:
-                            # 移走被替换的旧文件到冗余目录（洗版替换需要立即执行）
+                        elif old_files_to_replace:
+                            # #21: 自动删除劣质源 / 洗版替换旧文件处理
+                            _new_info = parse_resource_info(file_info["name"], media_info, prefer_filename)
+                            _new_info["size"] = file_info.get("size", 0)
                             for old_file in old_files_to_replace:
                                 old_name = old_file.get("name", "")
-                                logger.info(f"[organize] 洗版替换: 移走旧文件 '{old_name}' → 冗余目录")
-                                ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid, context=old_name)
-                                if ok_old:
-                                    result["redundant"].append({"name": old_name, "reason": f"洗版被替换: {wash_reason}"})
+                                _old_info = parse_resource_info(old_name, None, prefer_filename)
+                                _old_info["size"] = old_file.get("size", 0)
+                                # 判断是否自动删除劣质源（内部检查配置开关）
+                                if auto_delete_inferior_source(file_info["name"], old_name, _new_info, _old_info):
+                                    # 新文件更优 -> 删除旧文件（移入 115 回收站）
+                                    del_resp = Client115Service.delete_files(cookies, [old_file["file_id"]])
+                                    if not (isinstance(del_resp, dict) and del_resp.get("error")):
+                                        logger.info(f"[organize] 自动删除劣质源: {old_name}")
+                                        result["redundant"].append({"name": old_name, "reason": f"自动删除劣质源: {wash_reason}"})
+                                    elif redundant_cid:
+                                        # 删除失败，回退到移动到冗余目录
+                                        logger.warning(f"[organize] 自动删除失败，回退到移动: {old_name}")
+                                        ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid, context=old_name)
+                                        if ok_old:
+                                            result["redundant"].append({"name": old_name, "reason": f"洗版被替换: {wash_reason}"})
+                                        else:
+                                            result["errors"].append({"name": old_name, "error": "洗版替换：移走旧文件失败"})
+                                    else:
+                                        result["errors"].append({"name": old_name, "error": "自动删除失败且未配置冗余目录"})
+                                elif redundant_cid:
+                                    # 不满足自动删除条件 -> 移走旧文件到冗余目录
+                                    logger.info(f"[organize] 洗版替换: 移走旧文件 '{old_name}' -> 冗余目录")
+                                    ok_old = Client115Service.move(cookies, [old_file["file_id"]], redundant_cid, context=old_name)
+                                    if ok_old:
+                                        result["redundant"].append({"name": old_name, "reason": f"洗版被替换: {wash_reason}"})
+                                    else:
+                                        logger.warning(f"[organize] 移走旧文件失败: {old_name}")
+                                        result["errors"].append({"name": old_name, "error": "洗版替换：移走旧文件失败"})
                                 else:
-                                    logger.warning(f"[organize] 移走旧文件失败: {old_name}")
-                                    result["errors"].append({"name": old_name, "error": "洗版替换：移走旧文件失败"})
+                                    logger.warning(f"[organize] 无法处理旧文件（未配置冗余目录且未启用自动删除）: {old_name}")
 
                     if skip_move:
                         result["redundant"].append({"name": orig_name, "reason": skip_reason})
@@ -1595,6 +1960,35 @@ class OrganizeService:
                                 logger.info(f"[organize] 关联数据文件已移动: {df['name']} -> {category}/")
                             else:
                                 logger.warning(f"[organize] 关联数据文件移动失败: {df['name']}")
+
+                    # #21: 关联文件批量整理 - 查找并移动同名字幕/外挂音轨（补充 data_files 未覆盖的扩展名）
+                    _video_parent_id = file_info.get("parent_id", "")
+                    _same_dir_files = [f for f in all_files if f.get("parent_id", "") == _video_parent_id]
+                    _linked_names = _find_linked_files(orig_name, _same_dir_files)
+                    if _linked_names:
+                        _video_base = orig_name.rsplit(".", 1)[0] if "." in orig_name else orig_name
+                        _new_base = (renamed_to.rsplit(".", 1)[0] if renamed_to and "." in renamed_to
+                                     else (renamed_to or _video_base))
+                        for _lf_name in _linked_names:
+                            _lf_dict = next((f for f in _same_dir_files if f.get("name") == _lf_name), None)
+                            if not _lf_dict:
+                                continue
+                            _lf_file_id = _lf_dict.get("file_id", "")
+                            if not _lf_file_id or _lf_file_id in moved_data_file_ids:
+                                continue  # 已被 data_files 逻辑移动，跳过
+                            # 视频被重命名时，关联文件同步重命名（保持同名）
+                            if renamed_to and renamed_to != orig_name:
+                                _lf_ext = ("." + _lf_name.rsplit(".", 1)[-1]) if "." in _lf_name else ""
+                                _new_lf_name = _new_base + _lf_ext
+                                if _new_lf_name != _lf_name:
+                                    Client115Service.rename(cookies, _lf_file_id, _new_lf_name, context=_lf_name)
+                                    logger.info(f"[organize] 关联文件重命名: {_lf_name} -> {_new_lf_name}")
+                            ok_lf = Client115Service.move(cookies, [_lf_file_id], final_target_cid, context=_lf_name)
+                            if ok_lf:
+                                moved_data_file_ids.add(_lf_file_id)
+                                logger.info(f"[organize] 关联文件已移动: {_lf_name} -> {category}/")
+                            else:
+                                logger.warning(f"[organize] 关联文件移动失败: {_lf_name}")
                 else:
                     logger.warning(f"[organize] 移动失败: {orig_name}")
                     result["errors"].append({"name": orig_name, "error": "移动失败"})
@@ -1831,6 +2225,22 @@ class OrganizeService:
             f"无法识别 {unrecognized}, 失败 {errors}, "
             f"耗时 {_time.time() - _organize_start_ts:.1f}s"
         )
+
+        # #23: 发布 ORGANIZE_COMPLETED 事件到事件总线
+        try:
+            from app.core.event_bus import get_event_bus, EventBus
+            get_event_bus().publish(EventBus.ORGANIZE_COMPLETED, {
+                "summary": f"成功 {organized}, 冗余 {redundant}, 无法识别 {unrecognized}, 失败 {errors}",
+                "total": result.get("total", 0),
+                "organized": organized,
+                "redundant": redundant,
+                "unrecognized": unrecognized,
+                "errors": errors,
+                "dry_run": dry_run,
+            })
+        except Exception:
+            pass
+
         return result
 
     @classmethod

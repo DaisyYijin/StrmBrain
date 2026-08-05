@@ -301,6 +301,21 @@ class SyncService:
         logger.info(f"[sync] 全量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
+        # #23: 发布 SYNC_COMPLETED 事件到事件总线
+        try:
+            from app.core.event_bus import get_event_bus, EventBus
+            get_event_bus().publish(EventBus.SYNC_COMPLETED, {
+                "sync_type": "full",
+                "summary": summary,
+                "total": result["total"],
+                "synced": len(result["synced"]),
+                "skipped": result["skipped"],
+                "errors": len(result["errors"]),
+                "local_media_dir": local_media_dir,
+            })
+        except Exception:
+            pass
+
         # Q5: 扫描失败聚合通知（errors 非空时推送前 10 条错误）
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "全量", loop)
@@ -534,6 +549,21 @@ class SyncService:
         logger.info(f"[sync] 增量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
+        # #23: 发布 SYNC_COMPLETED 事件到事件总线
+        try:
+            from app.core.event_bus import get_event_bus, EventBus
+            get_event_bus().publish(EventBus.SYNC_COMPLETED, {
+                "sync_type": "incremental",
+                "summary": summary,
+                "total": result["total"],
+                "synced": len(result["synced"]),
+                "skipped": result["skipped"],
+                "errors": len(result["errors"]),
+                "local_media_dir": local_media_dir,
+            })
+        except Exception:
+            pass
+
         # Q5: 扫描失败聚合通知（errors 非空时推送前 10 条错误）
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "增量", loop)
@@ -647,6 +677,18 @@ class SyncService:
                 strm_name = name + ".strm"
                 strm_path = local_dir / strm_name
 
+                # #19: 路径映射 - 应用到本地相对路径（可能改变 STRM 落盘位置）
+                from app.services.path_mapper import PathMapper
+                _path_mapper = PathMapper(PathMapper.get_config())
+                _rel_path_str = f"{parent_path}/{strm_name}" if parent_path else strm_name
+                _rel_path_str = _path_mapper.apply(_rel_path_str, "strm_rel")
+                strm_path = local_root / _rel_path_str
+                # 应用到本地绝对路径（local 映射可能将文件写到 local_root 之外）
+                _local_mapped = _path_mapper.apply(str(strm_path), "local")
+                if _local_mapped and _local_mapped != str(strm_path):
+                    strm_path = Path(_local_mapped)
+                strm_path.parent.mkdir(parents=True, exist_ok=True)
+
                 # overwrite_mode=skip 时，已存在且非空的 STRM 文件跳过写入
                 overwrite_mode = (strm_settings or {}).get("overwrite_mode", "skip")
                 if overwrite_mode == "skip" and strm_path.exists() and strm_path.stat().st_size > 0:
@@ -656,6 +698,9 @@ class SyncService:
                 if not content:
                     logger.warning(f"[sync] STRM 内容为空（server_url 未配置），跳过: {parent_path}/{strm_name}")
                     return None, {"name": name, "error": "server_url 未配置，无法生成 STRM"}
+
+                # #19: 路径映射 - 应用到 STRM 内容（播放 URL），写 STRM 内容前生效
+                content = _path_mapper.apply(content, "strm_url")
 
                 # S3: 内容级比对 + mtime 保持（参考 qmediasync CompareStrm）
                 # 目标 STRM 已存在时，先读取其内容与待写入内容比对：
@@ -677,9 +722,14 @@ class SyncService:
                         return {"name": name, "type": "skipped"}, manifest_entry
                 strm_path.write_text(content, encoding="utf-8")
 
+                # #19: 映射后的路径可能位于 local_root 之外，relative_to 容错处理
+                try:
+                    _return_path = str(strm_path.relative_to(local_root))
+                except ValueError:
+                    _return_path = str(strm_path)
                 return {
                     "name": name, "type": "strm",
-                    "path": str(strm_path.relative_to(local_root)),
+                    "path": _return_path,
                 }, manifest_entry
 
             elif ext in image_exts or ext in data_exts:
@@ -907,6 +957,9 @@ class SyncService:
         将本地文件从旧位置迁移到新位置（整理后文件被移动或重命名时调用）。
         旧文件存在则移动，不存在则通过 _sync_single_file 重新生成。
         """
+        # 读取整理文件方式（move/copy/hardlink/softlink），用于本地文件迁移
+        from app.services.organize_service import _organize_file, _get_organize_method
+        _organize_method = _get_organize_method()
         old_local_dir = local_root / old_parent_path if old_parent_path else local_root
         new_local_dir = local_root / new_parent_path if new_parent_path else local_root
         new_local_dir.mkdir(parents=True, exist_ok=True)
@@ -930,7 +983,7 @@ class SyncService:
 
                 if old_strm_path.exists():
                     if old_strm_path.resolve() != new_strm_path.resolve():
-                        shutil.move(str(old_strm_path), str(new_strm_path))
+                        _organize_file(str(old_strm_path), str(new_strm_path), _organize_method)
                     # 迁移后重新生成 STRM 内容，确保 URL 中的文件名和路径与网盘一致
                     content = cls._generate_strm_content(new_name, new_parent_path, pickcode, account_id, strm_settings or cls._load_strm_settings())
                     if content:
@@ -964,7 +1017,7 @@ class SyncService:
 
                 if old_file_path.exists():
                     if old_file_path.resolve() != new_file_path.resolve():
-                        shutil.move(str(old_file_path), str(new_file_path))
+                        _organize_file(str(old_file_path), str(new_file_path), _organize_method)
                     logger.info(f"[sync] 文件迁移: {old_parent_path}/{old_name} -> {new_parent_path}/{new_name}")
                     result["synced"].append({
                         "name": new_name, "type": "relocated",

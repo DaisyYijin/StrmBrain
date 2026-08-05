@@ -47,6 +47,9 @@ _REG_SUBTITLES = re.compile(r"(?i)subtitles")
 # P3: Items 详情接口: /Items/{id}（纯详情结尾，用于 PlaybackInfo 缓存覆盖）
 _REG_ITEMS = re.compile(r"(?i)^/.*items/([^/]+)$")
 
+# SystemInfo 接口: /system/info（端口重写，避免客户端直连真实 Emby 端口）
+_REG_SYSTEM_INFO = re.compile(r"(?i)^/.*system/info")
+
 # P4: 播放会话接口: /Sessions/Playing/{Stopped|Progress}（播放进度辅助）
 _REG_SESSIONS_PLAYING = re.compile(r"(?i)^/.*sessions/playing/(stopped|progress)$")
 
@@ -1200,6 +1203,28 @@ async def proxy_origin(request: Request):
                 status_code=resp.status_code,
                 headers=resp_headers,
             )
+
+        # Web 跨域修复：basehtmlplayer 的 JS 中 crossorigin="anonymous" 导致
+        # 115 直链跨域时浏览器阻止播放。替换为 crossorigin="null" 绕过 CORS 预检。
+        _ct_lower = (resp.headers.get("content-type", "") or "").lower()
+        if "javascript" in _ct_lower and "basehtmlplayer" in request.url.path.lower():
+            try:
+                _body_text = resp.content.decode("utf-8", errors="replace")
+                _body_text = re.sub(
+                    r'crossorigin="anonymous"', 'crossorigin="null"',
+                    _body_text, flags=re.IGNORECASE,
+                )
+                _new_bytes = _body_text.encode("utf-8")
+                resp_headers["Content-Length"] = str(len(_new_bytes))
+                return Response(
+                    content=_new_bytes,
+                    status_code=resp.status_code,
+                    headers=resp_headers,
+                    media_type=resp.headers.get("content-type"),
+                )
+            except Exception as e:
+                logger.debug(f"[proxy] basehtmlplayer 跨域修复失败: {e}")
+
         return Response(
             content=resp.content,
             status_code=resp.status_code,
@@ -1209,6 +1234,56 @@ async def proxy_origin(request: Request):
     except Exception as e:
         logger.warning(f"[proxy] 回源失败 {request.url.path}: {e}")
         return JSONResponse(status_code=502, content={"detail": f"回源失败: {e}"})
+
+
+# ===== SystemInfo 端口重写 =====
+
+async def handle_system_info(request: Request):
+    """拦截 /system/info 请求，将响应中的端口替换为反代端口。
+
+    Emby 返回的 SystemInfo 含 WebSocketPortNumber/HttpServerPortNumber/
+    LocalAddress/WanAddress，这些值指向真实 Emby 端口。客户端通过反代访问时
+    应改为反代端口，避免客户端直连真实 Emby 端口（可能不可达或绕过反代）。
+    """
+    # 调用 proxy_origin 获取原始 Emby /system/info 响应
+    response = await proxy_origin(request)
+
+    # 仅处理成功的 JSON 响应
+    if response.status_code != 200:
+        return response
+    content_type = response.headers.get("content-type", "") or ""
+    if "json" not in content_type.lower():
+        return response
+
+    try:
+        import json as _json
+        data = _json.loads(response.body)
+    except Exception:
+        return response
+
+    if not isinstance(data, dict):
+        return response
+
+    cfg = _get_config()
+    proxy_port = cfg.get("port", 6086)
+
+    # 替换整数端口字段为反代端口
+    for key in ("WebSocketPortNumber", "HttpServerPortNumber"):
+        if key in data:
+            data[key] = proxy_port
+
+    # 替换地址字段中的端口号（如 http://192.168.1.10:8096 -> http://192.168.1.10:6086）
+    def _rewrite_addr(val):
+        """将地址字符串中的端口替换为反代端口"""
+        if not val or not isinstance(val, str):
+            return val
+        return re.sub(r":\d+(?=[/\s]|$)", f":{proxy_port}", val)
+
+    for key in ("LocalAddress", "WanAddress"):
+        if key in data:
+            data[key] = _rewrite_addr(data[key])
+
+    return JSONResponse(content=data)
 
 
 # ===== 播放请求处理 =====
@@ -1761,7 +1836,11 @@ async def proxy_catch_all(path: str, request: Request):
     if full_path.startswith("/api/115/url/"):
         return await proxy_to_main_app(request)
 
-    # PlaybackInfo → 改写
+    # SystemInfo -> 端口重写（在 PlaybackInfo 之前判断）
+    if _REG_SYSTEM_INFO.match(full_path):
+        return await handle_system_info(request)
+
+    # PlaybackInfo -> 改写
     if _REG_PLAYBACK_INFO.match(full_path):
         return await handle_playback_info(request)
 

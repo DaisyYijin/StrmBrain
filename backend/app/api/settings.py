@@ -563,3 +563,74 @@ async def test_telegram_bot():
         code=0 if ok else 500,
         message="测试消息发送成功" if ok else "测试消息发送失败",
     )
+
+
+# ===== #19: 路径映射配置 =====
+
+class PathMappingRule(BaseModel):
+    """单条路径映射规则"""
+    op: str = "replace"          # replace / replaceAll / prefix / suffix
+    source: str = "all"          # local / strm_rel / strm_url / all
+    from_: str = ""              # 源子串（replace/replaceAll 用）
+    to: str = ""                 # 目标子串
+
+
+class PathMappingPayload(BaseModel):
+    """路径映射配置载荷"""
+    rules: list[dict] = []
+
+
+@router.get("/path-mapping", response_model=ApiResponse)
+async def get_path_mapping():
+    """获取路径映射规则列表"""
+    from app.services.path_mapper import PathMapper
+    rules = PathMapper.get_config()
+    return ApiResponse(data={"rules": rules})
+
+
+@router.post("/path-mapping", response_model=ApiResponse)
+async def save_path_mapping(payload: PathMappingPayload):
+    """保存路径映射规则列表（写 STRM 内容前按规则顺序应用）"""
+    from app.services.path_mapper import PathMapper
+    PathMapper.save_config(payload.rules)
+    return ApiResponse(message="路径映射规则已保存")
+
+
+# ===== #16: 每目录独立配置覆盖 =====
+
+class DirOverridePayload(BaseModel):
+    """目录覆盖配置载荷"""
+    dir_overrides: list[dict] = []  # [{"path": str, "config": {...}}]
+
+
+@router.get("/dir-overrides", response_model=ApiResponse)
+async def get_dir_overrides():
+    """获取每目录独立配置覆盖列表"""
+    data = read_setting("organize_dirs")
+    return ApiResponse(data={
+        "dir_overrides": data.get("dir_overrides", []) if isinstance(data, dict) else [],
+    })
+
+
+@router.post("/dir-overrides", response_model=ApiResponse)
+async def save_dir_overrides(payload: DirOverridePayload):
+    """保存每目录独立配置覆盖列表（合并到现有 organize_dirs 配置，不覆盖其他字段）"""
+    data = read_setting("organize_dirs")
+    if not isinstance(data, dict):
+        data = {}
+    data["dir_overrides"] = payload.dir_overrides
+    save_setting("organize_dirs", data)
+    return ApiResponse(message="目录覆盖配置已保存")
+
+
+# ===== #14: Emby 媒体信息上传/下载 =====
+
+@router.get("/emby-media-info", response_model=ApiResponse)
+async def get_emby_media_info_status():
+    """获取 Emby 媒体信息上传/下载状态。
+
+    返回累计上传/下载次数、缓存命中率、Emby 配置状态。
+    """
+    from app.services.emby_media_info import get_emby_media_info_service
+    service = get_emby_media_info_service()
+    return ApiResponse(data=service.get_status())

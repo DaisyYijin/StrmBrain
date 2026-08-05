@@ -1,13 +1,44 @@
 """
-数据库辅助工具 — 为同步服务层提供设置读取。
+数据库辅助工具 - 为同步服务层提供设置读取。
 
 同步服务（sync_service、emby、tmdb）运行在 asyncio.to_thread 线程中，
 直接从 JSON 文件读取配置，无需数据库连接。
 """
+import sqlite3
+from app.config import DATA_DIR
 from app.core.json_storage import read_setting as _read_setting
 from app.core.logbuffer import get_logger
 
 logger = get_logger("app.core.db_helper")
+
+
+def enable_wal_mode() -> None:
+    """启用 SQLite WAL 模式，提升并发读写性能。
+
+    对清单数据库（manifests.db）执行以下 PRAGMA：
+    - journal_mode=WAL：写入-ahead 日志，允许读写并发
+    - synchronous=NORMAL：在性能与安全间取得平衡（WAL 模式下 NORMAL 足够安全）
+    - busy_timeout=5000：并发锁等待 5 秒，防止立即抛出 "database is locked"
+
+    WAL 模式是数据库级持久设置（首次设置后持久化在 db 文件中），重复执行无副作用。
+    失败不影响应用启动。
+    """
+    # 清单数据库路径（与 sync_service.MANIFEST_DB 保持一致）
+    db_path = DATA_DIR / "manifests" / "manifests.db"
+    if not db_path.exists():
+        logger.debug(f"WAL 模式：数据库不存在，跳过: {db_path}")
+        return
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            logger.info(f"已启用 SQLite WAL 模式: {db_path}")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"启用 WAL 模式失败（不影响启动）: {e}")
 
 
 def read_setting(key: str) -> dict:
