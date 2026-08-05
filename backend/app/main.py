@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"文件监控管理器初始化失败: {e}")
 
+    # 初始化 115 生活事件监控（后台轮询网盘变化，事件驱动增量同步）
+    try:
+        from app.services.life_event_monitor import get_life_event_monitor
+        get_life_event_monitor().start()
+        logger.info("115 生活事件监控已初始化")
+    except Exception as e:
+        logger.warning(f"115 生活事件监控初始化失败: {e}")
+
     # 初始化通知管理器
     try:
         from app.services.notification_manager import init_notification_manager
@@ -127,6 +135,13 @@ async def lifespan(app: FastAPI):
             global_watcher_manager.stop_all()
     except Exception as e:
         logger.warning(f"停止文件监控时异常: {e}", exc_info=True)
+
+    # 停止 115 生活事件监控
+    try:
+        from app.services.life_event_monitor import get_life_event_monitor
+        await get_life_event_monitor().stop()
+    except Exception as e:
+        logger.warning(f"停止 115 生活事件监控时异常: {e}")
 
     # 停止上传队列
     try:

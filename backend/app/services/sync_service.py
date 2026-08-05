@@ -743,6 +743,50 @@ class SyncService:
         except Exception as e:
             logger.warning(f"[sync] 清理空目录失败: {e}")
 
+    @classmethod
+    def remove_from_manifest_by_file_id(cls, local_media_dir: str, file_id: str) -> bool:
+        """
+        根据 file_id 从同步清单中移除条目，并删除对应的本地文件（STRM/图片/数据）。
+        用于生活事件监控的删除事件（网盘文件被删除时精确清理本地）。
+        返回是否清理了本地文件。
+        """
+        from pathlib import Path as _Path
+        local_root = _Path(local_media_dir)
+        manifest = cls._load_manifest(local_root)
+        entry = manifest.get(file_id)
+        if not entry:
+            return False
+
+        name = entry.get("name", "")
+        parent_path = entry.get("parent_path", "")
+        ext = cls._get_ext(name)
+        local_dir = local_root / parent_path if parent_path else local_root
+
+        cleaned = False
+        try:
+            if ext in cls.DEFAULT_VIDEO_EXTS:
+                strm_path = local_dir / (name + ".strm")
+                if strm_path.exists():
+                    strm_path.unlink()
+                    cleaned = True
+                    logger.info(f"[life-event] 删除事件清理 STRM: {parent_path}/{name}.strm")
+            else:
+                file_path = local_dir / name
+                if file_path.exists():
+                    file_path.unlink()
+                    cleaned = True
+                    logger.info(f"[life-event] 删除事件清理文件: {parent_path}/{name}")
+            if cleaned:
+                manifest.pop(file_id, None)
+                cls._save_manifest(local_root, manifest)
+                # 清理可能变空的目录
+                if parent_path:
+                    cls._cleanup_empty_dirs(local_root, local_dir)
+        except Exception as e:
+            logger.warning(f"[sync] 删除事件清理失败 {parent_path}/{name}: {e}")
+
+        return cleaned
+
     # ============ 上传同步（队列化） ============
 
     # 默认上传后缀（Emby 刮削产生的元数据文件）
