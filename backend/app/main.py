@@ -25,6 +25,7 @@ _PUBLIC_EXACT = frozenset({
     "/api/version",
     "/api/version/check",
     "/api/login",
+    "/api/register",          # 首次部署注册管理账号（无 token 时也必须可访问）
     "/api/wechat/callback",  # 企微回调（GET 验证 + POST 消息）
     "/api/emby/webhook",     # Emby Webhook（POST 入库事件）
 })
