@@ -4051,6 +4051,96 @@
                             </div>
                         </div>
 
+                        <!-- 工具6：STRM 清理（二次确认） -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.strm_clean.enabled, 'tool-disabled': !toolsState.strm_clean.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.strm_clean.enabled"></span>
+                                    STRM 清理
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.strm_clean.enabled, 'dot-off': !toolsState.strm_clean.enabled }"></span>
+                                    <span :style="{ color: toolsState.strm_clean.enabled ? '#67c23a' : '#909399' }">{{ toolsState.strm_clean.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.strm_clean.enabled }" @click="toggleTool('strm_clean')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                扫描失效的 STRM 文件（链接不可达），先预览清单再手动确认删除，防误删。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('strm_clean')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    配置规则
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="runToolNow('strm_clean')" :disabled="strmClean.scanning">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    {{ strmClean.scanning ? '运行中...' : '立即运行' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具7：账号引用修复 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.account_repair.enabled, 'tool-disabled': !toolsState.account_repair.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.account_repair.enabled"></span>
+                                    账号引用修复
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.account_repair.enabled, 'dot-off': !toolsState.account_repair.enabled }"></span>
+                                    <span :style="{ color: toolsState.account_repair.enabled ? '#67c23a' : '#909399' }">{{ toolsState.account_repair.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.account_repair.enabled }" @click="toggleTool('account_repair')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                更换 115 账号后批量重写 STRM 文件中的账号引用，无需重新生成。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('account_repair')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    配置规则
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="runToolNow('account_repair')" :disabled="accountRepair.running">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    {{ accountRepair.running ? '运行中...' : '立即运行' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具8：base_url 替换 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.base_url.enabled, 'tool-disabled': !toolsState.base_url.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.base_url.enabled"></span>
+                                    base_url 替换
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.base_url.enabled, 'dot-off': !toolsState.base_url.enabled }"></span>
+                                    <span :style="{ color: toolsState.base_url.enabled ? '#67c23a' : '#909399' }">{{ toolsState.base_url.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.base_url.enabled }" @click="toggleTool('base_url')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                更换域名/端口后批量替换 STRM 文件中的服务器地址，自动检测当前地址。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('base_url')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    配置规则
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="runToolNow('base_url')" :disabled="baseUrlTool.running">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    {{ baseUrlTool.running ? '运行中...' : '立即运行' }}
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -4265,6 +4355,127 @@
                         <div v-if="!missingEp.scanning && missingEp.result === null" style="padding:20px; text-align:center; color:#c0c4cc;">点击下方按钮开始扫描</div>
                         <div style="display:flex; gap:8px;">
                             <button class="tool-btn tool-btn-run" @click="missingEpScan" :disabled="missingEp.scanning" style="background:#409eff;">{{ missingEp.scanning ? '扫描中...' : '开始扫描' }}</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STRM 清理配置弹窗（二次确认） -->
+                <div v-if="toolConfig.show === 'strm_clean'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:600px;">
+                        <div class="modal-header">
+                            <span class="modal-title">STRM 清理 - 扫描并确认删除</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+                        <div class="form-group">
+                            <label>STRM 目录 <span class="help-tip">?<span class="tip-text">选择本地存放 .strm 文件的目录</span></span></label>
+                            <div class="dir-picker" @click="openLocalDirPicker('strm_clean')" style="cursor:pointer;">
+                                <span :style="{ color: strmClean.directory ? '#303133' : '#c0c4cc' }">{{ strmClean.directory || '点击选择本地 STRM 文件目录' }}</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div style="display:flex; gap:8px;">
+                                <button class="tool-btn tool-btn-run" @click="strmCleanScan" :disabled="strmClean.scanning || !strmClean.directory" style="background:#409eff;">{{ strmClean.scanning ? '扫描中...' : '扫描失效 STRM' }}</button>
+                            </div>
+                        </div>
+                        <div v-if="strmClean.scanResult !== null" class="result-box result-box--neutral">
+                            共 {{ strmClean.scanResult.total_strm }} 个 STRM 文件，其中 <strong style="color:#f56c6c;">{{ strmClean.scanResult.count }}</strong> 个疑似失效
+                        </div>
+                        <div v-if="strmClean.scanResult && strmClean.scanResult.pending.length" style="max-height:220px; overflow-y:auto; margin-bottom:12px; border:1px solid #f0f0f0; border-radius:6px;">
+                            <label style="display:flex; align-items:center; gap:6px; padding:8px 12px; border-bottom:1px solid #f0f0f0; cursor:pointer; background:#fafafa;">
+                                <input type="checkbox" :checked="strmClean.selected.length === strmClean.scanResult.pending.length" @change="strmClean.selected = $event.target.checked ? strmClean.scanResult.pending.map(f => f.path) : []" />
+                                <strong style="font-size:13px;">全选（{{ strmClean.selected.length }}/{{ strmClean.scanResult.pending.length }}）</strong>
+                            </label>
+                            <div v-for="(f, i) in strmClean.scanResult.pending" :key="i" style="padding:8px 12px; border-bottom:1px solid #f0f0f0; font-size:13px; display:flex; gap:8px; align-items:flex-start;">
+                                <input type="checkbox" v-model="strmClean.selected" :value="f.path" style="margin-top:2px;" />
+                                <div style="flex:1;">
+                                    <div style="color:#606266; margin-bottom:4px;">{{ f.path }}</div>
+                                    <div style="color:#909399; font-size:12px; word-break:break-all;">{{ f.content }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="strmClean.runResult !== null" class="result-box result-box--success">
+                            已删除 <strong style="color:#67c23a;">{{ strmClean.runResult.deleted }}</strong> 个文件<template v-if="strmClean.runResult.failed && strmClean.runResult.failed.length">，失败 {{ strmClean.runResult.failed.length }} 个</template>
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="tool-btn tool-btn-run" @click="strmCleanRun" :disabled="strmClean.running || !strmClean.selected.length" style="background:#f56c6c;">{{ strmClean.running ? '删除中...' : '确认删除选中文件' }}</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 账号引用修复配置弹窗 -->
+                <div v-if="toolConfig.show === 'account_repair'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:600px;">
+                        <div class="modal-header">
+                            <span class="modal-title">账号引用修复 - 更换 115 账号后使用</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+                        <div class="form-group">
+                            <label>STRM 目录 <span class="help-tip">?<span class="tip-text">选择本地存放 .strm 文件的目录</span></span></label>
+                            <div class="dir-picker" @click="openLocalDirPicker('account_repair')" style="cursor:pointer;">
+                                <span :style="{ color: accountRepair.directory ? '#303133' : '#c0c4cc' }">{{ accountRepair.directory || '点击选择本地 STRM 文件目录' }}</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="tool-btn tool-btn-run" @click="accountRepairExtract" :disabled="accountRepair.extracting || !accountRepair.directory" style="background:#409eff;">{{ accountRepair.extracting ? '提取中...' : '提取当前账号 ID' }}</button>
+                                <span v-if="accountRepair.extractResult !== null" style="font-size:13px; color:#606266;">当前引用账号 ID：<strong style="color:#e6a23c;">{{ accountRepair.extractResult.account_id }}</strong></span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>旧账号 ID</label>
+                            <input type="number" v-model="accountRepair.oldAccountId" placeholder="如 1234567890" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                        </div>
+                        <div class="form-group">
+                            <label>新账号 ID <span class="help-tip">?<span class="tip-text">新 115 账号的 user_id，可在账号管理中查看</span></span></label>
+                            <input type="number" v-model="accountRepair.newAccountId" placeholder="新账号 ID" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                        </div>
+                        <div v-if="accountRepair.runResult !== null" class="result-box result-box--success">
+                            已替换 <strong style="color:#67c23a;">{{ accountRepair.runResult.replaced }}</strong> 个，跳过 {{ accountRepair.runResult.skipped }} 个，共 {{ accountRepair.runResult.total }} 个文件
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="tool-btn tool-btn-run" @click="accountRepairRun" :disabled="accountRepair.running || !accountRepair.directory || !accountRepair.oldAccountId || !accountRepair.newAccountId" style="background:#e6a23c;">{{ accountRepair.running ? '修复中...' : '执行修复' }}</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- base_url 替换配置弹窗 -->
+                <div v-if="toolConfig.show === 'base_url'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:600px;">
+                        <div class="modal-header">
+                            <span class="modal-title">base_url 替换 - 更换域名/端口后使用</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+                        <div class="form-group">
+                            <label>STRM 目录 <span class="help-tip">?<span class="tip-text">选择本地存放 .strm 文件的目录</span></span></label>
+                            <div class="dir-picker" @click="openLocalDirPicker('base_url')" style="cursor:pointer;">
+                                <span :style="{ color: baseUrlTool.directory ? '#303133' : '#c0c4cc' }">{{ baseUrlTool.directory || '点击选择本地 STRM 文件目录' }}</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                <button class="tool-btn tool-btn-run" @click="baseUrlDetect" :disabled="baseUrlTool.detecting" style="background:#409eff;">{{ baseUrlTool.detecting ? '检测中...' : '检测当前访问地址' }}</button>
+                                <span v-if="baseUrlTool.detectedUrl" style="font-size:13px; color:#606266;">当前访问地址：<strong style="color:#67c23a;">{{ baseUrlTool.detectedUrl }}</strong></span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="tool-btn tool-btn-run" @click="baseUrlExtract" :disabled="baseUrlTool.extracting || !baseUrlTool.directory" style="background:#409eff;">{{ baseUrlTool.extracting ? '提取中...' : '提取文件中的地址' }}</button>
+                                <span v-if="baseUrlTool.extractResult !== null" style="font-size:13px; color:#606266;">文件中地址：<strong style="color:#e6a23c;">{{ baseUrlTool.extractResult.current_base_url }}</strong></span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>旧地址（替换前）</label>
+                            <input type="text" v-model="baseUrlTool.oldUrl" placeholder="如 http://172.17.0.1:6060" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                        </div>
+                        <div class="form-group">
+                            <label>新地址（替换后）<span class="help-tip">?<span class="tip-text">可点击上方"检测当前访问地址"自动填入</span></span></label>
+                            <input type="text" v-model="baseUrlTool.newUrl" placeholder="如 http://your.domain.com:6060" style="width:100%; min-height:44px; padding:6px 12px; border:1px solid #dcdfe6; border-radius:6px; font-size:15px;" />
+                        </div>
+                        <div v-if="baseUrlTool.runResult !== null" class="result-box result-box--success">
+                            已替换 <strong style="color:#67c23a;">{{ baseUrlTool.runResult.replaced }}</strong> 个，跳过 {{ baseUrlTool.runResult.skipped }} 个，共 {{ baseUrlTool.runResult.total }} 个文件
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="tool-btn tool-btn-run" @click="baseUrlRun" :disabled="baseUrlTool.running || !baseUrlTool.directory || !baseUrlTool.oldUrl || !baseUrlTool.newUrl" style="background:#e6a23c;">{{ baseUrlTool.running ? '替换中...' : '执行替换' }}</button>
                         </div>
                     </div>
                 </div>
@@ -6277,6 +6488,9 @@ av:
                     clear_recycle:{ enabled: localStorage.getItem('strmhub_tool_clear_recycle') === '1' },
                     strm_replace: { enabled: localStorage.getItem('strmhub_tool_strm_replace') === '1' },
                     missing_ep:   { enabled: localStorage.getItem('strmhub_tool_missing_ep') === '1' },
+                    strm_clean:   { enabled: localStorage.getItem('strmhub_tool_strm_clean') === '1' },
+                    account_repair:{ enabled: localStorage.getItem('strmhub_tool_account_repair') === '1' },
+                    base_url:     { enabled: localStorage.getItem('strmhub_tool_base_url') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -6330,6 +6544,40 @@ av:
                 const missingEp = reactive({
                     scanning: false,
                     result: null,
+                });
+
+                // 工具6：STRM 清理（二次确认）
+                const strmClean = reactive({
+                    directory: '',
+                    scanning: false,
+                    running: false,
+                    scanResult: null,
+                    runResult: null,
+                    selected: [],
+                });
+
+                // 工具7：账号引用修复
+                const accountRepair = reactive({
+                    directory: '',
+                    extracting: false,
+                    running: false,
+                    oldAccountId: '',
+                    newAccountId: '',
+                    extractResult: null,
+                    runResult: null,
+                });
+
+                // 工具8：base_url 替换
+                const baseUrlTool = reactive({
+                    directory: '',
+                    detecting: false,
+                    extracting: false,
+                    running: false,
+                    detectedUrl: '',
+                    oldUrl: '',
+                    newUrl: '',
+                    extractResult: null,
+                    runResult: null,
                 });
 
                 // API 请求间隔配置
@@ -6746,7 +6994,12 @@ av:
                 const openLocalDirPicker = (target) => {
                     localDirPicker.target = target || '';
                     // 如果已有路径，从该路径开始浏览；否则从根目录开始
-                    const startPath = target === 'strm_replace' ? (strmReplace.directory || '/') : (organize.local_media_dir || '/');
+                    let startPath = '/';
+                    if (target === 'strm_replace') startPath = strmReplace.directory || '/';
+                    else if (target === 'strm_clean') startPath = strmClean.directory || '/';
+                    else if (target === 'account_repair') startPath = accountRepair.directory || '/';
+                    else if (target === 'base_url') startPath = baseUrlTool.directory || '/';
+                    else if (target === 'organize') startPath = organize.local_media_dir || '/';
                     localDirPicker.show = true;
                     loadLocalDirs(startPath);
                 };
@@ -8102,6 +8355,169 @@ av:
                         showToast('替换失败：网络错误', 3000);
                     }
                     strmReplace.running = false;
+                };
+
+                // 工具6：STRM 清理（二次确认）
+                const strmCleanScan = async () => {
+                    strmClean.scanning = true;
+                    strmClean.scanResult = null;
+                    strmClean.selected = [];
+                    strmClean.runResult = null;
+                    try {
+                        const res = await api('/api/tools/strm-clean/scan', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ directory: strmClean.directory, recursive: true }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmClean.scanResult = data.data;
+                        } else {
+                            showToast(data.message || '扫描失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('扫描失败：网络错误', 3000);
+                    }
+                    strmClean.scanning = false;
+                };
+                const strmCleanRun = async () => {
+                    strmClean.running = true;
+                    strmClean.runResult = null;
+                    try {
+                        const res = await api('/api/tools/strm-clean/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                directory: strmClean.directory,
+                                paths: strmClean.selected,
+                                recursive: true,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmClean.runResult = data.data;
+                            showToast(`已删除 ${data.data.deleted} 个文件`, 3000);
+                            strmClean.scanResult = null;
+                            strmClean.selected = [];
+                        } else {
+                            showToast(data.message || '删除失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('删除失败：网络错误', 3000);
+                    }
+                    strmClean.running = false;
+                };
+
+                // 工具7：账号引用修复
+                const accountRepairExtract = async () => {
+                    accountRepair.extracting = true;
+                    accountRepair.extractResult = null;
+                    try {
+                        const res = await api('/api/tools/account-repair/extract', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ directory: accountRepair.directory }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            accountRepair.extractResult = data.data;
+                            if (data.data.account_id) accountRepair.oldAccountId = String(data.data.account_id);
+                        } else {
+                            showToast(data.message || '提取失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('提取失败：网络错误', 3000);
+                    }
+                    accountRepair.extracting = false;
+                };
+                const accountRepairRun = async () => {
+                    accountRepair.running = true;
+                    accountRepair.runResult = null;
+                    try {
+                        const res = await api('/api/tools/account-repair/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                directory: accountRepair.directory,
+                                old_account_id: Number(accountRepair.oldAccountId),
+                                new_account_id: Number(accountRepair.newAccountId),
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            accountRepair.runResult = data.data;
+                            showToast(`已修复 ${data.data.replaced} 个文件`, 3000);
+                        } else {
+                            showToast(data.message || '修复失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('修复失败：网络错误', 3000);
+                    }
+                    accountRepair.running = false;
+                };
+
+                // 工具8：base_url 替换
+                const baseUrlDetect = async () => {
+                    baseUrlTool.detecting = true;
+                    try {
+                        const res = await api('/api/tools/base-url/detect');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            baseUrlTool.detectedUrl = data.data.base_url;
+                            showToast(`检测到当前地址：${data.data.base_url}`, 3000);
+                        } else {
+                            showToast(data.message || '检测失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('检测失败：网络错误', 3000);
+                    }
+                    baseUrlTool.detecting = false;
+                };
+                const baseUrlExtract = async () => {
+                    baseUrlTool.extracting = true;
+                    baseUrlTool.extractResult = null;
+                    try {
+                        const res = await api('/api/tools/base-url/extract', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ directory: baseUrlTool.directory }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            baseUrlTool.extractResult = data.data;
+                            if (data.data.current_base_url) baseUrlTool.oldUrl = data.data.current_base_url;
+                        } else {
+                            showToast(data.message || '提取失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('提取失败：网络错误', 3000);
+                    }
+                    baseUrlTool.extracting = false;
+                };
+                const baseUrlRun = async () => {
+                    baseUrlTool.running = true;
+                    baseUrlTool.runResult = null;
+                    try {
+                        const res = await api('/api/tools/base-url/replace', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                directory: baseUrlTool.directory,
+                                old_base: baseUrlTool.oldUrl,
+                                new_base: baseUrlTool.newUrl,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            baseUrlTool.runResult = data.data;
+                            showToast(`已替换 ${data.data.replaced} 个文件`, 3000);
+                        } else {
+                            showToast(data.message || '替换失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('替换失败：网络错误', 3000);
+                    }
+                    baseUrlTool.running = false;
                 };
 
                 // 工具5：Emby 影视缺集管理
