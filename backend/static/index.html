@@ -2782,6 +2782,49 @@
                                 <span style="font-size:13px; color:#909399;">秒</span>
                                 <span style="font-size:12px; color:#c0c4cc;">被限流后等待多久再重试（默认 30 秒），整理/同步/下载均生效</span>
                             </div>
+
+                            <!-- 115 API 限流统计 -->
+                            <div style="margin-top:16px; border:1px solid #ebeef5; border-radius:8px; padding:16px; background:#fafafa;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                    <span style="font-size:14px; font-weight:600; color:#303133;">115 API 限流统计<span class="help-tip">?<span class="tip-text">实时展示 115 API 的请求速率、限流次数、缓存命中率等指标。QPS=每秒请求数，QPM=每分钟，QPH=每小时。缓存命中率高说明直链缓存有效降低了 API 调用。</span></span></span>
+                                    <button class="btn btn-default btn-small" @click="loadRateStats" :disabled="rateStats.loading" style="padding:4px 12px;">{{ rateStats.loading ? '加载中...' : '刷新' }}</button>
+                                </div>
+                                <div v-if="rateStats.data" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px;">
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qps > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qps || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPS（每秒）</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qpm > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qpm || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPM（每分钟）</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qph > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qph || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPH（每小时）</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700; color:#67c23a;">{{ (rateStats.data.cache_hit_rate * 100 || 0).toFixed(1) }}%</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">缓存命中率</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.throttle_count > 0 ? '#f56c6c' : '#909399' }">{{ rateStats.data.throttle_count || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">限流次数</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700; color:#909399;">{{ (rateStats.data.avg_latency || 0).toFixed(0) }}ms</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">平均延迟</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700; color:#e6a23c;">{{ rateStats.data.cache_size || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">缓存条目数</div>
+                                    </div>
+                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
+                                        <div style="font-size:22px; font-weight:700; color:#909399;">{{ rateStats.data.total_requests || 0 }}</div>
+                                        <div style="font-size:11px; color:#909399; margin-top:2px;">总请求数</div>
+                                    </div>
+                                </div>
+                                <div v-else style="color:#909399; font-size:13px; padding:12px 0; text-align:center;">点击刷新查看限流统计</div>
+                            </div>
                         </div>
                     </div>
                     </div>
@@ -7485,6 +7528,12 @@ av:
                     saving: false,
                 });
 
+                // 115 API 限流统计（P0-2）
+                const rateStats = reactive({
+                    loading: false,
+                    data: null,
+                });
+
                 // STRM 播放安全配置
                 const strmSecurity = reactive({
                     loading: false,
@@ -7802,6 +7851,21 @@ av:
                         showToast('保存失败');
                     }
                     apiInterval.saving = false;
+                };
+
+                // 加载 115 API 限流统计（P0-2）
+                const loadRateStats = async () => {
+                    rateStats.loading = true;
+                    try {
+                        const res = await api('/api/115/rate-stats');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            rateStats.data = data.data;
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载限流统计失败:', e);
+                    }
+                    rateStats.loading = false;
                 };
                 
                 // 检测账号
@@ -11438,6 +11502,7 @@ av:
                     lifeMonitor, loadLifeMonitor, saveLifeMonitor,
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
+                    rateStats, loadRateStats,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
                     formatTimestamp, formatBytes,

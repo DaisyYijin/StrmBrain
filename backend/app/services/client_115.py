@@ -162,17 +162,19 @@ class _SlidingWindowRateLimiter:
         self._lock = threading.Lock()
 
     def acquire(self, op_type: str, max_requests: int = 1, window_seconds: float = 3.0,
-                context: str = "") -> None:
+                context: str = "") -> float:
         """获取限流许可，必要时等待。
 
         op_type: 操作类型（如 "download_url", "file_list", "rename", "move", "mkdir"）
         max_requests: 窗口内最大请求数（默认 1）
         window_seconds: 窗口大小（秒，默认 3.0）
         context: 可选的操作描述（用于日志）
+        返回: 实际等待时间（秒），0 表示未限流
         """
         if window_seconds <= 0 or max_requests <= 0:
-            return
+            return 0.0
 
+        wait = 0.0
         with self._lock:
             if op_type not in self._windows:
                 self._windows[op_type] = _deque()
@@ -195,20 +197,114 @@ class _SlidingWindowRateLimiter:
                         ctx = f" - {context}" if context else ""
                         logger.info(f"[115] 滑动窗口限流 {op_type} 等待 {wait:.1f}s{ctx}...")
                     # 释放锁后等待（不阻塞其他操作类型）
-                    pass
                 else:
-                    wait = 0
-            else:
-                wait = 0
+                    wait = 0.0
             # 记录本次请求时间戳
             window.append(now)
 
         if wait > 0:
             _time.sleep(wait)
+        return wait
 
 
-# 全局限流器实例
+# 全局限流器实例（QPS 级别：download_url_interval 秒内最多 1 次）
 _rate_limiter = _SlidingWindowRateLimiter()
+
+# P0-2: QPM / QPH 级别限流器（独立实例，全局共享窗口）
+_qpm_limiter = _SlidingWindowRateLimiter()   # 每分钟最多 N 次
+_qph_limiter = _SlidingWindowRateLimiter()   # 每小时最多 N 次
+
+
+# ===== P0-2: 请求统计 =====
+# 记录最近 10000 条 115 API 请求的时间戳/操作类型/响应时间/是否限流，
+# 提供 QPS/QPM/QPH/平均延迟/限流次数/缓存命中率统计。
+class _RequestStats:
+    """请求统计器：记录最近 10000 条请求，提供多维统计"""
+
+    _MAX_RECORDS = 10000
+
+    def __init__(self):
+        self._records: _deque = _deque(maxlen=self._MAX_RECORDS)
+        self._lock = threading.Lock()
+        self._cache_hits = 0       # 缓存命中次数
+        self._cache_misses = 0     # 缓存未命中次数
+        self._throttle_count = 0   # 累计限流等待次数
+
+    def record(self, op: str, duration: float, throttled: bool = False):
+        """记录一次 API 请求
+
+        op: 操作类型（如 "download_url"）
+        duration: 本次请求耗时（秒）
+        throttled: 是否被限流等待
+        """
+        with self._lock:
+            self._records.append({
+                "ts": _time.time(),
+                "op": op,
+                "duration": duration,
+                "throttled": throttled,
+            })
+            if throttled:
+                self._throttle_count += 1
+
+    def record_cache_hit(self, hit: bool):
+        """记录缓存命中/未命中"""
+        with self._lock:
+            if hit:
+                self._cache_hits += 1
+            else:
+                self._cache_misses += 1
+
+    def get_stats(self) -> dict:
+        """返回当前统计快照
+
+        返回: {
+            qps, qpm, qph,             # 最近 1s/60s/3600s 内的请求数
+            avg_latency,                # 平均延迟（秒）
+            throttle_count,             # 累计限流次数
+            cache_hit_rate,             # 缓存命中率（0~1）
+            total_requests,             # 统计窗口内总请求数
+        }
+        """
+        with self._lock:
+            now = _time.time()
+            records = list(self._records)
+            # QPS/QPM/QPH：按时间窗口统计请求数
+            qps = sum(1 for r in records if now - r["ts"] < 1)
+            qpm = sum(1 for r in records if now - r["ts"] < 60)
+            qph = sum(1 for r in records if now - r["ts"] < 3600)
+            # 平均延迟
+            if records:
+                avg_latency = sum(r["duration"] for r in records) / len(records)
+            else:
+                avg_latency = 0.0
+            # 缓存命中率
+            total_cache = self._cache_hits + self._cache_misses
+            cache_hit_rate = self._cache_hits / total_cache if total_cache > 0 else 0.0
+            return {
+                "qps": qps,
+                "qpm": qpm,
+                "qph": qph,
+                "avg_latency": round(avg_latency, 3),
+                "throttle_count": self._throttle_count,
+                "cache_hit_rate": round(cache_hit_rate, 4),
+                "total_requests": len(records),
+            }
+
+
+# 全局请求统计单例
+_request_stats = _RequestStats()
+
+
+# ===== P0-3: 多端播放追踪器 =====
+# 记录同一 pickcode 在最近 10 秒内被哪些 UA 请求。
+# 当 2+ 个不同 UA 在窗口内请求同一 pickcode 时，视为"多端播放"场景，
+# 触发文件复制到 /多端播放/ 目录获取独立直链，避免 115 风控。
+_multiplay_tracker: dict[str, dict] = {}   # pickcode -> {"uas": set, "first_ts": float}
+_multiplay_copy_map: dict[str, str] = {}    # 原 pickcode -> 副本 pickcode（缓存复制结果）
+_multiplay_copy_cid: Optional[str] = None   # /多端播放/ 目录 cid（首次创建后缓存）
+_multiplay_lock = threading.Lock()
+_MULTIPLAY_WINDOW = 10.0  # 多端播放检测窗口（秒）
 
 
 # ===== O5: 同账号跨任务互斥 =====
@@ -406,23 +502,51 @@ def _check_rate_limit_error(exc: Exception) -> bool:
     return False
 
 
-def _apply_rate_limit(operation: str = "", context: str = ""):
+def _apply_rate_limit(operation: str = "", context: str = "") -> bool:
     """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）
-    
+
     D2: 使用滑动窗口限流器替代固定 sleep(interval)。
     每种操作类型独立限流，允许突发请求但平均速率受限。
+    P0-2: 增加 QPM（每分钟）和 QPH（每小时）级别限流，三级保护。
     context: 可选的操作对象（如文件名），用于等待日志展示当前处理进度
+    返回: 是否发生了限流等待（供请求统计使用）
     """
     intervals = get_api_intervals()
+    throttled = False
+    # 第一级：QPS 限流（download_url_interval 秒内最多 1 次）
     interval = intervals.get("download_url_interval", 3.0)
     if interval > 0:
-        # D2: 使用滑动窗口限流（1 请求 / interval 秒）
-        _rate_limiter.acquire(
+        wait = _rate_limiter.acquire(
             op_type=operation or "write",
             max_requests=1,
             window_seconds=interval,
             context=context,
         )
+        if wait > 0:
+            throttled = True
+    # P0-2 第二级：QPM 限流（每分钟最多 qpm_limit 次，0=不限）
+    qpm_limit = intervals.get("qpm_limit", 0)
+    if qpm_limit > 0:
+        wait = _qpm_limiter.acquire(
+            op_type="qpm_global",
+            max_requests=qpm_limit,
+            window_seconds=60,
+            context=context,
+        )
+        if wait > 0:
+            throttled = True
+    # P0-2 第三级：QPH 限流（每小时最多 qph_limit 次，0=不限）
+    qph_limit = intervals.get("qph_limit", 0)
+    if qph_limit > 0:
+        wait = _qph_limiter.acquire(
+            op_type="qph_global",
+            max_requests=qph_limit,
+            window_seconds=3600,
+            context=context,
+        )
+        if wait > 0:
+            throttled = True
+    return throttled
 
 
 def _get_retry_cooldown() -> float:
@@ -641,6 +765,29 @@ def _extract_download_url(result) -> str:
                 elif isinstance(u, str) and u.strip().startswith("http"):
                     return u.strip()
     return ""
+
+
+def _validate_download_url(url: str, ua: str) -> bool:
+    """P0-1: HEAD 校验直链有效性
+
+    用 httpx.Client 发 HEAD 请求校验 115 直链是否仍然有效。
+    - 必须携带与获取时相同的 UA（115 直链与 UA 绑定，f=1 参数控制）
+    - 超时 5 秒，HEAD 失败（非 200/206）返回 False
+    - HEAD 请求不经过限流器（是校验不是 API 调用，不消耗 115 配额）
+    """
+    if not url:
+        return False
+    headers = {
+        "User-Agent": ua or Client115Service.DOWNLOAD_USER_AGENT,
+        "Referer": "https://115.com/",
+    }
+    try:
+        with httpx.Client(timeout=5.0, follow_redirects=False, headers=headers) as c:
+            r = c.head(url)
+            return r.status_code in (200, 206)
+    except Exception as e:
+        logger.debug(f"[115] HEAD 校验直链失败 url={url[:80]}: {e}")
+        return False
 
 
 def _download_url_with_retry(client, pickcode: str, user_agent: str, max_retries: int = _MAX_RETRIES):
@@ -1014,16 +1161,38 @@ class Client115Service:
     @classmethod
     def get_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
         """获取 115 文件下载链接，带 TTL 缓存 + 并发合并（Coalesce）
+        P0-1: 缓存超过 80% TTL 时 HEAD 校验有效性，失效则重新获取
+        P0-2: 记录缓存命中/未命中统计
         context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
         _check_circuit_breaker()  # Q2: 熔断器检查
         if not pickcode:
             return None
         # 检查缓存
+        cached_url = None
+        cached_ua = ""
+        need_validate = False
         with _cache_lock:
             cached = _DOWNLOAD_URL_CACHE.get(pickcode)
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
-                return cached["url"]
+                cached_url = cached["url"]
+                cached_ua = cached.get("user_agent", cls.DOWNLOAD_USER_AGENT)
+                # P0-1: 缓存超过 80% TTL 时需 HEAD 校验有效性
+                need_validate = (_time.time() - cached["ts"]) > _DOWNLOAD_URL_TTL * 0.8
+        # P0-1: 缓存命中后按需 HEAD 校验
+        if cached_url:
+            if need_validate:
+                if _validate_download_url(cached_url, cached_ua):
+                    _request_stats.record_cache_hit(True)
+                    return cached_url
+                # HEAD 校验失败，缓存已失效，清除后重新获取
+                with _cache_lock:
+                    _DOWNLOAD_URL_CACHE.pop(pickcode, None)
+                logger.info(f"[115] 直链缓存 HEAD 校验失败，重新获取 pickcode={pickcode}")
+            else:
+                _request_stats.record_cache_hit(True)
+                return cached_url
+        _request_stats.record_cache_hit(False)
         # 并发合并：同一 pickcode 已有一个线程在请求，则等待其结果（参考 LitePan Coalesce）
         with _inflight_lock:
             inflight = _inflight_download.get(pickcode)
@@ -1062,10 +1231,12 @@ class Client115Service:
     @classmethod
     def _fetch_download_url(cls, cookies: str, pickcode: str, account_id: int = 0, context: str = "") -> Optional[str]:
         """实际请求 115 获取直链（被 get_download_url 调用，含缓存写入）
-        405 时自动降级备用端点：download_url → download_url_app → download_url_web2
+        405 时自动降级备用端点：download_url -> download_url_app -> download_url_web2
+        P0-2: 记录请求耗时和限流状态到 _request_stats
         """
         # 实时获取（指定 user_agent，下载时必须用同一个）
-        _apply_rate_limit("download_url", context)
+        throttled = _apply_rate_limit("download_url", context)
+        _start_ts = _time.time()
         try:
             client = cls.create_client_from_cookies(cookies)
             result = _download_url_with_retry(client, pickcode, cls.DOWNLOAD_USER_AGENT)
@@ -1082,8 +1253,12 @@ class Client115Service:
                         expired = [k for k, v in _DOWNLOAD_URL_CACHE.items() if v["ts"] < cutoff]
                         for k in expired:
                             _DOWNLOAD_URL_CACHE.pop(k, None)
+            # P0-2: 记录请求统计
+            _request_stats.record("download_url", _time.time() - _start_ts, throttled)
             return url or None
         except Exception as e:
+            # P0-2: 失败也记录统计
+            _request_stats.record("download_url", _time.time() - _start_ts, throttled)
             logger.warning(f"[115] get_download_url 失败 pickcode={pickcode}: {e}")
             return None
 
@@ -1117,17 +1292,39 @@ class Client115Service:
         115 直链要求下载 UA 与获取 UA 一致（f=1 参数控制），播放器用自己的
         UA 直连时，必须用该 UA 换取直链，否则 115 拒绝 → NoCompatibleStream。
         参考 emby2Alist fetchLastLink：携带客户端 UA 换直链。
-        405 时自动降级备用端点：download_url → download_url_app → download_url_web2
+        405 时自动降级备用端点：download_url -> download_url_app -> download_url_web2
+        P0-1: 缓存超过 80% TTL 时 HEAD 校验有效性，失效则重新获取
+        P0-2: 记录请求耗时和缓存命中/未命中统计
         """
         if not pickcode or not ua:
             return None
         # 缓存 key 区分 UA，避免不同客户端互相污染
         cache_key = f"{pickcode}|{ua}"
+        # 检查缓存
+        cached_url = None
+        need_validate = False
         with _cache_lock:
             cached = _DOWNLOAD_URL_CACHE.get(cache_key)
             if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
-                return cached["url"]
-        _apply_rate_limit("download_url", context)
+                cached_url = cached["url"]
+                # P0-1: 缓存超过 80% TTL 时需 HEAD 校验有效性
+                need_validate = (_time.time() - cached["ts"]) > _DOWNLOAD_URL_TTL * 0.8
+        # P0-1: 缓存命中后按需 HEAD 校验
+        if cached_url:
+            if need_validate:
+                if _validate_download_url(cached_url, ua):
+                    _request_stats.record_cache_hit(True)
+                    return cached_url
+                # HEAD 校验失败，缓存已失效，清除后重新获取
+                with _cache_lock:
+                    _DOWNLOAD_URL_CACHE.pop(cache_key, None)
+                logger.info(f"[115] 直链缓存 HEAD 校验失败，重新获取 pickcode={pickcode}")
+            else:
+                _request_stats.record_cache_hit(True)
+                return cached_url
+        _request_stats.record_cache_hit(False)
+        throttled = _apply_rate_limit("download_url", context)
+        _start_ts = _time.time()
         try:
             client = cls.create_client_from_cookies(cookies)
             # 使用带 405 降级和限流重试的下载链接获取
@@ -1145,8 +1342,12 @@ class Client115Service:
                         expired = [k for k, v in _DOWNLOAD_URL_CACHE.items() if v["ts"] < cutoff]
                         for k in expired:
                             _DOWNLOAD_URL_CACHE.pop(k, None)
+            # P0-2: 记录请求统计
+            _request_stats.record("download_url", _time.time() - _start_ts, throttled)
             return url or None
         except Exception as e:
+            # P0-2: 失败也记录统计
+            _request_stats.record("download_url", _time.time() - _start_ts, throttled)
             logger.warning(f"[115] get_download_url_with_ua 失败 pickcode={pickcode}: {e}")
             return None
 
@@ -1167,6 +1368,187 @@ class Client115Service:
                     _DOWNLOAD_URL_CACHE.pop(k, None)
             else:
                 _DOWNLOAD_URL_CACHE.clear()
+
+    @classmethod
+    def get_rate_limit_stats(cls) -> dict:
+        """P0-2: 获取速率限制和请求统计
+
+        整合现有的 _rate_limit_stats（QPS 级限流计数）和新的 _request_stats
+        （QPS/QPM/QPH/延迟/限流/缓存命中率），供 /api/115/rate-stats 端点调用。
+        """
+        # 获取 QPS 级限流统计（现有计数器，读取后重置）
+        qps_stats = get_rate_limit_stats()
+        # 获取多维请求统计（新的 _RequestStats）
+        request_stats = _request_stats.get_stats()
+        # 直链缓存大小
+        with _cache_lock:
+            cache_size = len(_DOWNLOAD_URL_CACHE)
+        # 合并返回
+        return {
+            "qps": request_stats.get("qps", 0),
+            "qpm": request_stats.get("qpm", 0),
+            "qph": request_stats.get("qph", 0),
+            "avg_latency": request_stats.get("avg_latency", 0),
+            "throttle_count": request_stats.get("throttle_count", 0),
+            "cache_hit_rate": request_stats.get("cache_hit_rate", 0),
+            "cache_size": cache_size,
+            "total_requests": request_stats.get("total_requests", 0),
+            # QPS 级限流统计（自上次读取以来的限流次数和总等待时间）
+            "qps_throttle_count": qps_stats.get("count", 0),
+            "qps_total_wait": round(qps_stats.get("total_wait", 0.0), 3),
+        }
+
+    # ============ P0-3: 多端播放副本 ============
+
+    @classmethod
+    def get_download_url_multiplay(cls, cookies: str, pickcode: str, ua: str,
+                                   account_id: int = 0, context: str = "") -> Optional[str]:
+        """P0-3: 多端播放直链获取
+
+        检测同一 pickcode 在最近 10 秒内是否被不同 UA 请求：
+        - 非多端播放（仅 1 个 UA）：走正常 get_download_url_with_ua 流程
+        - 多端播放（2+ 个不同 UA）：将文件复制到 /多端播放/ 目录，
+          用副本 pickcode 获取独立直链，避免 115 风控判定多端播放异常
+
+        副本 pickcode 缓存在 _multiplay_copy_map 中，后续多端请求复用副本，
+        避免每次多端播放都触发复制操作。
+        """
+        if not pickcode or not ua:
+            return None
+
+        now = _time.time()
+        is_multiplay = False
+
+        # 多端播放检测
+        with _multiplay_lock:
+            tracker = _multiplay_tracker.get(pickcode)
+            if tracker is None:
+                # 首次请求该 pickcode
+                _multiplay_tracker[pickcode] = {"uas": {ua}, "first_ts": now}
+            else:
+                # 已有追踪记录
+                tracker["uas"].add(ua)
+                # 超过检测窗口，重置追踪
+                if now - tracker["first_ts"] > _MULTIPLAY_WINDOW:
+                    _multiplay_tracker[pickcode] = {"uas": {ua}, "first_ts": now}
+                elif len(tracker["uas"]) >= 2:
+                    # 10 秒内 2+ 个不同 UA，判定为多端播放
+                    is_multiplay = True
+
+        if not is_multiplay:
+            # 非多端播放，走正常流程
+            return cls.get_download_url_with_ua(cookies, pickcode, ua, account_id, context)
+
+        # 多端播放：检查是否已有副本 pickcode
+        with _multiplay_lock:
+            copy_pickcode = _multiplay_copy_map.get(pickcode)
+
+        if copy_pickcode:
+            # 已有副本，直接用副本 pickcode 获取直链
+            logger.info(f"[115] 多端播放 pickcode={pickcode} 使用已有副本 pickcode={copy_pickcode}")
+            url = cls.get_download_url_with_ua(cookies, copy_pickcode, ua, account_id, context)
+            if url:
+                return url
+            # 副本直链获取失败，清除映射并重新复制
+            with _multiplay_lock:
+                _multiplay_copy_map.pop(pickcode, None)
+            logger.warning(f"[115] 多端播放副本直链获取失败，尝试重新复制 pickcode={pickcode}")
+
+        # 复制文件获取新 pickcode
+        copy_pickcode = cls._create_multiplay_copy(cookies, pickcode, account_id)
+        if copy_pickcode:
+            with _multiplay_lock:
+                _multiplay_copy_map[pickcode] = copy_pickcode
+            url = cls.get_download_url_with_ua(cookies, copy_pickcode, ua, account_id, context)
+            if url:
+                return url
+
+        # 复制失败或副本直链获取失败，降级为正常获取
+        logger.warning(f"[115] 多端播放复制失败，降级为正常获取 pickcode={pickcode}")
+        return cls.get_download_url_with_ua(cookies, pickcode, ua, account_id, context)
+
+    @classmethod
+    def _create_multiplay_copy(cls, cookies: str, pickcode: str, account_id: int = 0) -> Optional[str]:
+        """P0-3: 复制文件到 /多端播放/ 目录，返回新 pickcode
+
+        流程：
+        1. 用 fs_document(pickcode) 获取文件 file_id 和 file_name
+        2. 确保 /多端播放/ 目录存在（cid 缓存在 _multiplay_copy_cid）
+        3. 用 fs_copy 复制文件到目标目录
+        4. 从复制响应提取新 file_id，用 to_pickcode 转换为 pickcode
+        5. 转换失败时列目录查找同名文件获取 pickcode
+        """
+        global _multiplay_copy_cid
+        try:
+            client = cls.create_client_from_cookies(cookies)
+
+            # 1. 用 fs_document 获取文件信息（file_id, file_name）
+            doc_resp = client.fs_document(pickcode)
+            doc_data = (doc_resp or {}).get("data") or {}
+            file_id = str(doc_data.get("file_id") or "")
+            file_name = str(doc_data.get("file_name") or "")
+            if not file_id:
+                logger.warning(f"[115] 多端播放：无法获取 file_id pickcode={pickcode}")
+                return None
+
+            # 2. 确保 /多端播放/ 目录存在
+            if not _multiplay_copy_cid:
+                _multiplay_copy_cid = cls.mkdir(cookies, "多端播放", "0")
+            dest_cid = _multiplay_copy_cid
+            if not dest_cid:
+                logger.warning("[115] 多端播放：创建副本目录 /多端播放/ 失败")
+                return None
+
+            # 3. 复制文件
+            resp = _call_write_with_405_fallback(
+                client, "fs_copy", "fs_copy_app",
+                file_id, pid=dest_cid,
+            )
+            if isinstance(resp, dict) and resp.get("state") is False:
+                logger.warning(f"[115] 多端播放：复制失败 {resp.get('error', '')}")
+                return None
+
+            # 4. 从复制响应中提取新 file_id
+            new_file_id = ""
+            data = resp.get("data") if isinstance(resp, dict) else None
+            if isinstance(data, dict):
+                # file_id 可能是逗号分隔的字符串
+                raw_fid = str(data.get("file_id") or "")
+                new_file_id = raw_fid.split(",")[0].strip() if raw_fid else ""
+            elif isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict):
+                    new_file_id = str(first.get("file_id") or "")
+
+            # 5. 用 to_pickcode 将新 file_id 转换为 pickcode
+            if new_file_id:
+                try:
+                    new_pickcode = client.to_pickcode(new_file_id, stable_point=pickcode)
+                    logger.info(f"[115] 多端播放：已复制文件 file_id={file_id} -> "
+                                f"新 pickcode={new_pickcode}")
+                    return new_pickcode
+                except Exception as e:
+                    logger.warning(f"[115] 多端播放：to_pickcode 转换失败 file_id={new_file_id}: {e}")
+
+            # 6. 转换失败时列目录查找同名文件的 pickcode
+            if file_name and dest_cid:
+                logger.info(f"[115] 多端播放：列目录查找副本 pickcode dest_cid={dest_cid}")
+                resp_list = _fs_files_with_retry(client, {
+                    "cid": dest_cid, "offset": 0, "limit": 1000, "show_dir": 1,
+                })
+                items = resp_list.get("data", []) or []
+                for it in items:
+                    if it.get("fid") and it.get("n") == file_name:
+                        new_pickcode = str(it.get("pc", ""))
+                        if new_pickcode:
+                            logger.info(f"[115] 多端播放：列目录找到副本 pickcode={new_pickcode}")
+                            return new_pickcode
+
+            logger.warning(f"[115] 多端播放：无法获取副本 pickcode pickcode={pickcode}")
+            return None
+        except Exception as e:
+            logger.warning(f"[115] 多端播放复制异常 pickcode={pickcode}: {e}")
+            return None
 
     # ============ 网盘整理操作（同步方法，供整理服务在线程池调用） ============
 

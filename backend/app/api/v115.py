@@ -4,8 +4,11 @@ API 路由 - 115 扫码登录
 from fastapi import APIRouter, HTTPException, Request
 
 from app.core.json_storage import upsert_account, find_account, find_account_by_user_id, get_first_valid_account
+from app.core.logbuffer import get_logger
 from app.services import Client115Service
 from app.schemas import ApiResponse
+
+logger = get_logger("app.api.v115")
 
 router = APIRouter(prefix="/api/115", tags=["115"])
 
@@ -96,6 +99,17 @@ async def list_files(
     return ApiResponse(data=files)
 
 
+@router.get("/rate-stats", response_model=ApiResponse)
+async def get_rate_limit_stats():
+    """P0-2: 获取 115 速率限制和请求统计
+
+    返回 QPS/QPM/QPH/平均延迟/限流次数/缓存命中率/缓存大小等指标，
+    供运维监控和限流策略调优使用。
+    """
+    stats = Client115Service.get_rate_limit_stats()
+    return ApiResponse(data=stats)
+
+
 @router.get("/url/{filename:path}")
 async def get_download_url(
     filename: str,
@@ -136,19 +150,38 @@ async def get_download_url(
 
     # 115 直链要求下载 UA 与获取 UA 一致（f=1 参数控制）。
     # 播放器（浏览器/Infuse 等）会用自己的 UA 直连 115 CDN，
-    # 因此获取直链时必须使用播放器客户端的 UA，否则 115 拒绝 → 播放器报 NoCompatibleStream。
+    # 因此获取直链时必须使用播放器客户端的 UA，否则 115 拒绝 -> 播放器报 NoCompatibleStream。
     # 参考 emby2Alist fetchLastLink：携带客户端 UA 换取绑定该 UA 的直链。
+    # P0-3: 使用 get_download_url_multiplay 替代 get_download_url_with_ua，
+    #       检测多端播放场景并自动复制文件获取独立直链。
     import re as _re
     request_ua = request.headers.get("User-Agent", "")
     if request_ua and not _re.search(r"(?i)httpx|python", request_ua):
         # 仅当反代/服务器端跟随（httpx）时不覆盖；真实客户端 UA 才用于换直链
-        url = Client115Service.get_download_url_with_ua(cookies, pickcode, request_ua, account.get("id", 0))
+        url = Client115Service.get_download_url_multiplay(
+            cookies, pickcode, request_ua, account.get("id", 0)
+        )
     else:
         url = Client115Service.get_download_url(cookies, pickcode, account.get("id", 0))
 
     if not url:
-        # 获取失败可能是 cookies 过期，标记账号需要检查
-        raise HTTPException(status_code=502, detail="获取下载链接失败，cookies 可能已过期")
+        # P0-4: 失败回源降级 -- 不直接抛 502，返回 JSON 降级响应让前端/播放器决定
+        # 记录失败原因到日志（包含 pickcode/account_id/ua 便于排查）
+        logger.warning(
+            f"[115] 获取直链失败 pickcode={pickcode} account_id={account.get('id', 0)} "
+            f"ua={request_ua[:80]}"
+        )
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={
+                "code": 503,
+                "message": "获取直链失败，正在回退到原始流",
+                "fallback": True,
+                "pickcode": pickcode,
+                "account_id": account.get("id", 0),
+            }
+        )
 
     # 禁止缓存 302 响应，避免过期直链被缓存
     response = RedirectResponse(url=url, status_code=302)
