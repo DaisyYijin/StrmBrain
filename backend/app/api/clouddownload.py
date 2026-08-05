@@ -45,6 +45,29 @@ class CheckStatusRequest(BaseModel):
     info_hashes: List[str] = []
 
 
+class TaskDetailRequest(BaseModel):
+    account_id: int = 0
+    info_hash: str = ""
+
+
+class ShareCreateRequest(BaseModel):
+    account_id: int = 0
+    file_ids: List[str] = []  # 要分享的文件/目录 id 列表
+    password: str = ""        # 访问密码（留空=无密码）
+    expire_days: int = 0      # 有效期天数（0=长期）
+
+
+class ShareListRequest(BaseModel):
+    account_id: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class ShareCancelRequest(BaseModel):
+    account_id: int = 0
+    share_code: str = ""
+
+
 def _get_account(account_id: int) -> Optional[dict]:
     if account_id:
         from app.core.json_storage import find_account
@@ -195,6 +218,26 @@ async def check_download_status(payload: CheckStatusRequest):
     return ApiResponse(data=result)
 
 
+@router.post("/detail", response_model=ApiResponse)
+async def task_detail(payload: TaskDetailRequest):
+    """获取离线下载任务明细（名称/状态/进度/速度/文件列表）"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.info_hash:
+        return ApiResponse(code=400, message="请提供任务 hash")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.clouddownload_task_details(cookies, payload.info_hash)
+
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"获取详情失败: {result['error']}")
+
+    return ApiResponse(data={"task": result})
+
+
 # ===== 保存目录配置持久化 =====
 
 class SaveDirConfigRequest(BaseModel):
@@ -271,5 +314,67 @@ async def share_receive(payload: ShareReceiveRequest):
 
     if isinstance(result, dict) and result.get("error"):
         return ApiResponse(code=500, message=f"转存失败: {result['error']}")
+
+    return ApiResponse(data=result)
+
+
+# ===== 分享链接管理（创建/列表/取消） =====
+
+@router.post("/share/create", response_model=ApiResponse)
+async def share_create(payload: ShareCreateRequest):
+    """创建分享链接（我发出的分享）"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.file_ids:
+        return ApiResponse(code=400, message="请选择要分享的文件")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.share_create(
+        cookies, payload.file_ids, "all", payload.password, payload.expire_days,
+    )
+
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"创建分享失败: {result['error']}")
+
+    return ApiResponse(data=result)
+
+
+@router.post("/share/list", response_model=ApiResponse)
+async def share_list(payload: ShareListRequest):
+    """获取我发出的分享列表"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.share_list_created(cookies, payload.page, payload.page_size)
+
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"获取分享列表失败: {result['error']}")
+
+    return ApiResponse(data=result)
+
+
+@router.post("/share/cancel", response_model=ApiResponse)
+async def share_cancel(payload: ShareCancelRequest):
+    """取消分享"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.share_code:
+        return ApiResponse(code=400, message="缺少 share_code")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.share_cancel(cookies, payload.share_code)
+
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"取消分享失败: {result['error']}")
 
     return ApiResponse(data=result)

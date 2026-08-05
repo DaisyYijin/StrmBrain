@@ -4464,6 +4464,65 @@
                             </div>
                         </div>
 
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.sync_del.enabled, 'tool-disabled': !toolsState.sync_del.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.sync_del.enabled"></span>
+                                    媒体库删除级联
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.sync_del.enabled, 'dot-off': !toolsState.sync_del.enabled }"></span>
+                                    <span :style="{ color: toolsState.sync_del.enabled ? '#67c23a' : '#909399' }">{{ toolsState.sync_del.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.sync_del.enabled }" @click="toggleTool('sync_del')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                Emby 中删除媒体时级联删除 115 网盘对应文件，防误删：仅匹配到网盘文件才删除。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('sync_del')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" fill="currentColor"/></svg>
+                                    删除管控
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('sync_del')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具13：自动化规则 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.automation.enabled, 'tool-disabled': !toolsState.automation.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.automation.enabled"></span>
+                                    自动化规则
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.automation.enabled, 'dot-off': !toolsState.automation.enabled }"></span>
+                                    <span :style="{ color: toolsState.automation.enabled ? '#67c23a' : '#909399' }">{{ toolsState.automation.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.automation.enabled }" @click="toggleTool('automation')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                定时 / Webhook 触发动作链（同步 → 刮削 → 整理 → Emby 刷新），实现全自动流程。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('automation')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    规则管理
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('automation')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -4934,6 +4993,131 @@
                     </div>
                 </div>
 
+                <!-- 媒体库删除级联管控弹窗 -->
+                <div v-if="toolConfig.show === 'sync_del'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:640px;">
+                        <div class="modal-header">
+                            <span class="modal-title">媒体库删除级联管控</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <!-- 启用开关 -->
+                        <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; padding:4px 0;">
+                            <div>
+                                <div style="font-size:14px; font-weight:600; color:#303133;">启用级联删除</div>
+                                <div style="font-size:12px; color:#909399; margin-top:2px;">Emby 中删除媒体时，级联删除 115 网盘对应文件（防误删：仅匹配到网盘文件才删除）</div>
+                            </div>
+                            <div class="tool-toggle" :class="{ 'toggle-on': syncDelState.enabled }" @click="toggleSyncDel" style="flex-shrink:0;" :style="{ opacity: syncDelState.toggling ? 0.6 : 1 }">
+                                <span class="toggle-knob"></span>
+                            </div>
+                        </div>
+
+                        <!-- 队列/历史统计 -->
+                        <div style="display:flex; gap:8px; margin-bottom:14px;">
+                            <div style="flex:1; background:#f5f7fa; border-radius:8px; padding:10px 14px; text-align:center;">
+                                <div style="font-size:20px; font-weight:700; color:#409eff;">{{ syncDelState.queueSize }}</div>
+                                <div style="font-size:12px; color:#909399; margin-top:2px;">待处理事件（队列）</div>
+                            </div>
+                            <div style="flex:1; background:#f5f7fa; border-radius:8px; padding:10px 14px; text-align:center;">
+                                <div style="font-size:20px; font-weight:700; color:#67c23a;">{{ syncDelState.historyCount }}</div>
+                                <div style="font-size:12px; color:#909399; margin-top:2px;">删除历史记录</div>
+                            </div>
+                        </div>
+
+                        <!-- 历史列表 -->
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                            <span style="font-size:13px; font-weight:600; color:#303133;">删除历史（最近 {{ syncDelState.records.length }} 条）</span>
+                            <button class="btn btn-danger btn-sm" @click="clearSyncDelHistory" :disabled="syncDelState.clearing || syncDelState.records.length === 0" style="padding:2px 12px; font-size:12px;">{{ syncDelState.clearing ? '清空中...' : '清空历史' }}</button>
+                        </div>
+                        <div style="max-height:280px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                            <div v-if="syncDelState.loading" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">加载中...</div>
+                            <div v-else-if="syncDelState.records.length === 0" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">暂无删除历史</div>
+                            <div v-else>
+                                <div v-for="(rec, i) in syncDelState.records" :key="i" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #f2f3f5; font-size:12px;">
+                                    <span :style="{
+                                        padding:'1px 8px', borderRadius:'10px', fontSize:'11px', flexShrink:0',
+                                        color: rec.result === 'success' ? '#67c23a' : (rec.result === 'not_found' ? '#e6a23c' : '#f56c6c'),
+                                        background: rec.result === 'success' ? 'rgba(103,194,58,0.1)' : (rec.result === 'not_found' ? 'rgba(230,162,60,0.1)' : 'rgba(245,108,108,0.1)'),
+                                    }">{{ rec.result === 'success' ? '成功' : (rec.result === 'not_found' ? '未匹配' : '失败') }}</span>
+                                    <span style="color:#909399; flexShrink:0; white-space:nowrap;">{{ rec.time }}</span>
+                                    <span style="flex:1; color:#303133; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="rec.path">{{ rec.path }}</span>
+                                    <span v-if="rec.message" style="flex-shrink:0; color:#c0c4cc; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="rec.message">{{ rec.message }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="font-size:12px; color:#909399; margin-top:10px; line-height:1.6;">
+                            说明：Emby 中删除媒体（deep.delete / item.removed 等）时，后台 worker 将匹配 115 网盘对应文件并移入回收站。仅在网盘中精确匹配到文件时才执行删除，未匹配到会标记为「未匹配」并跳过，防止误删。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 自动化规则配置弹窗 -->
+                <div v-if="toolConfig.show === 'automation'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:720px;">
+                        <div class="modal-header">
+                            <span class="modal-title">自动化规则 - 定时/Webhook 触发动作链</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <!-- 添加规则表单 -->
+                        <div style="background:#f5f7fa; border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+                            <div style="font-size:13px; font-weight:600; color:#303133; margin-bottom:10px;">添加规则</div>
+                            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                                <input type="text" v-model="autoRule.newRule.name" placeholder="规则名称（如：每日凌晨整理）" style="flex:2; min-width:160px; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
+                                <select v-model="autoRule.newRule.trigger_type" style="flex:1; min-width:110px; min-height:36px; padding:6px 8px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;">
+                                    <option value="cron">定时（Cron）</option>
+                                    <option value="webhook">Webhook 触发</option>
+                                </select>
+                            </div>
+                            <div v-if="autoRule.newRule.trigger_type === 'cron'" style="margin-bottom:8px;">
+                                <input type="text" v-model="autoRule.newRule.cron" placeholder="Cron 表达式，如 0 2 * * *（每天 2 点）" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
+                            </div>
+                            <div v-else style="margin-bottom:8px;">
+                                <input type="text" v-model="autoRule.newRule.webhook_token" placeholder="Webhook Token（URL: POST /api/automation/webhook/你的token）" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
+                            </div>
+                            <!-- 动作选择 -->
+                            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;">
+                                <label v-for="act in autoRule.actions" :key="act.type" style="display:flex; align-items:center; gap:5px; font-size:13px; color:#303133; cursor:pointer;">
+                                    <input type="checkbox" v-model="autoRule.newRule.actionTypes" :value="act.type" />
+                                    {{ act.label }}
+                                </label>
+                            </div>
+                            <button class="tool-btn tool-btn-run" @click="autoRuleAdd" :disabled="autoRule.saving || !autoRule.newRule.name || autoRule.newRule.actionTypes.length === 0" style="background:#409eff;">{{ autoRule.saving ? '创建中...' : '创建规则' }}</button>
+                        </div>
+
+                        <!-- 规则列表 -->
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                            <span style="font-size:13px; font-weight:600; color:#303133;">规则列表（{{ autoRule.rules.length }} 条）</span>
+                            <button class="btn btn-sm" @click="loadAutoRules" :disabled="autoRule.loading" style="padding:2px 12px; font-size:12px;">刷新</button>
+                        </div>
+                        <div style="max-height:320px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                            <div v-if="autoRule.loading" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">加载中...</div>
+                            <div v-else-if="autoRule.rules.length === 0" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">暂无规则，请在上方添加</div>
+                            <div v-else>
+                                <div v-for="rule in autoRule.rules" :key="rule.id" style="padding:10px 12px; border-bottom:1px solid #f2f3f5;">
+                                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                                        <strong style="color:#303133; font-size:13px; flex:1;">{{ rule.name }}</strong>
+                                        <span style="font-size:11px; padding:1px 8px; border-radius:10px; color:#409eff; background:rgba(64,158,255,0.1);">{{ rule.trigger_type === 'cron' ? ('定时 ' + rule.cron) : 'Webhook' }}</span>
+                                        <span v-if="!rule.is_enabled" style="font-size:11px; padding:1px 8px; border-radius:10px; color:#909399; background:rgba(144,147,153,0.1);">已停用</span>
+                                    </div>
+                                    <div style="font-size:12px; color:#909399; margin-bottom:6px;">
+                                        动作：
+                                        <span v-for="(a, idx) in rule.actions" :key="idx" style="margin-right:6px; color:#606266;">{{ autoRule.actionLabel(a.type) }}<template v-if="!a.enabled">（停用）</template></span>
+                                    </div>
+                                    <div style="display:flex; gap:6px;">
+                                        <button class="btn btn-sm" @click="autoRuleRun(rule.id)" :disabled="autoRule.runningId === rule.id" style="padding:2px 12px; font-size:12px; color:#67c23a;">{{ autoRule.runningId === rule.id ? '执行中...' : '立即执行' }}</button>
+                                        <button class="btn btn-sm" @click="autoRuleToggle(rule)" style="padding:2px 12px; font-size:12px; color:#409eff;">{{ rule.is_enabled ? '停用' : '启用' }}</button>
+                                        <button class="btn btn-sm" @click="autoRuleDel(rule.id)" style="padding:2px 12px; font-size:12px; color:#f56c6c;">删除</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="font-size:12px; color:#909399; margin-top:10px; line-height:1.6;">
+                            动作链按顺序执行：增量同步 → 刮削（NFO/海报）→ 整理 → Emby 刷新。Webhook 触发时外部 POST 到 <code>/api/automation/webhook/{token}</code> 即可执行该规则。
+                        </div>
+                    </div>
+                </div>
+
                 <!-- ===== 转存下载 ===== -->
                 <div v-show="tab === 'clouddownload'">
                     <div style="margin-bottom:20px;">
@@ -5009,6 +5193,157 @@
                     <div v-if="clouddownload.autoOrganizing" class="card" style="text-align:center; padding:20px; color:#409eff;">
                         <svg viewBox="0 0 24 24" style="width:24px; height:24px; animation:spin 1s linear infinite; vertical-align:middle; margin-right:8px;"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" fill="currentColor"/></svg>
                         正在自动整理转存的文件...
+                    </div>
+
+                    <!-- 离线下载任务列表 -->
+                    <div class="card" style="margin-top:20px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                            <span style="font-weight:600; color:#303133;">离线下载任务</span>
+                            <button class="btn btn-default btn-sm" @click="loadDownloadTasks" :disabled="downloadTasks.loading" style="padding:2px 10px;">
+                                {{ downloadTasks.loading ? '加载中...' : '刷新' }}
+                            </button>
+                        </div>
+                        <div v-if="downloadTasks.tasks.length === 0 && !downloadTasks.loading" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">
+                            {{ downloadTasks.loaded ? '暂无离线下载任务' : '点击「刷新」加载任务列表' }}
+                        </div>
+                        <div style="overflow-x:auto;" v-if="downloadTasks.tasks.length > 0">
+                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="border-bottom:2px solid #ebeef5;">
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">文件名</th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">状态</th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">进度</th>
+                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="t in downloadTasks.tasks" :key="t.info_hash || t.name" style="border-bottom:1px solid #ebeef5;">
+                                        <td style="padding:8px 12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="t.name">{{ t.name || '-' }}</td>
+                                        <td style="padding:8px 12px; white-space:nowrap;">
+                                            <span :style="{ color: t.status === 2 ? '#67c23a' : (t.status === 1 ? '#409eff' : '#e6a23c') }">{{ t.status_text || downloadTaskStatusText(t.status) }}</span>
+                                        </td>
+                                        <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ t.percentDone !== undefined ? t.percentDone + '%' : '-' }}</td>
+                                        <td style="padding:8px 12px; white-space:nowrap;">
+                                            <button v-if="t.info_hash" class="btn btn-default btn-sm" @click="showDownloadDetail(t.info_hash)" style="padding:2px 10px;">详情</button>
+                                            <span v-else style="color:#c0c4cc;">-</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 离线下载任务详情弹窗 -->
+                    <div v-if="downloadDetail.show" class="modal-mask" @click.self="closeDownloadDetail">
+                        <div class="modal-box" style="max-width:640px;">
+                            <div class="modal-header">
+                                <span class="modal-title">离线下载任务详情</span>
+                                <button class="modal-close" @click="closeDownloadDetail">×</button>
+                            </div>
+                            <div v-if="downloadDetail.loading" style="text-align:center; padding:30px; color:#909399;">加载中...</div>
+                            <div v-else-if="downloadDetail.error" style="text-align:center; padding:30px; color:#f56c6c;">{{ downloadDetail.error }}</div>
+                            <div v-else-if="downloadDetail.task">
+                                <div v-if="downloadDetail.task.not_found" style="text-align:center; padding:30px; color:#909399;">未找到该任务（可能已被删除）</div>
+                                <div v-else>
+                                    <div style="display:grid; grid-template-columns:110px 1fr; gap:8px 16px; font-size:13px; margin-bottom:14px;">
+                                        <div style="color:#909399;">任务名称</div>
+                                        <div style="color:#303133; word-break:break-all;">{{ downloadDetail.task.name || '-' }}</div>
+                                        <div style="color:#909399;">状态</div>
+                                        <div style="color:#303133;">{{ downloadDetail.task.status_text || downloadTaskStatusText(downloadDetail.task.status) }}</div>
+                                        <div style="color:#909399;">进度</div>
+                                        <div style="color:#303133;">{{ downloadDetail.task.percent || 0 }}%</div>
+                                        <div style="color:#909399;">速度</div>
+                                        <div style="color:#303133;">{{ downloadDetail.task.speed || '0KB/s' }}</div>
+                                        <div style="color:#909399;">文件数</div>
+                                        <div style="color:#303133;">{{ downloadDetail.task.file_count || 0 }}</div>
+                                        <div v-if="downloadDetail.task.create_time" style="color:#909399;">创建时间</div>
+                                        <div v-if="downloadDetail.task.create_time" style="color:#303133;">{{ formatTaskTime(downloadDetail.task.create_time) }}</div>
+                                        <div v-if="downloadDetail.task.finish_time" style="color:#909399;">完成时间</div>
+                                        <div v-if="downloadDetail.task.finish_time" style="color:#303133;">{{ formatTaskTime(downloadDetail.task.finish_time) }}</div>
+                                    </div>
+                                    <div style="font-weight:600; color:#303133; margin-bottom:8px;">文件列表</div>
+                                    <div v-if="!downloadDetail.task.files || downloadDetail.task.files.length === 0" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">暂无文件明细</div>
+                                    <div v-else style="max-height:260px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                        <div v-for="(f, i) in downloadDetailTaskFiles" :key="i" style="display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #f5f5f5; font-size:12px;">
+                                            <span style="flex:1; color:#606266; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="f.path || f.name">{{ f.name || '-' }}</span>
+                                            <span style="color:#909399; white-space:nowrap;">{{ formatDownloadSize(f.size) }}</span>
+                                        </div>
+                                    </div>
+                                    <div v-if="downloadDetail.task.files && downloadDetail.task.files.length > 20" style="display:flex; align-items:center; justify-content:center; gap:12px; margin-top:10px; font-size:13px; color:#606266;">
+                                        <button class="btn btn-default btn-sm" @click="downloadDetail.page = Math.max(1, downloadDetail.page - 1)" :disabled="downloadDetail.page <= 1" style="padding:2px 10px;">上一页</button>
+                                        <span>{{ downloadDetail.page }} / {{ downloadDetailTotalPages }}</span>
+                                        <button class="btn btn-default btn-sm" @click="downloadDetail.page = Math.min(downloadDetailTotalPages, downloadDetail.page + 1)" :disabled="downloadDetail.page >= downloadDetailTotalPages" style="padding:2px 10px;">下一页</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 分享管理 -->
+                    <div class="card" style="margin-top:20px;">
+                        <div class="card-title" style="margin-bottom:12px;">分享管理</div>
+                        <!-- 创建分享 -->
+                        <div style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid #ebeef5;">
+                            <div style="font-weight:600; color:#303133; margin-bottom:8px;">创建分享</div>
+                            <div class="form-group">
+                                <label>文件 ID（逗号分隔）<span class="help-tip">?<span class="tip-text">填写 115 网盘中要分享的文件/目录 ID，多个用英文逗号隔开</span></span></label>
+                                <input type="text" v-model="shareMgr.createFileIds" placeholder="如 123456789,987654321" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <div class="form-group" style="flex:1;">
+                                    <label>有效期</label>
+                                    <select v-model="shareMgr.expireDays" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;">
+                                        <option :value="0">长期有效</option>
+                                        <option :value="1">1 天</option>
+                                        <option :value="7">7 天</option>
+                                        <option :value="30">30 天</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label>访问密码（可选）</label>
+                                    <input type="text" v-model="shareMgr.password" placeholder="留空=无密码" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" @click="createShare" :disabled="shareMgr.creating" style="padding:4px 14px;">
+                                {{ shareMgr.creating ? '创建中...' : '创建分享' }}
+                            </button>
+                        </div>
+                        <!-- 我的分享 -->
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                <span style="font-weight:600; color:#303133;">我的分享（{{ shareMgr.shares.length }}）</span>
+                                <button class="btn btn-default btn-sm" @click="loadShares" :disabled="shareMgr.loading" style="padding:2px 10px;">{{ shareMgr.loading ? '加载中...' : '刷新' }}</button>
+                            </div>
+                            <div v-if="shareMgr.shares.length === 0 && !shareMgr.loading" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">暂无分享记录，点击「刷新」加载</div>
+                            <div style="overflow-x:auto;" v-if="shareMgr.shares.length > 0">
+                                <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                    <thead>
+                                        <tr style="border-bottom:2px solid #ebeef5;">
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">分享码</th>
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">名称</th>
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">文件数</th>
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">创建时间</th>
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">过期时间</th>
+                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="s in shareMgr.shares" :key="s.share_code" style="border-bottom:1px solid #ebeef5;">
+                                            <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ s.share_code || '-' }}</td>
+                                            <td style="padding:8px 12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="s.name">{{ s.name || '-' }}</td>
+                                            <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ s.file_count }}</td>
+                                            <td style="padding:8px 12px; white-space:nowrap; color:#909399;">{{ formatShareTime(s.create_time) }}</td>
+                                            <td style="padding:8px 12px; white-space:nowrap; color:#909399;">{{ formatShareTime(s.expire_time) }}</td>
+                                            <td style="padding:8px 12px; white-space:nowrap;">
+                                                <button class="btn btn-danger btn-sm" @click="cancelShare(s.share_code)" :disabled="shareMgr.cancelling === s.share_code" style="padding:2px 10px;">
+                                                    {{ shareMgr.cancelling === s.share_code ? '取消中...' : '取消分享' }}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -6973,6 +7308,8 @@ av:
                     watcher:      { enabled: localStorage.getItem('strmhub_tool_watcher') === '1' },
                     upload_queue: { enabled: localStorage.getItem('strmhub_tool_upload_queue') === '1' },
                     task_console:{ enabled: localStorage.getItem('strmhub_tool_task_console') === '1' },
+                    sync_del:    { enabled: localStorage.getItem('strmhub_tool_sync_del') === '1' },
+                    automation:  { enabled: localStorage.getItem('strmhub_tool_automation') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -7105,6 +7442,38 @@ av:
                     paused: false,
                     pausing: false,
                     resuming: false,
+                });
+
+                // 媒体库删除级联管控
+                const syncDelState = reactive({
+                    loading: false,
+                    enabled: true,
+                    queueSize: 0,
+                    historyCount: 0,
+                    records: [],
+                    toggling: false,
+                    clearing: false,
+                });
+
+                // 自动化规则（G7）
+                const autoRule = reactive({
+                    loading: false,
+                    saving: false,
+                    runningId: null,
+                    rules: [],
+                    actions: [
+                        { type: 'strm_sync', label: '增量同步' },
+                        { type: 'scrape', label: '刮削 NFO' },
+                        { type: 'organize', label: '影视整理' },
+                        { type: 'emby_refresh', label: 'Emby 刷新' },
+                    ],
+                    newRule: {
+                        name: '',
+                        trigger_type: 'cron',
+                        cron: '',
+                        webhook_token: '',
+                        actionTypes: ['strm_sync'],
+                    },
                 });
 
                 // 二维码弹窗状态
@@ -9862,6 +10231,184 @@ av:
                     taskConsole.resuming = false;
                 };
 
+                // ============ 特色工具 - 媒体库删除级联管控 ============
+
+                // 加载开关状态 + 队列/历史统计 + 删除历史列表
+                const loadSyncDel = async () => {
+                    syncDelState.loading = true;
+                    try {
+                        const [statusRes, historyRes] = await Promise.all([
+                            api('/api/sync-del/status'),
+                            api('/api/sync-del/history?limit=50'),
+                        ]);
+                        const status = await statusRes.json();
+                        if (status && typeof status.enabled === 'boolean') {
+                            syncDelState.enabled = status.enabled;
+                            syncDelState.queueSize = status.queue_size || 0;
+                            syncDelState.historyCount = status.history_count || 0;
+                        }
+                        const history = await historyRes.json();
+                        if (history && Array.isArray(history.records)) {
+                            syncDelState.records = history.records;
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载删除级联管控失败:', e);
+                        showToast('加载删除级联管控失败');
+                    }
+                    syncDelState.loading = false;
+                };
+
+                // 启用/禁用级联删除（乐观更新，失败回滚）
+                const toggleSyncDel = async () => {
+                    if (syncDelState.toggling) return;
+                    const prev = syncDelState.enabled;
+                    const next = !prev;
+                    syncDelState.enabled = next; // 乐观更新
+                    syncDelState.toggling = true;
+                    try {
+                        const res = await api('/api/sync-del/toggle', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: next }),
+                        });
+                        const data = await res.json();
+                        if (data && typeof data.enabled === 'boolean') {
+                            syncDelState.enabled = data.enabled;
+                        } else {
+                            throw new Error(data && data.message ? data.message : '未知错误');
+                        }
+                        showToast(next ? '已启用级联删除' : '已禁用级联删除');
+                    } catch (e) {
+                        syncDelState.enabled = prev; // 失败回滚
+                        showToast(e && e.message ? e.message : '切换失败');
+                    }
+                    syncDelState.toggling = false;
+                };
+
+                // 清空删除历史（confirm 后 DELETE）
+                const clearSyncDelHistory = async () => {
+                    if (syncDelState.clearing) return;
+                    if (!confirm('确定清空全部删除历史记录？此操作不可恢复。')) return;
+                    syncDelState.clearing = true;
+                    try {
+                        const res = await api('/api/sync-del/history', { method: 'DELETE' });
+                        const data = await res.json();
+                        if (data && data.cleared) {
+                            syncDelState.records = [];
+                            syncDelState.historyCount = 0;
+                            showToast('删除历史已清空');
+                        } else {
+                            showToast(data && data.message ? data.message : '清空失败');
+                        }
+                    } catch (e) {
+                        showToast('清空失败');
+                    }
+                    syncDelState.clearing = false;
+                };
+
+                // ============ 自动化规则（G7） ============
+                const actionLabel = (type) => {
+                    const found = autoRule.actions.find(a => a.type === type);
+                    return found ? found.label : type;
+                };
+                const loadAutoRules = async () => {
+                    autoRule.loading = true;
+                    try {
+                        const res = await api('/api/automation/rules');
+                        const data = await res.json();
+                        if (data && data.data && data.data.rules) {
+                            autoRule.rules = data.data.rules;
+                        }
+                    } catch (e) {
+                        showToast('加载规则失败');
+                    }
+                    autoRule.loading = false;
+                };
+                const autoRuleAdd = async () => {
+                    const nr = autoRule.newRule;
+                    if (autoRule.saving) return;
+                    if (!nr.name.trim()) { showToast('请输入规则名称'); return; }
+                    if (!nr.actionTypes.length) { showToast('请至少选择一个动作'); return; }
+                    if (nr.trigger_type === 'cron' && !nr.cron.trim()) { showToast('请输入 Cron 表达式'); return; }
+                    if (nr.trigger_type === 'webhook' && !nr.webhook_token.trim()) { showToast('请输入 Webhook Token'); return; }
+                    autoRule.saving = true;
+                    try {
+                        const actions = nr.actionTypes.map(t => ({ type: t, enabled: true, config: {} }));
+                        const body = {
+                            name: nr.name.trim(),
+                            trigger_type: nr.trigger_type,
+                            cron: nr.trigger_type === 'cron' ? nr.cron.trim() : '',
+                            webhook_token: nr.trigger_type === 'webhook' ? nr.webhook_token.trim() : '',
+                            actions,
+                            is_enabled: true,
+                        };
+                        const res = await api('/api/automation/rules', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body),
+                        });
+                        const data = await res.json();
+                        if (data && data.data && data.data.rule) {
+                            showToast(`规则「${data.data.rule.name}」已创建`);
+                            nr.name = ''; nr.cron = ''; nr.webhook_token = ''; nr.actionTypes = ['strm_sync'];
+                            await loadAutoRules();
+                        } else {
+                            showToast(data && data.message ? data.message : '创建失败');
+                        }
+                    } catch (e) {
+                        showToast('创建失败：网络错误');
+                    }
+                    autoRule.saving = false;
+                };
+                const autoRuleRun = async (ruleId) => {
+                    autoRule.runningId = ruleId;
+                    try {
+                        const res = await api(`/api/automation/run/${ruleId}`, { method: 'POST' });
+                        const data = await res.json();
+                        if (data && data.data && data.data.started) {
+                            showToast(`规则「${data.data.name}」已开始执行（后台）`);
+                        } else {
+                            showToast(data && data.message ? data.message : '执行失败');
+                        }
+                    } catch (e) {
+                        showToast('执行失败：网络错误');
+                    }
+                    autoRule.runningId = null;
+                };
+                const autoRuleToggle = async (rule) => {
+                    try {
+                        const res = await api(`/api/automation/rules/${rule.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ is_enabled: !rule.is_enabled }),
+                        });
+                        const data = await res.json();
+                        if (data && data.data && data.data.rule) {
+                            rule.is_enabled = data.data.rule.is_enabled;
+                            showToast(rule.is_enabled ? '规则已启用' : '规则已停用');
+                        } else {
+                            showToast(data && data.message ? data.message : '操作失败');
+                        }
+                    } catch (e) {
+                        showToast('操作失败：网络错误');
+                    }
+                };
+                const autoRuleDel = async (ruleId) => {
+                    if (!confirm('确定删除该规则？')) return;
+                    try {
+                        const res = await api(`/api/automation/rules/${ruleId}`, { method: 'DELETE' });
+                        const data = await res.json();
+                        if (data && data.data && data.data.deleted) {
+                            showToast('规则已删除');
+                            await loadAutoRules();
+                        } else {
+                            showToast(data && data.message ? data.message : '删除失败');
+                        }
+                    } catch (e) {
+                        showToast('删除失败：网络错误');
+                    }
+                };
+
                 // ============ 特色工具 - 卡片操作方法 ============
 
                 // 切换工具启用/禁用
@@ -9879,6 +10426,8 @@ av:
                     if (key === 'watcher') loadWatcher();
                     else if (key === 'upload_queue') loadUploadQueue();
                     else if (key === 'task_console') loadTasks();
+                    else if (key === 'sync_del') loadSyncDel();
+                    else if (key === 'automation') loadAutoRules();
                 };
 
                 // 立即运行工具（打开对应配置弹窗）
@@ -10023,6 +10572,58 @@ av:
                     downloadCompleted: 0,    // 已完成任务数
                     pollTimer: null,         // 定时器
                 });
+
+                // G3: 离线下载任务列表 + 详情
+                const downloadTasks = reactive({ loading: false, tasks: [], loaded: false });
+                const downloadDetail = reactive({
+                    show: false, loading: false, task: null, infoHash: '', error: '', page: 1,
+                });
+                const DETAIL_PAGE_SIZE = 20;
+                const downloadDetailTaskFiles = computed(() => {
+                    const files = (downloadDetail.task && downloadDetail.task.files) || [];
+                    const start = (downloadDetail.page - 1) * DETAIL_PAGE_SIZE;
+                    return files.slice(start, start + DETAIL_PAGE_SIZE);
+                });
+                const downloadDetailTotalPages = computed(() => {
+                    const files = (downloadDetail.task && downloadDetail.task.files) || [];
+                    return Math.max(1, Math.ceil(files.length / DETAIL_PAGE_SIZE));
+                });
+
+                // G4: 分享管理（简化方案：文本输入 file_id 列表）
+                const shareMgr = reactive({
+                    loading: false,       // 我的分享列表加载中
+                    shares: [],           // 我的分享列表
+                    creating: false,      // 创建分享中
+                    createFileIds: '',    // 逗号分隔的文件/目录 id（简化方案用文本输入）
+                    password: '',         // 访问密码
+                    expireDays: 0,        // 有效期天数（0=长期）
+                    cancelling: '',       // 正在取消的 share_code
+                });
+
+                const downloadTaskStatusText = (s) => {
+                    if (s === 2) return '已完成';
+                    if (s === 1) return '进行中';
+                    if (s === 0) return '等待中';
+                    if (s === 3) return '失败';
+                    return '未知';
+                };
+
+                const formatTaskTime = (v) => {
+                    if (v === undefined || v === null || v === '') return '-';
+                    if (typeof v === 'number') {
+                        const t = v < 1e12 ? v * 1000 : v;
+                        const d = new Date(t);
+                        if (isNaN(d.getTime())) return String(v);
+                        const p = (n) => String(n).padStart(2, '0');
+                        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+                    }
+                    return String(v);
+                };
+
+                const formatShareTime = (v) => {
+                    if (v === 0 || v === '0' || v === undefined || v === null || v === '') return '长期有效';
+                    return formatTaskTime(v);
+                };
 
                 const formatDownloadSize = (bytes) => {
                     if (!bytes || bytes <= 0) return '-';
@@ -10303,6 +10904,147 @@ av:
                     clouddownload.pollingDownload = false;
                 };
 
+                // ===== G3: 离线下载任务列表 / 详情 =====
+                const loadDownloadTasks = async () => {
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
+                    downloadTasks.loading = true;
+                    try {
+                        const res = await api('/api/clouddownload/list', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: accId, page: 1, page_size: 50 }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            downloadTasks.tasks = Array.isArray(data.data.tasks) ? data.data.tasks : [];
+                            downloadTasks.loaded = true;
+                        } else {
+                            showToast(data.message || '获取任务列表失败', 4000);
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '获取任务列表失败', 4000);
+                    }
+                    downloadTasks.loading = false;
+                };
+
+                const showDownloadDetail = async (ih) => {
+                    downloadDetail.infoHash = ih;
+                    downloadDetail.show = true;
+                    downloadDetail.loading = true;
+                    downloadDetail.error = '';
+                    downloadDetail.task = null;
+                    downloadDetail.page = 1;
+                    const accId = getDefaultAccountId();
+                    if (!accId) {
+                        downloadDetail.loading = false;
+                        downloadDetail.error = '未找到有效 115 账号';
+                        return;
+                    }
+                    try {
+                        const res = await api('/api/clouddownload/detail', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: accId, info_hash: ih }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data && data.data.task) {
+                            downloadDetail.task = data.data.task;
+                        } else {
+                            downloadDetail.error = data.message || '获取详情失败';
+                        }
+                    } catch (e) {
+                        downloadDetail.error = e._network ? e.message : '获取详情失败';
+                    }
+                    downloadDetail.loading = false;
+                };
+
+                const closeDownloadDetail = () => {
+                    downloadDetail.show = false;
+                    downloadDetail.task = null;
+                    downloadDetail.error = '';
+                };
+
+                // ===== G4: 分享管理 =====
+                const loadShares = async () => {
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
+                    shareMgr.loading = true;
+                    try {
+                        const res = await api('/api/clouddownload/share/list', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: accId, page: 1, page_size: 50 }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            shareMgr.shares = Array.isArray(data.data.shares) ? data.data.shares : [];
+                        } else {
+                            showToast(data.message || '获取分享列表失败', 4000);
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '获取分享列表失败', 4000);
+                    }
+                    shareMgr.loading = false;
+                };
+
+                const createShare = async () => {
+                    const ids = String(shareMgr.createFileIds || '').split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+                    if (ids.length === 0) { showToast('请输入要分享的文件 ID（逗号分隔）'); return; }
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
+                    shareMgr.creating = true;
+                    try {
+                        const res = await api('/api/clouddownload/share/create', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                account_id: accId,
+                                file_ids: ids,
+                                password: String(shareMgr.password || '').trim(),
+                                expire_days: Number(shareMgr.expireDays) || 0,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('分享创建成功');
+                            shareMgr.createFileIds = '';
+                            shareMgr.password = '';
+                            shareMgr.expireDays = 0;
+                            loadShares();
+                        } else {
+                            showToast(data.message || '创建分享失败', 4000);
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '创建分享失败', 4000);
+                    }
+                    shareMgr.creating = false;
+                };
+
+                const cancelShare = async (code) => {
+                    if (!confirm(`确定取消分享 ${code}？取消后该分享链接将失效。`)) return;
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
+                    shareMgr.cancelling = code;
+                    try {
+                        const res = await api('/api/clouddownload/share/cancel', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: accId, share_code: code }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('已取消分享');
+                            loadShares();
+                        } else {
+                            showToast(data.message || '取消分享失败', 4000);
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '取消分享失败', 4000);
+                    }
+                    shareMgr.cancelling = '';
+                };
+
                 // 离线下载状态检测：快速轮询直到完成或超时
                 const pollDownloadStatus = async () => {
                     if (!clouddownload.pollingDownload || clouddownload.downloadInfoHashes.length === 0) {
@@ -10531,6 +11273,8 @@ av:
                     // 特色工具
                     toolsState, toolConfig,
                     toggleTool, openToolConfig, runToolNow,
+                    syncDelState, loadSyncDel, toggleSyncDel, clearSyncDelHistory,
+                    autoRule, actionLabel, loadAutoRules, autoRuleAdd, autoRuleRun, autoRuleToggle, autoRuleDel,
                     coverGen, coverGenPreviewFirst, coverGenGenerateAll,
                     clearFolder, clearFolderScan, clearFolderRun,
                     clearRecycle, clearRecycleRun,
@@ -10555,6 +11299,13 @@ av:
                     toggleAllShareFiles, toggleShareSelect, receiveShare,
                     triggerAutoOrganize, loadClouddownloadConfig,
                     startDownloadPolling, stopDownloadPolling, startTransferWait,
+                    // 转存下载 - G3 任务明细
+                    downloadTasks, downloadDetail,
+                    downloadDetailTaskFiles, downloadDetailTotalPages,
+                    loadDownloadTasks, showDownloadDetail, closeDownloadDetail,
+                    downloadTaskStatusText, formatTaskTime,
+                    // 转存下载 - G4 分享管理
+                    shareMgr, loadShares, createShare, cancelShare, formatShareTime,
                 };
             }
         }).mount('#app');

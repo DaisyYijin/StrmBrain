@@ -2199,6 +2199,102 @@ class Client115Service:
             logger.warning(f"[115] 离线下载清空失败: {e}")
             return {"error": str(e)}
 
+    @classmethod
+    def clouddownload_task_details(cls, cookies: str, info_hash: str) -> dict:
+        """
+        获取离线下载任务明细（名称/状态/进度/速度/文件列表）
+        info_hash: 任务的 info_hash
+        返回 {info_hash, name, status, status_text, percent, speed, file_count,
+              files: [{name, size, path}], create_time, finish_time}
+        找不到任务时返回 {"info_hash": ih, "not_found": true}
+        """
+        if not info_hash:
+            return {"info_hash": info_hash, "not_found": True}
+        client = cls.create_client_from_cookies(cookies)
+        page = 1
+        max_pages = 20
+        # 逐页扫描，直到找到目标 hash 或遍历完
+        while page <= max_pages:
+            try:
+                resp = client.clouddownload_task_list({"page": page, "page_size": 50})
+            except Exception as e:
+                logger.warning(f"[115] 获取下载任务列表失败: {e}")
+                return {"info_hash": info_hash, "error": str(e)}
+            tasks = resp.get("tasks", []) if isinstance(resp, dict) else []
+            if not tasks:
+                break
+            for t in tasks:
+                if t.get("info_hash", "") == info_hash:
+                    return cls._format_task_detail(t)
+            total_count = resp.get("count", 0)
+            if page * 50 >= total_count:
+                break
+            page += 1
+        return {"info_hash": info_hash, "not_found": True}
+
+    @staticmethod
+    def _format_task_detail(t: dict) -> dict:
+        """把 115 下载任务原始字段解析为统一明细结构（适配不同字段名）"""
+        # 文件列表：适配 file_list / files 字段（取 name/size/path）
+        files = []
+        raw_files = t.get("file_list") or t.get("files") or []
+        if isinstance(raw_files, list):
+            for f in raw_files:
+                if not isinstance(f, dict):
+                    continue
+                name = f.get("name") or f.get("file_name") or f.get("n") or ""
+                size = f.get("size")
+                if size is None:
+                    size = f.get("file_size")
+                if size is None:
+                    size = f.get("s")
+                try:
+                    size = int(size or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                path = f.get("path") or f.get("file_path") or ""
+                files.append({"name": str(name), "size": size, "path": str(path)})
+        # 下载速度：适配 download_speed / speed 字段（B→KB/MB/GB）
+        raw_speed = t.get("download_speed")
+        if raw_speed is None:
+            raw_speed = t.get("speed")
+        speed = Client115Service._format_speed(raw_speed)
+        # 时间字段：适配 create_time / finish_time 及常见别名
+        create_time = t.get("create_time") or t.get("user_ptime") or t.get("add_time") or ""
+        finish_time = t.get("finish_time") or t.get("end_time") or t.get("update_time") or ""
+        status = t.get("status", 0)
+        return {
+            "info_hash": t.get("info_hash", ""),
+            "name": t.get("name", ""),
+            "status": status,
+            "status_text": t.get("status_text", ""),
+            "percent": t.get("percentDone", 0),
+            "speed": speed,
+            "file_count": len(files),
+            "files": files,
+            "create_time": str(create_time),
+            "finish_time": str(finish_time),
+        }
+
+    @staticmethod
+    def _format_speed(raw) -> str:
+        """把 B/s 数值格式化为可读速度文本（已格式化字符串则原样返回）"""
+        if isinstance(raw, str) and raw:
+            s = raw.strip()
+            if not s.isdigit():
+                return s or "0KB/s"
+        try:
+            bps = int(raw or 0)
+        except (TypeError, ValueError):
+            return "0KB/s"
+        if bps <= 0:
+            return "0KB/s"
+        for unit in ("B/s", "KB/s", "MB/s", "GB/s", "TB/s"):
+            if bps < 1024:
+                return f"{bps:.1f}{unit}"
+            bps /= 1024
+        return f"{bps:.1f}PB/s"
+
     # ===== 分享链接转存 =====
 
     @classmethod
@@ -2256,6 +2352,106 @@ class Client115Service:
             return resp
         except Exception as e:
             logger.warning(f"[115] 分享转存失败: {e}")
+            return {"error": str(e)}
+
+    # ===== 分享链接管理（创建/列表/取消） =====
+
+    @classmethod
+    def share_create(cls, cookies: str, file_ids: list[str], share_to: str = "all",
+                     password: str = "", expire_days: int = 0) -> dict:
+        """
+        创建分享链接（我发出的分享）
+        file_ids: 要分享的文件/目录 id 列表
+        share_to: 分享对象（all=所有人）
+        password: 访问密码（留空=无密码）
+        expire_days: 有效期天数（0=长期）
+        说明：p115client 的 share_send(payload) 会把 payload 与默认参数合并后原样
+        POST 到 https://webapi.115.com/share/send，官方封装保证 file_ids/is_asc/
+        order/ignore_warn 字段；115 web 分享接口的 share_to/pwd/expire_days/source
+        字段同样随 payload 透传，此处按其合法参数组合构造。
+        """
+        if not file_ids:
+            return {"error": "请选择要分享的文件"}
+        client = cls.create_client_from_cookies(cookies)
+        payload = {
+            "file_ids": ",".join(str(fid) for fid in file_ids),
+            "share_to": share_to,
+            "source": 1,
+        }
+        if password:
+            payload["pwd"] = password
+        if expire_days and expire_days > 0:
+            payload["expire_days"] = int(expire_days)
+        try:
+            resp = client.share_send(payload)
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 创建分享失败: {e}")
+            # 兜底：share_send 不可用时，改用 usershare_share 创建单个文件的分享
+            try:
+                if len(file_ids) == 1:
+                    resp = client.usershare_share({
+                        "file_id": str(file_ids[0]),
+                        "share_opt": 1,
+                        "safe_pwd": password or "",
+                        "ignore_warn": 1,
+                    })
+                    return resp
+            except Exception as e2:
+                logger.warning(f"[115] 创建分享兜底失败: {e2}")
+            return {"error": str(e)}
+
+    @classmethod
+    def share_list_created(cls, cookies: str, page: int = 1, page_size: int = 20) -> dict:
+        """
+        获取我发出的分享列表
+        page/page_size: 分页参数（p115client 的 share_list 使用 limit/offset，此处换算）
+        返回 {"shares": [{"share_code", "name", "file_count", "create_time", "expire_time", "status", "share_url"}], "count": int}
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.share_list({
+                "limit": max(1, page_size),
+                "offset": max(0, (page - 1) * page_size),
+            })
+            if not isinstance(resp, dict):
+                return {"shares": [], "count": 0}
+            raw = resp.get("data") or []
+            if not isinstance(raw, list):
+                raw = []
+            shares = []
+            for s in raw:
+                if not isinstance(s, dict):
+                    continue
+                shares.append({
+                    "share_code": s.get("share_code", ""),
+                    "name": s.get("title") or s.get("name") or "",
+                    "file_count": s.get("file_count", 0),
+                    "create_time": s.get("share_time", ""),
+                    "expire_time": s.get("expire_time", 0),
+                    "status": s.get("status", 0),
+                    "share_url": s.get("share_url", ""),
+                })
+            return {"shares": shares, "count": resp.get("count", len(shares))}
+        except Exception as e:
+            logger.warning(f"[115] 获取分享列表失败: {e}")
+            return {"error": str(e)}
+
+    @classmethod
+    def share_cancel(cls, cookies: str, share_code: str) -> dict:
+        """
+        取消分享
+        说明：p115client 的 share_update(payload) 官方参数中无 status 字段，
+        115 web 接口通过 share/updateshare 的 action="cancel" 取消分享（signature 已核查）。
+        """
+        if not share_code:
+            return {"error": "缺少 share_code"}
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.share_update({"share_code": share_code, "action": "cancel"})
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 取消分享失败: {e}")
             return {"error": str(e)}
 
     @classmethod

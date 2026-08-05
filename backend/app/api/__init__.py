@@ -13,8 +13,9 @@ from app.api.clouddownload import router as clouddownload_router
 from app.api.backup import router as backup_router
 from app.api.notification import router as notification_router
 from app.api.tasks import router as tasks_router
+from app.api.sync_del import router as sync_del_router
 
 __all__ = ["v115_router", "accounts_router", "settings_router", "system_router",
            "dashboard_router", "organize_router", "tools_router", "wechat_router",
            "ai_router", "watcher_router", "emby_webhook_router", "clouddownload_router",
-           "backup_router", "notification_router", "tasks_router"]
+           "backup_router", "notification_router", "tasks_router", "sync_del_router"]

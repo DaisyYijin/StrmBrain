@@ -24,6 +24,7 @@ import time
 from typing import Optional
 
 from app.config import DATA_DIR
+from app.core.json_storage import read_setting, save_setting
 from app.core.logbuffer import get_logger
 from app.services.client_115 import (
     Client115Service,
@@ -60,6 +61,7 @@ class MediasyncDelService:
         self._queue: Optional[queue.Queue] = None
         self._worker_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()          # 队列/线程状态锁
+        self._config_lock = threading.Lock()   # 启用开关配置读写锁
         self._history_lock = threading.Lock()  # 历史文件写锁
 
     # ===== 生命周期 =====
@@ -164,12 +166,59 @@ class MediasyncDelService:
             if item is self._SENTINEL:
                 q.task_done()
                 break
+            # 级联删除开关：禁用时事件出队但不处理（防止队列堆积）
+            if not self.get_enabled():
+                logger.info("[mediasyncdel] 级联删除已禁用，跳过删除事件")
+                q.task_done()
+                continue
             try:
                 self._process_delete_event(item)
             except Exception as e:
                 logger.warning(f"[mediasyncdel] 处理删除事件失败: {e}", exc_info=True)
             finally:
                 q.task_done()
+
+    # ===== 配置开关 =====
+
+    def get_enabled(self) -> bool:
+        """读取级联删除启用开关（settings.json 的 mediasyncdel.enabled，默认 True）。"""
+        with self._config_lock:
+            try:
+                cfg = read_setting("mediasyncdel") or {}
+                return bool(cfg.get("enabled", True))
+            except Exception as e:
+                logger.warning(f"[mediasyncdel] 读取级联删除开关异常: {e}")
+                return True
+
+    def set_enabled(self, enabled: bool) -> bool:
+        """写入级联删除启用开关（settings.json 的 mediasyncdel.enabled）。"""
+        enabled = bool(enabled)
+        with self._config_lock:
+            try:
+                cfg = read_setting("mediasyncdel") or {}
+                cfg["enabled"] = enabled
+                ok = save_setting("mediasyncdel", cfg)
+                if ok:
+                    logger.info(f"[mediasyncdel] 级联删除已{'启用' if enabled else '禁用'}")
+                else:
+                    logger.warning("[mediasyncdel] 保存级联删除开关失败")
+                return ok
+            except Exception as e:
+                logger.warning(f"[mediasyncdel] 设置级联删除开关异常: {e}")
+                return False
+
+    # ===== 队列状态 =====
+
+    def get_queue_size(self) -> int:
+        """获取删除事件队列当前待处理数量。"""
+        with self._lock:
+            q = self._queue
+        if q is None:
+            return 0
+        try:
+            return q.qsize()
+        except Exception:
+            return 0
 
     # ===== 事件解析 =====
 
@@ -495,6 +544,49 @@ class MediasyncDelService:
                 )
         except Exception as e:
             logger.warning(f"[mediasyncdel] 保存删除历史失败: {e}")
+
+    def get_history(self, limit: int = 50) -> list:
+        """读取删除历史，返回最近 limit 条（倒序，最新在前）。文件不存在时返回空列表。"""
+        try:
+            if not _HISTORY_FILE.exists():
+                return []
+            with self._history_lock:
+                data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                return []
+            try:
+                limit = max(int(limit), 0)
+            except (TypeError, ValueError):
+                limit = 50
+            if limit <= 0:
+                return []
+            return list(reversed(data[-limit:]))
+        except Exception as e:
+            logger.warning(f"[mediasyncdel] 读取删除历史失败: {e}")
+            return []
+
+    def get_history_count(self) -> int:
+        """获取删除历史总条数。"""
+        try:
+            if not _HISTORY_FILE.exists():
+                return 0
+            with self._history_lock:
+                data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+            return len(data) if isinstance(data, list) else 0
+        except Exception as e:
+            logger.warning(f"[mediasyncdel] 读取删除历史条数失败: {e}")
+            return 0
+
+    def clear_history(self) -> bool:
+        """清空删除历史（写空数组）。"""
+        try:
+            with self._history_lock:
+                _HISTORY_FILE.write_text("[]", encoding="utf-8")
+            logger.info("[mediasyncdel] 删除历史已清空")
+            return True
+        except Exception as e:
+            logger.warning(f"[mediasyncdel] 清空删除历史失败: {e}")
+            return False
 
 
 # ===== 全局单例 =====

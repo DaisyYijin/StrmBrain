@@ -13,7 +13,10 @@ from app.api import (v115_router, accounts_router, settings_router,
                      tools_router, wechat_router,
                      ai_router, watcher_router,
                      emby_webhook_router, clouddownload_router,
-                     backup_router, notification_router, tasks_router)
+                     backup_router, notification_router, tasks_router,
+                     sync_del_router)
+from app.api.automation import router as automation_router
+from app.api.automation import webhook_router as automation_webhook_router
 from app.config import HOST, PORT, CORS_ORIGINS, AUTH_ENABLED, VERSION
 from app.core.auth import verify_token
 from app.core.logbuffer import setup_logging, get_logger
@@ -34,6 +37,7 @@ _PUBLIC_EXACT = frozenset({
 _PUBLIC_PREFIXES = (
     "/api/115/url/",   # 302 下载重定向（Emby 直接访问）
     "/ws/progress",    # WebSocket 进度通道
+    "/api/automation/webhook/",  # 自动化规则 Webhook 触发（公开端点，token 鉴权）
 )
 
 
@@ -293,6 +297,9 @@ app.include_router(clouddownload_router)
 app.include_router(backup_router)
 app.include_router(notification_router)
 app.include_router(tasks_router)
+app.include_router(sync_del_router)
+app.include_router(automation_router)
+app.include_router(automation_webhook_router)
 
 
 # 静态文件（前端）- 必须放在最后

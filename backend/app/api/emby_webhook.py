@@ -204,6 +204,14 @@ async def emby_webhook(
     )
 
     if is_delete_event:
+        # 级联删除开关检查：禁用时事件不入队，避免无意义消费
+        from app.services.mediasyncdel_service import get_mediasync_del_service
+        if not get_mediasync_del_service().get_enabled():
+            logger.info(f"[emby-webhook] 级联删除已禁用，忽略删除事件: {event}")
+            return JSONResponse(
+                content={"code": 0, "message": "级联删除已禁用", "data": None}
+            )
+
         # 提取被删媒体信息（复用入库提取逻辑）
         info = _extract_item(payload) or {}
         # 提取被删媒体路径列表（兼容 Path / Metadata.Path / Item.Path / ItemIds /
@@ -221,7 +229,6 @@ async def emby_webhook(
         }
 
         # 入队由后台 worker 异步处理，不阻塞 webhook 线程
-        from app.services.mediasyncdel_service import get_mediasync_del_service
         queued = get_mediasync_del_service().enqueue_event(snapshot)
 
         logger.info(

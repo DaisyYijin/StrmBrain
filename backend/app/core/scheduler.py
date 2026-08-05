@@ -37,6 +37,12 @@ async def init_scheduler():
     except Exception as e:
         logger.warning(f"注册每日 115 签到任务失败: {e}")
 
+    # G7: 注册自动化规则 cron 触发器
+    try:
+        await register_automation_jobs()
+    except Exception as e:
+        logger.warning(f"注册自动化规则定时任务失败: {e}")
+
 
 async def shutdown_scheduler():
     """关闭调度器"""
@@ -581,3 +587,78 @@ async def _run_daily_checkin():
             logger.info(f"每日 115 签到：账号 {account_id} 成功")
 
     logger.info(f"每日 115 签到完成: 成功 {ok} 个账号, 失败 {fail} 个账号")
+
+
+# ===== G7: 自动化规则 cron 触发器 =====
+
+# 自动化规则 Job ID 前缀（实际 id=automation_{rule_id}）
+AUTOMATION_JOB_PREFIX = "automation_"
+
+
+async def register_automation_jobs():
+    """注册/更新自动化规则的 cron 触发器任务。
+
+    遍历 automation_rules.json 中 trigger_type=cron 且启用的规则，
+    为每条规则注册 APScheduler job（id=automation_{rule_id}）。
+    规则变更（增/删/改）后需重新调用本函数。
+    """
+    global _scheduler
+    if _scheduler is None:
+        return
+
+    from app.core.logbuffer import get_logger
+    from app.services.automation_service import get_automation_service
+
+    logger = get_logger()
+
+    # 先移除旧的自动化规则任务（保证规则变更后重注册生效）
+    try:
+        for job in _scheduler.get_jobs():
+            if job.id.startswith(AUTOMATION_JOB_PREFIX):
+                _scheduler.remove_job(job.id)
+    except Exception:
+        pass
+
+    try:
+        rules = get_automation_service().list_rules()
+    except Exception as e:
+        logger.warning(f"读取自动化规则失败: {e}")
+        return
+
+    for rule in rules:
+        if not rule.get("is_enabled", True):
+            continue
+        if rule.get("trigger_type") != "cron":
+            continue
+        cron_str = (rule.get("cron") or "").strip()
+        if not cron_str:
+            continue
+        rule_id = rule.get("id")
+        if rule_id is None:
+            continue
+        try:
+            trigger = CronTrigger.from_crontab(cron_str)
+            _scheduler.add_job(
+                _run_automation_rule,
+                trigger=trigger,
+                id=f"{AUTOMATION_JOB_PREFIX}{rule_id}",
+                replace_existing=True,
+                kwargs={"rule_id": rule_id},
+            )
+            logger.info(f"已注册自动化规则定时任务: 规则 {rule_id} ({rule.get('name', '')}), cron='{cron_str}'")
+        except Exception as e:
+            logger.warning(f"注册自动化规则 {rule_id} 定时任务失败: {e}")
+
+
+async def _run_automation_rule(rule_id):
+    """自动化规则 cron 触发执行体：调 get_automation_service().run_rule 执行动作序列"""
+    from app.core.logbuffer import get_logger
+    from app.services.automation_service import get_automation_service
+
+    logger = get_logger()
+    logger.info(f"自动化规则 {rule_id} 定时触发执行")
+    try:
+        result = await get_automation_service().run_rule(rule_id, context="cron")
+        logger.info(f"自动化规则 {rule_id} 执行完成: success={result.get('success')}")
+    except Exception as e:
+        logger.warning(f"自动化规则 {rule_id} 执行异常: {e}")
