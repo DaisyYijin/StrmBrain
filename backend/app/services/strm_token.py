@@ -61,10 +61,13 @@ def rotate_token() -> str:
 def is_enabled() -> bool:
     """
     Token 验证是否启用。
-    产品决策：STRM 播放安全默认强制开启（无开关），防止未授权的 STRM URL 被外部直接调用。
-    历史配置中的 enabled 字段不再生效，始终返回 True。
+    F1 修复：恢复为读取配置（此前强制返回 True 导致前端开关失效）。
+    - 读取 settings.json 的 strm_security.enabled 字段
+    - 未配置时默认启用（安全默认值）
     """
-    return True
+    data = read_setting("strm_security")
+    enabled = data.get("enabled", True)
+    return bool(enabled)
 
 
 def set_enabled(enabled: bool) -> bool:
@@ -75,6 +78,7 @@ def set_enabled(enabled: bool) -> bool:
     if not data.get("token"):
         data["token"] = _generate_token()
     save_setting("strm_security", data)
+    logger.info(f"STRM 播放 Token 验证已{'启用' if enabled else '禁用'}")
     return True
 
 

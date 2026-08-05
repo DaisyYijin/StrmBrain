@@ -2815,6 +2815,21 @@
                                     即可实现 STRM 文件 302 跳转 115 直链播放（不占服务器带宽、不转码）。
                                 </div>
                             </div>
+
+                            <!-- Emby 302 反代管理 -->
+                            <div style="margin-top:16px; padding-top:16px; border-top:1px solid #ebeef5;">
+                                <div class="card-title" style="margin-bottom:12px;">Emby 302 反代<span class="help-tip">?<span class="tip-text">内置 302 反代服务状态与端口。Emby 客户端连接反代端口即可播放 STRM 文件。</span></span></div>
+                                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                    <span class="task-queue-status" :class="embyProxyState.status === 'running' ? 'running' : 'idle'">{{ embyProxyState.statusText }}</span>
+                                    <span style="font-size:13px; color:#606266;">反代端口：<strong style="color:#409eff;">{{ embyProxyState.port }}</strong></span>
+                                    <span style="font-size:13px; color:#909399;">客户端连接：<code style="word-break:break-all;">http://{{ windowHost }}:{{ embyProxyState.port }}</code></span>
+                                    <button class="btn btn-default btn-action" @click="restartEmbyProxy" :disabled="embyProxyState.restarting">
+                                        {{ embyProxyState.restarting ? '重启中...' : '重启反代' }}
+                                    </button>
+                                </div>
+                                <div v-if="embyProxyState.status === 'running'" style="font-size:12px; color:#67c23a; margin-top:8px;">反代服务运行中，Emby 客户端连接反代端口即可实现 302 播放。</div>
+                                <div v-else style="font-size:12px; color:#e6a23c; margin-top:8px;">反代服务未运行，请先保存 Emby 连接配置。</div>
+                            </div>
                         </div>
                     </div>
                     <!-- /Emby 连接配置 -->
@@ -2893,6 +2908,68 @@
                                         <span style="font-size:12px; color:#909399; flex-shrink:0; min-width:70px; padding-top:2px;">文件内容：</span>
                                         <code style="word-break:break-all; overflow-wrap:anywhere; flex:1; font-size:12px; color:#409eff; background:#ecf5ff; padding:4px 6px; border-radius:4px;">{{ strmExample.content }}</code>
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- STRM 播放安全 -->
+                            <div style="margin-top:16px; padding-top:16px; border-top:1px solid #ebeef5;">
+                                <div class="card-title" style="margin-bottom:12px;">STRM 播放安全<span class="help-tip">?<span class="tip-text">为 STRM URL 的 302 播放请求启用 Token 验证，防止未授权访问。</span></span></div>
+                                <div class="form-group">
+                                    <label>启用 Token 验证<span class="help-tip">?<span class="tip-text">开启后播放 STRM 文件需要在 URL 中携带有效 Token，配合全量同步生成的直链使用。</span></span></label>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <div class="tool-toggle" :class="{ 'toggle-on': strmSecurity.enabled }" @click="strmSecurity.enabled = !strmSecurity.enabled; saveStrmSecurity()">
+                                            <div class="toggle-knob"></div>
+                                        </div>
+                                        <span style="font-size:13px;" :style="{ color: strmSecurity.enabled ? '#67c23a' : '#909399' }">{{ strmSecurity.enabled ? '已启用' : '已禁用' }}</span>
+                                        <span v-if="strmSecurity.saving" style="font-size:12px; color:#909399;">保存中...</span>
+                                    </div>
+                                    <div style="font-size:12px; color:#c0c4cc; margin-top:6px;">关闭后 STRM URL 无需 Token 即可播放（不推荐）</div>
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="btn btn-default btn-action" @click="rotateStrmToken" :disabled="strmSecurity.rotating">
+                                        {{ strmSecurity.rotating ? '轮换中...' : '轮换 Token' }}
+                                    </button>
+                                    <span style="font-size:12px; color:#c0c4cc; align-self:center;">轮换后旧 Token 立即失效，需重新执行全量同步更新 STRM 文件</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 115 生活事件监控 -->
+                        <div class="card" style="margin-top:16px;">
+                            <div class="card-title">115 生活事件监控<span class="help-tip">?<span class="tip-text">开启后，后台定时轮询 115 网盘生活事件，感知网盘文件变化并自动增量同步到本地 STRM，实现网盘变更自动入库。</span></span></div>
+
+                            <!-- 开关 -->
+                            <div class="form-group">
+                                <label>启用生活事件监控<span class="help-tip">?<span class="tip-text">开启后后台定时轮询 115 生活事件，检测到网盘文件变化时自动增量同步到本地 STRM 目录</span></span></label>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div class="tool-toggle" :class="{ 'toggle-on': lifeMonitor.enabled }" @click="lifeMonitor.enabled = !lifeMonitor.enabled">
+                                        <div class="toggle-knob"></div>
+                                    </div>
+                                    <span style="font-size:13px;" :style="{ color: lifeMonitor.enabled ? '#67c23a' : '#909399' }">{{ lifeMonitor.enabled ? '已启用' : '未启用' }}</span>
+                                </div>
+                            </div>
+
+                            <!-- 轮询间隔 -->
+                            <div class="form-group" v-show="lifeMonitor.enabled">
+                                <label>轮询间隔（秒）<span class="help-tip">?<span class="tip-text">轮询 115 生活事件的间隔时间，最小 10 秒，默认 30 秒。间隔越短响应越快，但会略微增加 115 请求频率</span></span></label>
+                                <div style="display:flex; align-items:center; gap:12px;">
+                                    <input type="number" class="form-input" v-model.number="lifeMonitor.interval" min="10" max="3600" step="10" style="width:120px;" placeholder="30">
+                                    <span style="font-size:13px; color:#909399;">秒</span>
+                                </div>
+                            </div>
+
+                            <!-- 保存 -->
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-action" @click="saveLifeMonitor" :disabled="lifeMonitor.saving">
+                                    {{ lifeMonitor.saving ? '保存中...' : '保存并生效' }}
+                                </button>
+                            </div>
+
+                            <!-- 说明 -->
+                            <div class="info-box info-box--bordered" style="margin-top:16px;">
+                                <div class="info-box-title">说明</div>
+                                <div class="info-box-content">
+                                    115 网盘文件变化自动增量同步到本地 STRM。启用后需保持服务运行，监控器会按设定间隔轮询 115 生活事件，检测到新增/变更文件后自动增量同步，让本地 STRM 媒体库与网盘保持同步。
                                 </div>
                             </div>
                         </div>
@@ -3020,6 +3097,117 @@
                     <div class="page-header">
                         <h2>通知配置</h2>
                         <p>配置任务完成、错误等事件的通知渠道，支持企业微信、Telegram、QQ 机器人。</p>
+                    </div>
+
+                    <!-- ===== 新版通知中心（多渠道 + 规则引擎） ===== -->
+                    <div class="card" style="margin-bottom:16px; border:1px solid #409eff; box-shadow:0 1px 4px rgba(64,158,255,0.15);">
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <div class="card-title">新版通知中心<span style="display:inline-block; background:#409eff; color:#fff; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; vertical-align:2px; margin-left:6px;">新</span><span class="help-tip">?<span class="tip-text">支持 Telegram / Bark / Server酱 / 喵提醒 / Webhook / 企业微信 六种渠道，通过规则引擎按事件类型（同步完成、刮削整理完成、系统告警、错误）自动分发通知。与下方旧版企业微信 / Telegram / QQ 三件套相互独立，可同时使用。</span></span></div>
+                            <button class="btn btn-default btn-small" @click="loadNotifyCenter" :disabled="notifyCenter.loading">{{ notifyCenter.loading ? '加载中...' : '刷新' }}</button>
+                        </div>
+
+                        <!-- 渠道管理 -->
+                        <div style="font-size:14px; font-weight:600; color:#303133; margin:10px 0 8px;">通知渠道</div>
+                        <div class="info-box" style="margin-bottom:10px; padding:8px 12px;">
+                            渠道是通知的接收目标。添加后可在下方「事件分发规则」中勾选使用，同一事件可同时分发到多个渠道。
+                        </div>
+
+                        <!-- 添加渠道表单 -->
+                        <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin-bottom:12px;">
+                            <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加渠道</div>
+                            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                                <div class="form-group" style="flex:1; min-width:200px;">
+                                    <label>渠道类型</label>
+                                    <select v-model="notifyCenter.newChannel.type" @change="resetChannelConfig">
+                                        <option v-for="(label, type) in NOTIFY_CHANNEL_TYPE_MAP" :key="type" :value="type">{{ label }}</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="flex:1; min-width:200px;">
+                                    <label>渠道名称</label>
+                                    <input type="text" v-model="notifyCenter.newChannel.name" placeholder="如：我的 Telegram">
+                                </div>
+                            </div>
+                            <div v-for="f in NOTIFY_CHANNEL_FIELDS[notifyCenter.newChannel.type] || []" :key="f.key" class="form-group" style="margin-bottom:8px;">
+                                <label>{{ f.label }}{{ f.required ? '' : '（可选）' }}</label>
+                                <select v-if="f.type === 'select'" v-model="notifyCenter.newChannel.config[f.key]">
+                                    <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
+                                </select>
+                                <textarea v-else-if="f.type === 'textarea'" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder" rows="2" style="resize:vertical;"></textarea>
+                                <input v-else type="text" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder">
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="btn btn-primary btn-small" @click="addChannel" :disabled="notifyCenter.savingChannel">{{ notifyCenter.savingChannel ? '提交中...' : '添加渠道' }}</button>
+                                <span style="font-size:12px; color:#909399;">添加后默认启用</span>
+                            </div>
+                        </div>
+
+                        <!-- 渠道列表 -->
+                        <div v-if="notifyCenter.loading" style="padding:12px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else-if="!notifyCenter.channels.length" style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无通知渠道，请先在上方添加。</div>
+                        <div v-else>
+                            <div v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: ch.is_enabled ? '1' : '0.6' }">
+                                <div style="flex:1; min-width:0;">
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <span style="font-weight:600; color:#303133; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ch.name }}</span>
+                                        <span style="background:#eef4ff; color:#409eff; font-size:11px; padding:1px 8px; border-radius:8px; white-space:nowrap; flex-shrink:0;">{{ channelTypeLabel(ch.type) }}</span>
+                                    </div>
+                                    <div style="font-size:12px; color:#909399; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ channelConfigSummary(ch) }}</div>
+                                </div>
+                                <button class="btn btn-default btn-small" @click="testChannel(ch.id)" :disabled="notifyCenter.testingId === ch.id">{{ notifyCenter.testingId === ch.id ? '测试中...' : '测试' }}</button>
+                                <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                                    <span style="font-size:12px;" :style="{ color: ch.is_enabled ? '#67c23a' : '#909399' }">{{ ch.is_enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': ch.is_enabled }" @click="ch.is_enabled = !ch.is_enabled; updateChannel(ch)">
+                                        <div class="toggle-knob"></div>
+                                    </div>
+                                </div>
+                                <button class="btn btn-default btn-small" style="color:#f56c6c; flex-shrink:0;" @click="deleteChannel(ch.id)">删除</button>
+                            </div>
+                        </div>
+
+                        <!-- 事件分发规则 -->
+                        <div style="font-size:14px; font-weight:600; color:#303133; margin:16px 0 8px;">事件分发规则</div>
+
+                        <!-- 添加规则表单 -->
+                        <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin-bottom:12px;">
+                            <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加规则</div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <label>事件类型</label>
+                                <select v-model="notifyCenter.newRule.event_type">
+                                    <option v-for="et in notifyCenter.eventTypes" :key="et.value" :value="et.value">{{ et.label }}</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <label>通知渠道（可多选）</label>
+                                <div v-if="!notifyCenter.channels.length" style="font-size:12px; color:#c0c4cc;">暂无渠道，请先在上方添加渠道</div>
+                                <div v-else style="display:flex; flex-wrap:wrap; gap:4px 14px;">
+                                    <label v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:4px; font-size:13px; cursor:pointer; color:#606266;">
+                                        <input type="checkbox" :value="ch.id" v-model="notifyCenter.newRule.channel_ids">
+                                        {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
+                                    </label>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="btn btn-primary btn-small" @click="addRule" :disabled="notifyCenter.savingRule">{{ notifyCenter.savingRule ? '提交中...' : '添加规则' }}</button>
+                            </div>
+                        </div>
+
+                        <!-- 规则列表 -->
+                        <div v-if="notifyCenter.rules.length">
+                            <div v-for="rule in notifyCenter.rules" :key="rule.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: rule.is_enabled ? '1' : '0.6' }">
+                                <div style="flex:1; min-width:0;">
+                                    <span style="font-weight:600; color:#303133; font-size:14px;">{{ eventTypeLabel(rule.event_type) }}</span>
+                                    <span style="font-size:12px; color:#909399; margin-left:8px;">{{ (rule.channel_ids || []).map(channelName).join('、') || '未绑定渠道' }}</span>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                                    <span style="font-size:12px;" :style="{ color: rule.is_enabled ? '#67c23a' : '#909399' }">{{ rule.is_enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': rule.is_enabled }" @click="toggleRule(rule)">
+                                        <div class="toggle-knob"></div>
+                                    </div>
+                                </div>
+                                <button class="btn btn-default btn-small" style="color:#f56c6c; flex-shrink:0;" @click="deleteRule(rule.id)">删除</button>
+                            </div>
+                        </div>
+                        <div v-else style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无分发规则，添加后对应事件将自动通知所选渠道。</div>
                     </div>
 
                     <!-- 企业微信自建应用 -->
@@ -3890,6 +4078,51 @@
                         </div>
                     </div>
 
+                    <!-- ===== 数据备份 ===== -->
+                    <div class="card" style="margin-top:20px;">
+                        <div class="card-title">数据备份<span class="help-tip">?<span class="tip-text">备份系统配置数据（JSON 文件）到本地压缩包，支持恢复与自动清理旧备份。建议在重要配置变更前手动备份。</span></span></div>
+
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+                            <button class="btn btn-primary btn-action" @click="startBackup" :disabled="backupState.starting">
+                                {{ backupState.starting ? '备份中...' : '立即备份' }}
+                            </button>
+                            <button class="btn btn-default btn-action" @click="cleanupBackups" :disabled="backupState.cleaning || backupState.records.length === 0">
+                                {{ backupState.cleaning ? '清理中...' : '清理旧备份（保留 10 个）' }}
+                            </button>
+                        </div>
+
+                        <div v-if="backupState.status" class="info-box info-box--bordered" style="margin-bottom:12px; font-size:13px; color:#606266;">{{ backupState.status }}</div>
+
+                        <div v-if="backupState.loading" style="color:#909399; font-size:13px; padding:12px 0;">备份记录加载中...</div>
+                        <div v-else-if="backupState.records.length === 0" style="color:#909399; font-size:13px; padding:12px 0;">暂无备份记录</div>
+                        <div v-else>
+                            <div class="backup-item" v-for="rec in backupState.records" :key="rec.id">
+                                <div class="backup-item-info">
+                                    <div class="backup-item-name">
+                                        {{ backupTypeLabel(rec.type) }}
+                                        <span v-if="rec.reason" style="margin-left:8px; font-size:12px; font-weight:400; color:#909399;">{{ rec.reason }}</span>
+                                        <span class="task-queue-status" :class="backupStatusClass(rec.status)" style="margin-left:8px;">{{ backupStatusText(rec.status) }}</span>
+                                    </div>
+                                    <div class="backup-item-meta">
+                                        {{ formatBackupTime(rec.created_at) }}
+                                        <template v-if="rec.file_size"> · {{ formatSize(rec.file_size) }}</template>
+                                        <template v-if="rec.file_count"> · {{ rec.file_count }} 个文件</template>
+                                        <template v-if="rec.duration"> · 耗时 {{ rec.duration }} 秒</template>
+                                        <template v-if="rec.error_msg"> · <span style="color:#f56c6c;">{{ rec.error_msg }}</span></template>
+                                    </div>
+                                </div>
+                                <div style="display:flex; gap:8px; flex-shrink:0;">
+                                    <button class="btn btn-default btn-small" @click="restoreBackup(rec.id)" :disabled="backupState.restoringId === rec.id || rec.status !== 'completed'">
+                                        {{ backupState.restoringId === rec.id ? '恢复中...' : '恢复' }}
+                                    </button>
+                                    <button class="btn btn-danger btn-small" @click="deleteBackup(rec.id)" :disabled="backupState.deletingId === rec.id">
+                                        {{ backupState.deletingId === rec.id ? '删除中...' : '删除' }}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
 
                 <!-- ===== 特色工具 ===== -->
@@ -4137,6 +4370,96 @@
                                 <button class="tool-btn tool-btn-run" @click="runToolNow('base_url')" :disabled="baseUrlTool.running">
                                     <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
                                     {{ baseUrlTool.running ? '运行中...' : '立即运行' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具9：文件夹监听 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.watcher.enabled, 'tool-disabled': !toolsState.watcher.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.watcher.enabled"></span>
+                                    文件夹监听
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.watcher.enabled, 'dot-off': !toolsState.watcher.enabled }"></span>
+                                    <span :style="{ color: toolsState.watcher.enabled ? '#67c23a' : '#909399' }">{{ toolsState.watcher.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.watcher.enabled }" @click="toggleTool('watcher')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                监控本地文件夹内的文件变化（新增/修改/删除/移动），事件实时记录到日志，可配合增量同步使用。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('watcher')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    监控管理
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('watcher')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    {{ watcherState.running ? '监控中' : '开始监控' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具10：上传队列 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.upload_queue.enabled, 'tool-disabled': !toolsState.upload_queue.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.upload_queue.enabled"></span>
+                                    上传队列
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.upload_queue.enabled, 'dot-off': !toolsState.upload_queue.enabled }"></span>
+                                    <span :style="{ color: toolsState.upload_queue.enabled ? '#67c23a' : '#909399' }">{{ toolsState.upload_queue.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.upload_queue.enabled }" @click="toggleTool('upload_queue')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                查看上传任务队列状态与最近任务，支持一键重试失败任务、清空已完成任务。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('upload_queue')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    队列管理
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('upload_queue')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    {{ uploadQueueState.status.failed ? '失败 ' + uploadQueueState.status.failed + ' 个' : '查看队列' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具11：任务控制台 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.task_console.enabled, 'tool-disabled': !toolsState.task_console.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.task_console.enabled"></span>
+                                    任务控制台
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.task_console.enabled, 'dot-off': !toolsState.task_console.enabled }"></span>
+                                    <span :style="{ color: toolsState.task_console.enabled ? '#67c23a' : '#909399' }">{{ toolsState.task_console.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.task_console.enabled }" @click="toggleTool('task_console')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                查看各任务队列运行状态，一键暂停或恢复全部任务队列。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('task_console')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" fill="currentColor"/></svg>
+                                    任务状态
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('task_console')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开控制台
                                 </button>
                             </div>
                         </div>
@@ -4476,6 +4799,137 @@
                         </div>
                         <div style="display:flex; gap:8px;">
                             <button class="tool-btn tool-btn-run" @click="baseUrlRun" :disabled="baseUrlTool.running || !baseUrlTool.directory || !baseUrlTool.oldUrl || !baseUrlTool.newUrl" style="background:#e6a23c;">{{ baseUrlTool.running ? '替换中...' : '执行替换' }}</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 文件夹监听配置弹窗 -->
+                <div v-if="toolConfig.show === 'watcher'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:600px;">
+                        <div class="modal-header">
+                            <span class="modal-title">文件夹监听 - 监控管理</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <!-- 监控状态 -->
+                        <div class="form-group">
+                            <label>监控状态 <span class="help-tip">?<span class="tip-text">监控本地目录内文件的新增/修改/删除/移动事件，事件会实时记录到实时日志</span></span></label>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span class="tool-dot" :class="{ 'dot-on': watcherState.running, 'dot-off': !watcherState.running }"></span>
+                                <span style="font-size:13px;" :style="{ color: watcherState.running ? '#67c23a' : '#909399' }">{{ watcherState.running ? '监控运行中（' + watcherState.paths.length + ' 个目录）' : '未在监控' }}</span>
+                            </div>
+                        </div>
+
+                        <!-- 当前监控路径列表 -->
+                        <div class="form-group">
+                            <label>当前监控路径</label>
+                            <div v-if="watcherState.loading" style="padding:8px 0; color:#909399; font-size:13px;">加载中...</div>
+                            <div v-else-if="watcherState.paths.length === 0" style="padding:8px 0; color:#c0c4cc; font-size:13px;">暂无监控目录</div>
+                            <div v-else style="max-height:200px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                <div v-for="(p, i) in watcherState.paths" :key="i" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #f0f0f0; font-size:13px;">
+                                    <svg viewBox="0 0 24 24" style="width:16px; height:16px; flex-shrink:0; color:#e6a23c;"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                                    <span style="flex:1; color:#606266; word-break:break-all;">{{ watcherPathText(p) }}</span>
+                                    <button class="btn btn-danger btn-small" @click="stopWatcher(watcherPathText(p))" :disabled="watcherState.loading" style="flex-shrink:0;">停止</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 新增监控路径 -->
+                        <div class="form-group">
+                            <label>新增监控路径 <span class="help-tip">?<span class="tip-text">输入本地目录绝对路径（或点击选择目录），支持视频等扩展名过滤。开始监控后文件变化事件实时记录到日志</span></span></label>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <div class="dir-picker" @click="openLocalDirPicker('watcher')" style="cursor:pointer; flex:1;">
+                                    <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                                    <span :style="{ color: watcherState.newPath ? '#303133' : '#c0c4cc' }">{{ watcherState.newPath || '点击选择本地目录' }}</span>
+                                </div>
+                                <input type="text" v-model="watcherState.newPath" placeholder="或直接输入路径" style="flex:1; min-height:36px; font-size:14px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:8px;">
+                            <button class="tool-btn tool-btn-run" @click="startWatcher" :disabled="watcherState.loading || !watcherState.newPath" style="background:#409eff; flex:1; min-height:34px;">{{ watcherState.loading ? '处理中...' : '开始监控' }}</button>
+                            <button class="tool-btn tool-btn-run" @click="stopAllWatchers" :disabled="watcherState.loading || !watcherState.paths.length" style="background:#f56c6c; flex:1; min-height:34px;">停止全部</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 上传队列配置弹窗 -->
+                <div v-if="toolConfig.show === 'upload_queue'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:720px;">
+                        <div class="modal-header">
+                            <span class="modal-title">上传队列 - 任务管理</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+                        <div v-if="uploadQueueState.loading" style="padding:16px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <template v-else>
+                            <!-- 状态统计 -->
+                            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-bottom:14px;">
+                                <div style="background:#f0f9eb; border-radius:8px; padding:10px; text-align:center;">
+                                    <div style="font-size:20px; font-weight:bold; color:#67c23a;">{{ uploadQueueState.status.pending || 0 }}</div>
+                                    <div style="font-size:12px; color:#909399;">待上传</div>
+                                </div>
+                                <div style="background:#ecf5ff; border-radius:8px; padding:10px; text-align:center;">
+                                    <div style="font-size:20px; font-weight:bold; color:#409eff;">{{ uploadQueueState.status.uploading || 0 }}</div>
+                                    <div style="font-size:12px; color:#909399;">上传中</div>
+                                </div>
+                                <div style="background:#fdf6ec; border-radius:8px; padding:10px; text-align:center;">
+                                    <div style="font-size:20px; font-weight:bold; color:#e6a23c;">{{ uploadQueueState.status.failed || 0 }}</div>
+                                    <div style="font-size:12px; color:#909399;">失败</div>
+                                </div>
+                                <div style="background:#f4f4f5; border-radius:8px; padding:10px; text-align:center;">
+                                    <div style="font-size:20px; font-weight:bold; color:#606266;">{{ uploadQueueState.status.completed || 0 }}</div>
+                                    <div style="font-size:12px; color:#909399;">已完成</div>
+                                </div>
+                            </div>
+
+                            <!-- 任务列表 -->
+                            <div class="form-group">
+                                <label>最近任务（{{ uploadQueueState.tasks.length }} 条）<span class="help-tip">?<span class="tip-text">展示最近 20 条上传任务，状态包括：待上传 / 上传中 / 已完成 / 已跳过 / 失败</span></span></label>
+                                <div v-if="uploadQueueState.tasks.length === 0" style="padding:8px 0; color:#c0c4cc; font-size:13px;">暂无上传任务</div>
+                                <div v-else style="max-height:320px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                    <div v-for="(t, i) in uploadQueueState.tasks" :key="t.id || i" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #f0f0f0; font-size:13px;">
+                                        <span style="font-size:14px; flex-shrink:0;" :style="{ color: t.status === 'completed' ? '#67c23a' : t.status === 'failed' ? '#f56c6c' : t.status === 'uploading' ? '#409eff' : t.status === 'skipped' ? '#909399' : '#e6a23c' }">{{ uploadStatusIcon(t.status) }}</span>
+                                        <div style="flex:1; min-width:0;">
+                                            <div style="color:#303133; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.filename || '-' }}</div>
+                                            <div v-if="t.error" style="color:#f56c6c; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="t.error">{{ t.error }}</div>
+                                        </div>
+                                        <span style="flex-shrink:0; font-size:12px; color:#909399;">{{ uploadStatusLabel(t.status) }}</span>
+                                        <span v-if="t.file_size" style="flex-shrink:0; font-size:12px; color:#c0c4cc;">{{ formatSize(t.file_size) }}</span>
+                                        <span v-if="t.completed_at || t.updated_at" style="flex-shrink:0; font-size:12px; color:#c0c4cc;">{{ formatTimestamp(t.completed_at || t.updated_at) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <div style="display:flex; gap:8px;">
+                            <button class="tool-btn tool-btn-run" @click="retryUploads" :disabled="uploadQueueState.retrying || uploadQueueState.loading" style="background:#e6a23c; flex:1; min-height:34px;">{{ uploadQueueState.retrying ? '重试中...' : '重试失败' }}</button>
+                            <button class="tool-btn tool-btn-run" @click="clearUploads" :disabled="uploadQueueState.clearing || uploadQueueState.loading" style="background:#f56c6c; flex:1; min-height:34px;">{{ uploadQueueState.clearing ? '清空中...' : '清空已完成' }}</button>
+                            <button class="tool-btn tool-btn-run" @click="loadUploadQueue" :disabled="uploadQueueState.loading" style="background:#909399; flex:1; min-height:34px;">刷新</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 任务控制台弹窗 -->
+                <div v-if="toolConfig.show === 'task_console'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:640px;">
+                        <div class="modal-header">
+                            <span class="modal-title">任务控制台</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+                        <div style="display:flex; gap:8px; margin-bottom:14px;">
+                            <button class="tool-btn tool-btn-run" @click="pauseAll" :disabled="taskConsole.pausing" style="background:#e6a23c; flex:1; min-height:34px;">{{ taskConsole.pausing ? '暂停中...' : '暂停全部' }}</button>
+                            <button class="tool-btn tool-btn-run" @click="resumeAll" :disabled="taskConsole.resuming" style="background:#67c23a; flex:1; min-height:34px;">{{ taskConsole.resuming ? '恢复中...' : '恢复全部' }}</button>
+                        </div>
+                        <div v-if="taskConsole.loading" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">加载中...</div>
+                        <div v-else-if="Object.keys(taskConsole.queues).length === 0" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">暂无任务队列</div>
+                        <div v-else>
+                            <div class="task-queue-item" v-for="(q, type) in taskConsole.queues" :key="type">
+                                <span class="task-queue-type">{{ taskTypeLabel(type) }}</span>
+                                <span class="task-queue-status" :class="taskStatusClass(q)">{{ taskStatusText(q) }}</span>
+                                <span style="font-size:12px; color:#909399;">等待 {{ q.waiting_count || 0 }} 个</span>
+                                <span style="font-size:12px; color:#909399;">队列 {{ q.queue_size || 0 }}/{{ q.queue_maxsize || '-' }}</span>
+                                <span v-if="q.current_task && q.current_task.name" style="flex:1; font-size:12px; color:#606266; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right;" :title="q.current_task.name">当前：{{ q.current_task.name }}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -6424,6 +6878,31 @@ av:
                     () => _debouncedSave('sync', _silentSaveSync)
                 );
 
+                // ===== 特色工具9：文件夹监听 =====
+                const watcherState = reactive({
+                    loading: false,
+                    paths: [],       // 当前监控的路径列表（字符串或 {path,...}）
+                    running: false,  // 是否正在监控
+                    newPath: '',     // 新增监控路径输入
+                });
+
+                // ===== 特色工具10：上传队列 =====
+                const uploadQueueState = reactive({
+                    loading: false,
+                    status: {},      // 队列统计 {pending, uploading, completed, skipped, failed, total, running}
+                    tasks: [],       // 最近任务列表
+                    retrying: false,
+                    clearing: false,
+                });
+
+                // ===== 115 生活事件监控 =====
+                const lifeMonitor = reactive({
+                    loading: false,
+                    saving: false,
+                    enabled: false,
+                    interval: 60,    // 轮询间隔（秒）
+                });
+
                 // 实时日志
                 const logs = reactive({ show: false, entries: [], levelFilter: '', keyword: '', sources: {}, timer: null, lastSeq: 0 });
                 const logViewer = ref(null);
@@ -6491,6 +6970,9 @@ av:
                     strm_clean:   { enabled: localStorage.getItem('strmhub_tool_strm_clean') === '1' },
                     account_repair:{ enabled: localStorage.getItem('strmhub_tool_account_repair') === '1' },
                     base_url:     { enabled: localStorage.getItem('strmhub_tool_base_url') === '1' },
+                    watcher:      { enabled: localStorage.getItem('strmhub_tool_watcher') === '1' },
+                    upload_queue: { enabled: localStorage.getItem('strmhub_tool_upload_queue') === '1' },
+                    task_console:{ enabled: localStorage.getItem('strmhub_tool_task_console') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -6585,6 +7067,44 @@ av:
                     value: 0.3,
                     retryCooldown: 30,
                     saving: false,
+                });
+
+                // STRM 播放安全配置
+                const strmSecurity = reactive({
+                    loading: false,
+                    saving: false,
+                    rotating: false,
+                    enabled: true,
+                });
+
+                // Emby 302 反代状态
+                const embyProxyState = reactive({
+                    loading: false,
+                    restarting: false,
+                    port: 6086,
+                    status: '',        // running / stopped
+                    statusText: '未知',
+                    enabled: true,
+                });
+
+                // 数据备份
+                const backupState = reactive({
+                    loading: false,
+                    starting: false,
+                    cleaning: false,
+                    deletingId: null,
+                    restoringId: null,
+                    records: [],
+                    status: '',
+                });
+
+                // 任务控制台
+                const taskConsole = reactive({
+                    loading: false,
+                    queues: {},
+                    paused: false,
+                    pausing: false,
+                    resuming: false,
                 });
 
                 // 二维码弹窗状态
@@ -6999,6 +7519,7 @@ av:
                     else if (target === 'strm_clean') startPath = strmClean.directory || '/';
                     else if (target === 'account_repair') startPath = accountRepair.directory || '/';
                     else if (target === 'base_url') startPath = baseUrlTool.directory || '/';
+                    else if (target === 'watcher') startPath = watcherState.newPath || '/';
                     else if (target === 'organize') startPath = organize.local_media_dir || '/';
                     localDirPicker.show = true;
                     loadLocalDirs(startPath);
@@ -7057,6 +7578,8 @@ av:
                         accountRepair.directory = localDirPicker.current;
                     } else if (localDirPicker.target === 'base_url') {
                         baseUrlTool.directory = localDirPicker.current;
+                    } else if (localDirPicker.target === 'watcher') {
+                        watcherState.newPath = localDirPicker.current;
                     } else {
                         organize.local_media_dir = localDirPicker.current;
                     }
@@ -7522,6 +8045,334 @@ av:
                         }
                     } catch (e) {
                         showToast('获取回调URL失败');
+                    }
+                };
+
+                // ===== 新版通知中心（多渠道 + 规则引擎） =====
+                // 渠道类型中文名
+                const NOTIFY_CHANNEL_TYPE_MAP = {
+                    telegram: 'Telegram',
+                    bark: 'Bark',
+                    serverchan: 'Server酱',
+                    meow: '喵提醒',
+                    webhook: 'Webhook',
+                    wechat_work: '企业微信',
+                };
+                // 各渠道配置表单字段（key 与后端 notification_manager 各渠道处理器读取的 config 字段一致）
+                const NOTIFY_CHANNEL_FIELDS = {
+                    telegram: [
+                        { key: 'bot_token', label: 'Bot Token', required: true, placeholder: '123456789:ABCdefGHIjklMNOpqrsTUVwxyz' },
+                        { key: 'chat_id', label: 'Chat ID', required: true, placeholder: '如 123456789 或 @channelname' },
+                        { key: 'proxy_url', label: '代理地址', required: false, placeholder: 'https://代理地址，留空直连' },
+                    ],
+                    bark: [
+                        { key: 'device_key', label: 'Device Key', required: true, placeholder: 'Bark 客户端中的设备 Key' },
+                        { key: 'server_url', label: '服务器地址', required: false, placeholder: '默认 https://api.day.app' },
+                        { key: 'sound', label: '提示音', required: false, placeholder: '如 alarm / bell' },
+                        { key: 'icon', label: '图标 URL', required: false, placeholder: 'https://...' },
+                    ],
+                    serverchan: [
+                        { key: 'sendkey', label: 'SendKey', required: true, placeholder: 'Server酱 的 SendKey' },
+                        { key: 'server_url', label: '服务器地址', required: false, placeholder: '默认 https://sctapi.ftqq.com' },
+                    ],
+                    meow: [
+                        { key: 'sendkey', label: 'SendKey', required: true, placeholder: '喵提醒的推送 Key' },
+                        { key: 'server_url', label: '服务器地址', required: false, placeholder: '默认 https://meow.diao.liana.com' },
+                    ],
+                    webhook: [
+                        { key: 'url', label: 'Webhook 地址', required: true, placeholder: 'https://example.com/webhook' },
+                        { key: 'method', label: '请求方法', required: false, type: 'select', options: ['POST', 'GET'] },
+                        { key: 'format', label: '请求格式', required: false, type: 'select', options: ['json', 'form', 'text'] },
+                        { key: 'body_template', label: '请求模板', required: false, type: 'textarea', placeholder: '支持 {{title}} {{content}} 变量，如 {"title":"{{title}}","content":"{{content}}"}' },
+                    ],
+                    wechat_work: [
+                        { key: 'corp_id', label: '企业 ID', required: true, placeholder: 'ww4f8b2e6a9c3d71f' },
+                        { key: 'agent_id', label: '应用 ID (AgentId)', required: true, placeholder: '1000084' },
+                        { key: 'secret', label: '应用 Secret', required: true, placeholder: 'Fk9Nw3BmZqR-vTb2Yp5Ls8FcD4aGh6jUe1VrNxCw' },
+                        { key: 'user_id', label: '接收人 UserID', required: false, placeholder: '@all 或用户ID' },
+                    ],
+                };
+                // 事件类型中文名（规则列表展示，优先于此映射）
+                const EVENT_TYPE_MAP = {
+                    sync_complete: '同步完成',
+                    scrape_complete: '刮削整理完成',
+                    system_alert: '系统告警',
+                    error: '错误',
+                };
+                // 后端 event-types 接口不可用时的兜底事件类型
+                const FALLBACK_EVENT_TYPES = [
+                    { value: 'sync_complete', label: '同步完成' },
+                    { value: 'scrape_complete', label: '刮削整理完成' },
+                    { value: 'system_alert', label: '系统告警' },
+                    { value: 'error', label: '错误' },
+                ];
+
+                // 新版通知中心状态
+                const notifyCenter = reactive({
+                    loading: false,
+                    channels: [],
+                    rules: [],
+                    eventTypes: [],
+                    newChannel: { type: 'telegram', name: '', config: {} },
+                    newRule: { event_type: 'sync_complete', channel_ids: [] },
+                    testingId: null,      // 正在测试的渠道 ID
+                    savingChannel: false, // 添加渠道提交中
+                    savingRule: false,    // 添加规则提交中
+                });
+
+                // 渠道类型中文名（模板徽标）
+                const channelTypeLabel = (type) => NOTIFY_CHANNEL_TYPE_MAP[type] || type;
+                // 事件类型中文名（优先事件列表，其次静态映射，最后原值）
+                const eventTypeLabel = (type) => {
+                    const t = notifyCenter.eventTypes.find(x => x.value === type);
+                    return t ? t.label : (EVENT_TYPE_MAP[type] || type);
+                };
+                // 渠道 ID → 渠道名
+                const channelName = (id) => {
+                    const c = notifyCenter.channels.find(x => x.id === id);
+                    return c ? c.name : ('渠道#' + id);
+                };
+                // 渠道配置摘要（敏感字段脱敏）
+                const channelConfigSummary = (ch) => {
+                    const cfg = ch.config || {};
+                    const mask = (v, n) => (v ? String(v).slice(0, n) + '***' : '');
+                    const parts = [];
+                    if (cfg.chat_id) parts.push('chat_id=' + cfg.chat_id);
+                    if (cfg.bot_token) parts.push('bot_token=' + mask(cfg.bot_token, 8));
+                    if (cfg.device_key) parts.push('device_key=' + mask(cfg.device_key, 8));
+                    if (cfg.sendkey) parts.push('sendkey=' + mask(cfg.sendkey, 6));
+                    if (cfg.url) parts.push('url=' + cfg.url);
+                    if (cfg.method) parts.push('method=' + cfg.method);
+                    if (cfg.corp_id) parts.push('corp_id=' + cfg.corp_id);
+                    if (cfg.agent_id) parts.push('agent_id=' + cfg.agent_id);
+                    return parts.join('，') || '未填写配置';
+                };
+
+                // 重置添加渠道表单的 config（按所选类型填充默认值）
+                const resetChannelConfig = () => {
+                    const cfg = {};
+                    (NOTIFY_CHANNEL_FIELDS[notifyCenter.newChannel.type] || []).forEach(f => {
+                        cfg[f.key] = f.type === 'select' ? (f.options[0] || '') : '';
+                    });
+                    notifyCenter.newChannel.config = cfg;
+                };
+
+                // 加载渠道 / 规则 / 事件类型
+                const loadNotifyCenter = async () => {
+                    notifyCenter.loading = true;
+                    try {
+                        const [chRes, rlRes, etRes] = await Promise.all([
+                            api('/api/notification/channels'),
+                            api('/api/notification/rules'),
+                            api('/api/notification/event-types'),
+                        ]);
+                        const chData = await chRes.json().catch(() => ({}));
+                        const rlData = await rlRes.json().catch(() => ({}));
+                        const etData = await etRes.json().catch(() => ({}));
+                        if (chData.code === 0) notifyCenter.channels = chData.data?.channels || [];
+                        if (rlData.code === 0) notifyCenter.rules = rlData.data?.rules || [];
+                        // event-types 接口实际返回键为 event_types（兼容 types）
+                        const rawTypes = etData.data?.event_types || etData.data?.types;
+                        if (Array.isArray(rawTypes) && rawTypes.length) {
+                            // 已知事件类型统一使用中文映射，未知类型沿用接口 label
+                            notifyCenter.eventTypes = rawTypes.map(t => ({
+                                value: t.value,
+                                label: EVENT_TYPE_MAP[t.value] || t.label || t.value,
+                            }));
+                        } else {
+                            notifyCenter.eventTypes = FALLBACK_EVENT_TYPES.slice();
+                        }
+                        if (!Object.keys(notifyCenter.newChannel.config || {}).length) resetChannelConfig();
+                    } catch (e) {
+                        console.warn('[app] 加载通知中心失败:', e);
+                        showToast('加载通知中心失败');
+                    } finally {
+                        notifyCenter.loading = false;
+                    }
+                };
+
+                // 添加渠道
+                const addChannel = async () => {
+                    const nc = notifyCenter.newChannel;
+                    if (!nc.name.trim()) { showToast('请输入渠道名称'); return; }
+                    const fields = NOTIFY_CHANNEL_FIELDS[nc.type] || [];
+                    for (const f of fields) {
+                        if (f.required && !String(nc.config[f.key] || '').trim()) {
+                            showToast(`请填写：${f.label}`); return;
+                        }
+                    }
+                    notifyCenter.savingChannel = true;
+                    try {
+                        const res = await api('/api/notification/channels', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: nc.name.trim(),
+                                type: nc.type,
+                                config: nc.config,
+                                is_enabled: true,
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            showToast('渠道已创建');
+                            notifyCenter.channels.push(data.data);
+                            nc.name = '';
+                            resetChannelConfig();
+                        } else {
+                            showToast(data.message || '创建渠道失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '创建渠道失败');
+                    } finally {
+                        notifyCenter.savingChannel = false;
+                    }
+                };
+
+                // 更新渠道（启用/禁用开关）
+                const updateChannel = async (ch) => {
+                    try {
+                        const res = await api(`/api/notification/channels/${ch.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: ch.name,
+                                type: ch.type,
+                                config: ch.config || {},
+                                is_enabled: !!ch.is_enabled,
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            showToast('渠道已更新');
+                        } else {
+                            ch.is_enabled = !ch.is_enabled; // 回滚开关
+                            showToast(data.message || '更新失败');
+                        }
+                    } catch (e) {
+                        ch.is_enabled = !ch.is_enabled; // 回滚开关
+                        showToast(e._network ? e.message : '更新失败');
+                    }
+                };
+
+                // 删除渠道（confirm 后 DELETE，同时从规则中移除该渠道）
+                const deleteChannel = async (id) => {
+                    const ch = notifyCenter.channels.find(x => x.id === id);
+                    if (!confirm(`确定删除渠道「${ch ? ch.name : id}」？相关规则将同步移除该渠道。`)) return;
+                    try {
+                        const res = await api(`/api/notification/channels/${id}`, { method: 'DELETE' });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            notifyCenter.channels = notifyCenter.channels.filter(x => x.id !== id);
+                            notifyCenter.rules.forEach(r => {
+                                r.channel_ids = (r.channel_ids || []).filter(cid => cid !== id);
+                            });
+                            showToast('渠道已删除');
+                        } else {
+                            showToast(data.message || '删除失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '删除失败');
+                    }
+                };
+
+                // 测试渠道：后端 /api/notification/test 实际按事件规则分发（接受 event_type/title/content），
+                // 额外携带 channel_id 以便后端后续支持单渠道测试；当前未识别时按 system_alert 规则发送
+                const testChannel = async (id) => {
+                    notifyCenter.testingId = id;
+                    try {
+                        const res = await api('/api/notification/test', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                channel_id: id,
+                                event_type: 'system_alert',
+                                title: 'STRMhub 测试通知',
+                                content: '这是一条来自 STRMhub 新版通知中心的测试消息',
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            showToast(data.message || '测试通知已发送', 4000);
+                        } else {
+                            showToast(data.message || '测试失败', 4000);
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '测试失败');
+                    } finally {
+                        notifyCenter.testingId = null;
+                    }
+                };
+
+                // 添加规则
+                const addRule = async () => {
+                    const nr = notifyCenter.newRule;
+                    if (!nr.channel_ids.length) { showToast('请至少选择一个通知渠道'); return; }
+                    notifyCenter.savingRule = true;
+                    try {
+                        const res = await api('/api/notification/rules', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                event_type: nr.event_type,
+                                channel_ids: nr.channel_ids,
+                                is_enabled: true,
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            showToast('规则已创建');
+                            notifyCenter.rules.push(data.data);
+                            nr.channel_ids = [];
+                        } else {
+                            showToast(data.message || '创建规则失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '创建规则失败');
+                    } finally {
+                        notifyCenter.savingRule = false;
+                    }
+                };
+
+                // 规则启用/禁用（PUT 更新 is_enabled）
+                const toggleRule = async (rule) => {
+                    const prev = rule.is_enabled;
+                    try {
+                        const res = await api(`/api/notification/rules/${rule.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                event_type: rule.event_type,
+                                channel_ids: rule.channel_ids || [],
+                                is_enabled: !prev,
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            rule.is_enabled = !prev;
+                            showToast('规则已更新');
+                        } else {
+                            showToast(data.message || '更新失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '更新失败');
+                    }
+                };
+
+                // 删除规则（confirm 后 DELETE）
+                const deleteRule = async (id) => {
+                    if (!confirm('确定删除该通知规则？')) return;
+                    try {
+                        const res = await api(`/api/notification/rules/${id}`, { method: 'DELETE' });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.code === 0) {
+                            notifyCenter.rules = notifyCenter.rules.filter(x => x.id !== id);
+                            showToast('规则已删除');
+                        } else {
+                            showToast(data.message || '删除失败');
+                        }
+                    } catch (e) {
+                        showToast(e._network ? e.message : '删除失败');
                     }
                 };
 
@@ -8070,9 +8921,13 @@ av:
                         await loadApiInterval();
                         await loadTmdbSettings();
                         await loadStrmSettings();
+                        await loadLifeMonitor();
+                        await loadStrmSecurity();
+                        await loadEmbyProxy();
                         await loadEmbySyncSettings();
                         await loadEmbyNotifySettings();
                         await loadNotifySettings();
+                        await loadNotifyCenter();
                         await loadSyncSchedule();
                         await loadOrganizeConfig();
                         await loadClouddownloadConfig();
@@ -8161,6 +9016,10 @@ av:
                 Vue.watch(tab, (v) => {
                     if (v === 'dashboard' && dash.libraries.length === 0 && !dash.libLoading) {
                         loadDashboard();
+                    }
+                    // 切换到同步归档时加载备份记录
+                    if (v === 'sync' && backupState.records.length === 0 && !backupState.loading) {
+                        loadBackups();
                     }
                     // 离开日志页时停止轮询
                     if (v !== 'logs') {
@@ -8526,6 +9385,202 @@ av:
                     baseUrlTool.running = false;
                 };
 
+                // ============ 特色工具9：文件夹监听 ============
+
+                // 路径元素兼容字符串与 {path,...} 对象
+                const watcherPathText = (p) => {
+                    if (typeof p === 'string') return p;
+                    return (p && (p.path || p.path_str || p.path_name || p.name)) || '';
+                };
+
+                // 加载监控状态
+                const loadWatcher = async () => {
+                    watcherState.loading = true;
+                    try {
+                        const res = await api('/api/watcher/status');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            watcherState.paths = data.data.paths || [];
+                            watcherState.running = !!data.data.is_running;
+                        } else {
+                            showToast(data.message || '获取监控状态失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('获取监控状态失败：网络错误', 3000);
+                    }
+                    watcherState.loading = false;
+                };
+
+                // 开始监控
+                const startWatcher = async () => {
+                    const path = (watcherState.newPath || '').trim();
+                    if (!path) { showToast('请输入要监控的本地目录路径', 3000); return; }
+                    watcherState.loading = true;
+                    try {
+                        const res = await api('/api/watcher/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path, extensions: [], event_type: 'created' }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已开始监控', 3000);
+                            watcherState.newPath = '';
+                            loadWatcher();
+                        } else {
+                            showToast(data.message || '启动监控失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('启动监控失败：网络错误', 3000);
+                    }
+                    watcherState.loading = false;
+                };
+
+                // 停止监控指定路径
+                const stopWatcher = async (path) => {
+                    if (!path) return;
+                    watcherState.loading = true;
+                    try {
+                        const res = await api('/api/watcher/stop', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || '已停止监控') : (data.message || '停止失败'), 3000);
+                        loadWatcher();
+                    } catch (e) {
+                        showToast('停止监控失败：网络错误', 3000);
+                        watcherState.loading = false;
+                    }
+                };
+
+                // 停止全部监控
+                const stopAllWatchers = async () => {
+                    if (!confirm('确认停止所有文件夹监控？')) return;
+                    watcherState.loading = true;
+                    try {
+                        const res = await api('/api/watcher/stop-all', { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || '已停止所有监控') : (data.message || '操作失败'), 3000);
+                        loadWatcher();
+                    } catch (e) {
+                        showToast('操作失败：网络错误', 3000);
+                        watcherState.loading = false;
+                    }
+                };
+
+                // ============ 特色工具10：上传队列 ============
+
+                // 任务状态中文标签
+                const uploadStatusLabel = (s) => {
+                    const map = { pending: '待上传', uploading: '上传中', completed: '已完成', skipped: '已跳过', failed: '失败' };
+                    return map[s] || (s || '未知');
+                };
+                // 任务状态图标
+                const uploadStatusIcon = (s) => {
+                    const map = { pending: '…', uploading: '↻', completed: '✓', skipped: '—', failed: '✗' };
+                    return map[s] || '·';
+                };
+
+                // 加载队列状态与最近任务
+                const loadUploadQueue = async () => {
+                    uploadQueueState.loading = true;
+                    try {
+                        const [statusRes, tasksRes] = await Promise.all([
+                            api('/api/organize/upload-queue/status'),
+                            api('/api/organize/upload-queue/tasks?limit=20'),
+                        ]);
+                        const statusData = await statusRes.json();
+                        const tasksData = await tasksRes.json();
+                        if (statusData.code === 0 && statusData.data) uploadQueueState.status = statusData.data;
+                        if (tasksData.code === 0 && Array.isArray(tasksData.data)) uploadQueueState.tasks = tasksData.data;
+                    } catch (e) {
+                        showToast('获取上传队列失败：网络错误', 3000);
+                    }
+                    uploadQueueState.loading = false;
+                };
+
+                // 重试失败任务
+                const retryUploads = async () => {
+                    uploadQueueState.retrying = true;
+                    try {
+                        const res = await api('/api/organize/upload-queue/retry', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            const n = data.data && data.data.retried !== undefined ? data.data.retried : 0;
+                            showToast(n > 0 ? `已将 ${n} 个失败任务重新加入队列` : '没有需要重试的失败任务', 3000);
+                            loadUploadQueue();
+                        } else {
+                            showToast(data.message || '重试失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('重试失败：网络错误', 3000);
+                    }
+                    uploadQueueState.retrying = false;
+                };
+
+                // 清空已完成/跳过/失败任务
+                const clearUploads = async () => {
+                    if (!confirm('确认清空所有已完成/已跳过/已失败的上传任务？')) return;
+                    uploadQueueState.clearing = true;
+                    try {
+                        const res = await api('/api/organize/upload-queue/clear', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            const n = data.data && data.data.cleared !== undefined ? data.data.cleared : 0;
+                            showToast(`已清空 ${n} 个任务`, 3000);
+                            loadUploadQueue();
+                        } else {
+                            showToast(data.message || '清空失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('清空失败：网络错误', 3000);
+                    }
+                    uploadQueueState.clearing = false;
+                };
+
+                // ============ 115 生活事件监控 ============
+
+                // 加载生活事件监控状态
+                const loadLifeMonitor = async () => {
+                    lifeMonitor.loading = true;
+                    try {
+                        const res = await api('/api/system/life-event-monitor');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            lifeMonitor.enabled = !!data.data.enabled;
+                            if (data.data.interval) lifeMonitor.interval = data.data.interval;
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载生活事件监控失败:', e);
+                    }
+                    lifeMonitor.loading = false;
+                };
+
+                // 保存生活事件监控配置（开关 + 轮询间隔）
+                const saveLifeMonitor = async () => {
+                    lifeMonitor.saving = true;
+                    try {
+                        const interval = Math.max(10, Math.floor(lifeMonitor.interval || 60));
+                        const res = await api('/api/system/life-event-monitor', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: lifeMonitor.enabled, interval }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已保存', 3000);
+                            loadLifeMonitor();
+                        } else {
+                            showToast(data.message || '保存失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('保存失败：网络错误', 3000);
+                    }
+                    lifeMonitor.saving = false;
+                };
+
                 // 工具5：Emby 影视缺集管理
                 const missingEpScan = async () => {
                     missingEp.scanning = true;
@@ -8548,6 +9603,265 @@ av:
                     missingEp.scanning = false;
                 };
 
+                // ===== STRM 播放安全 =====
+                const loadStrmSecurity = async () => {
+                    strmSecurity.loading = true;
+                    try {
+                        const res = await api('/api/settings/strm-security');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmSecurity.enabled = data.data.enabled !== false;
+                        }
+                    } catch (e) { console.warn('[app] 操作失败:', e); }
+                    strmSecurity.loading = false;
+                };
+                const saveStrmSecurity = async () => {
+                    strmSecurity.saving = true;
+                    try {
+                        const res = await api('/api/settings/strm-security', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: strmSecurity.enabled })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(strmSecurity.enabled ? 'Token 验证已启用' : 'Token 验证已关闭');
+                        } else {
+                            showToast(data.message || '保存失败');
+                            await loadStrmSecurity();
+                        }
+                    } catch (e) {
+                        showToast('保存失败');
+                    }
+                    strmSecurity.saving = false;
+                };
+                const rotateStrmToken = async () => {
+                    strmSecurity.rotating = true;
+                    try {
+                        const res = await api('/api/settings/strm-security/rotate', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('Token 已轮换，请重新执行全量同步', 3000);
+                        } else {
+                            showToast(data.message || '轮换失败');
+                        }
+                    } catch (e) {
+                        showToast('轮换失败');
+                    }
+                    strmSecurity.rotating = false;
+                };
+
+                // ===== Emby 302 反代 =====
+                const loadEmbyProxy = async () => {
+                    embyProxyState.loading = true;
+                    try {
+                        const res = await api('/api/settings/emby-proxy');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            embyProxyState.port = data.data.port || 6086;
+                            embyProxyState.enabled = data.data.enabled !== false;
+                            embyProxyState.status = data.data.running ? 'running' : 'stopped';
+                            embyProxyState.statusText = data.data.running ? '运行中' : '未运行';
+                        }
+                    } catch (e) { console.warn('[app] 操作失败:', e); }
+                    embyProxyState.loading = false;
+                };
+                const restartEmbyProxy = async () => {
+                    embyProxyState.restarting = true;
+                    try {
+                        const res = await api('/api/settings/emby-proxy/restart', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('反代已重启');
+                        } else {
+                            showToast(data.message || '重启失败');
+                        }
+                        await loadEmbyProxy();
+                    } catch (e) {
+                        showToast('重启失败');
+                    }
+                    embyProxyState.restarting = false;
+                };
+
+                // ===== 数据备份 =====
+                const backupTypeLabel = (t) => {
+                    const map = { manual: '手动备份', auto: '自动备份', pre_update: '更新前备份' };
+                    return map[t] || (t || '备份');
+                };
+                const backupStatusClass = (s) => {
+                    if (s === 'completed') return 'running';
+                    if (s === 'running') return 'waiting';
+                    if (s === 'failed') return 'paused';
+                    return 'idle';
+                };
+                const backupStatusText = (s) => {
+                    if (s === 'completed') return '已完成';
+                    if (s === 'running') return '备份中';
+                    if (s === 'failed') return '失败';
+                    return (s || '-');
+                };
+                const formatBackupTime = (ts) => {
+                    if (!ts) return '';
+                    const d = new Date(ts * 1000);
+                    const p = (n) => String(n).padStart(2, '0');
+                    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+                };
+                const loadBackups = async () => {
+                    backupState.loading = true;
+                    try {
+                        const res = await api('/api/backup/list');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            backupState.records = data.data.records || [];
+                        }
+                    } catch (e) { console.warn('[app] 操作失败:', e); }
+                    backupState.loading = false;
+                };
+                const startBackup = async () => {
+                    backupState.starting = true;
+                    backupState.status = '';
+                    try {
+                        const res = await api('/api/backup/start', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ backup_type: 'manual', reason: '' })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('备份任务已启动');
+                            backupState.status = '备份任务已启动，完成后将出现在下方列表中。';
+                            setTimeout(() => loadBackups(), 3000);
+                        } else {
+                            showToast(data.message || '备份启动失败');
+                        }
+                    } catch (e) {
+                        showToast('备份启动失败');
+                    }
+                    backupState.starting = false;
+                };
+                const cleanupBackups = async () => {
+                    backupState.cleaning = true;
+                    backupState.status = '';
+                    try {
+                        const res = await api('/api/backup/cleanup?max_count=10', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已清理旧备份');
+                            backupState.status = data.message || '已清理旧备份';
+                        } else {
+                            showToast(data.message || '清理失败');
+                        }
+                        await loadBackups();
+                    } catch (e) {
+                        showToast('清理失败');
+                    }
+                    backupState.cleaning = false;
+                };
+                const deleteBackup = async (id) => {
+                    if (!confirm('确定删除该备份？删除后不可恢复。')) return;
+                    backupState.deletingId = id;
+                    try {
+                        const res = await api('/api/backup/' + id, { method: 'DELETE' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('备份已删除');
+                        } else {
+                            showToast(data.message || '删除失败');
+                        }
+                        await loadBackups();
+                    } catch (e) {
+                        showToast('删除失败');
+                    }
+                    backupState.deletingId = null;
+                };
+                const restoreBackup = async (id) => {
+                    if (!confirm('确定从该备份恢复？当前数据将被覆盖，建议先手动备份一次。')) return;
+                    backupState.restoringId = id;
+                    backupState.status = '';
+                    try {
+                        const res = await api('/api/backup/restore', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ backup_id: id })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('恢复任务已启动');
+                            backupState.status = '恢复任务已启动，完成后页面配置将更新。';
+                            setTimeout(() => loadBackups(), 3000);
+                        } else {
+                            showToast(data.message || '恢复失败');
+                        }
+                    } catch (e) {
+                        showToast('恢复失败');
+                    }
+                    backupState.restoringId = null;
+                };
+
+                // ===== 任务控制台 =====
+                const taskTypeLabel = (type) => {
+                    const map = { strm_sync: 'STRM 同步', scrape: '刮削整理', upload: '上传', download: '下载' };
+                    return map[type] || type;
+                };
+                const taskStatusClass = (q) => {
+                    if (!q) return 'idle';
+                    if (q.status === 'running') return 'running';
+                    if (q.status === 'paused') return 'paused';
+                    return 'idle';
+                };
+                const taskStatusText = (q) => {
+                    if (!q) return '未知';
+                    if (q.status === 'running') return '运行中';
+                    if (q.status === 'paused') return '已暂停';
+                    if (q.status === 'stopped') return '已停止';
+                    return '空闲';
+                };
+                const loadTasks = async () => {
+                    taskConsole.loading = true;
+                    try {
+                        const res = await api('/api/tasks/status');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            taskConsole.queues = data.data.queues || {};
+                            const statuses = Object.values(taskConsole.queues);
+                            taskConsole.paused = statuses.length > 0 && statuses.every(q => q && q.status === 'paused');
+                        }
+                    } catch (e) { console.warn('[app] 操作失败:', e); }
+                    taskConsole.loading = false;
+                };
+                const pauseAll = async () => {
+                    taskConsole.pausing = true;
+                    try {
+                        const res = await api('/api/tasks/pause-all', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('所有任务队列已暂停');
+                        } else {
+                            showToast(data.message || '暂停失败');
+                        }
+                        await loadTasks();
+                    } catch (e) {
+                        showToast('暂停失败');
+                    }
+                    taskConsole.pausing = false;
+                };
+                const resumeAll = async () => {
+                    taskConsole.resuming = true;
+                    try {
+                        const res = await api('/api/tasks/resume-all', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast('所有任务队列已恢复');
+                        } else {
+                            showToast(data.message || '恢复失败');
+                        }
+                        await loadTasks();
+                    } catch (e) {
+                        showToast('恢复失败');
+                    }
+                    taskConsole.resuming = false;
+                };
+
                 // ============ 特色工具 - 卡片操作方法 ============
 
                 // 切换工具启用/禁用
@@ -8561,6 +9875,10 @@ av:
                 // 打开工具配置弹窗
                 const openToolConfig = (key) => {
                     toolConfig.show = key;
+                    // 打开监控/队列弹窗时加载最新数据
+                    if (key === 'watcher') loadWatcher();
+                    else if (key === 'upload_queue') loadUploadQueue();
+                    else if (key === 'task_console') loadTasks();
                 };
 
                 // 立即运行工具（打开对应配置弹窗）
@@ -9186,12 +10504,24 @@ av:
                     tmdb, loadTmdbSettings, saveTmdbSettings, testTmdbSettings, autoSaveAndTestTmdb, selectTmdbLanguage,
                     // STRM 配置
                     strmConfig, strmExample, loadStrmSettings, saveStrmSettings, updateStrmExample,
+                    // STRM 播放安全 / Emby 反代
+                    strmSecurity, loadStrmSecurity, saveStrmSecurity, rotateStrmToken,
+                    embyProxyState, loadEmbyProxy, restartEmbyProxy,
+                    // 数据备份
+                    backupState, loadBackups, startBackup, cleanupBackups, deleteBackup, restoreBackup,
+                    backupTypeLabel, backupStatusClass, backupStatusText, formatBackupTime,
+                    // 任务控制台
+                    taskConsole, loadTasks, pauseAll, resumeAll, taskTypeLabel, taskStatusClass, taskStatusText,
                     windowHost,
                     // Emby 入库刷新 / 通知配置
                     embySyncConfig, embyNotifyConfig, loadEmbySyncSettings, saveEmbySyncSettings, loadEmbyNotifySettings, saveEmbyNotifySettings,
                     // 通知配置
                     notify, loadNotifySettings, saveNotify, testNotifyChannel,
                     callbackUrl, loadCallbackUrl,
+                    // 新版通知中心（多渠道 + 规则引擎）
+                    notifyCenter, loadNotifyCenter, addChannel, updateChannel, deleteChannel, testChannel, addRule, toggleRule, deleteRule,
+                    resetChannelConfig, channelConfigSummary, channelTypeLabel, eventTypeLabel, channelName,
+                    NOTIFY_CHANNEL_TYPE_MAP, NOTIFY_CHANNEL_FIELDS,
                     switchLatest, switchGenre, genrePercent, onPosterError,
                     // 新增：仪表盘扩展
                     onAvatarError, onLibImgError,
@@ -9206,6 +10536,9 @@ av:
                     clearRecycle, clearRecycleRun,
                     strmReplace, strmReplaceScan, strmReplaceRun,
                     missingEp, missingEpScan,
+                    watcherState, loadWatcher, startWatcher, stopWatcher, stopAllWatchers, watcherPathText,
+                    uploadQueueState, loadUploadQueue, retryUploads, clearUploads, uploadStatusLabel, uploadStatusIcon,
+                    lifeMonitor, loadLifeMonitor, saveLifeMonitor,
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
                     // 功能模块
