@@ -4,8 +4,12 @@
 每条日志额外标注 source 来源分类，便于前端区分。
 uvicorn.access（HTTP 访问日志）不进入缓冲区，避免日志面板自身轮询
 产生的请求日志反复刷屏；这些日志仍在终端控制台可见。
+
+从 2026-08-05 起：应用日志同时输出到 stdout（容器 docker logs 可见），
+uvicorn 日志排除在 stdout 之外（避免与 uvicorn 自带 handler 重复打印）。
 """
 import logging
+import sys
 from collections import deque
 from datetime import datetime
 
@@ -115,12 +119,25 @@ class RingBufferHandler(logging.Handler):
         self.buffer.clear()
 
 
+class _ExcludeUvicornFilter(logging.Filter):
+    """stdout 过滤器：排除 uvicorn 日志，避免与 uvicorn 自带 handler 重复打印"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.name.startswith("uvicorn")
+
+
 # 全局单例
 ring_handler = RingBufferHandler(capacity=500)
 
 
 def setup_logging():
-    """配置日志，将 uvicorn 和应用日志写入环形缓冲"""
+    """配置日志：应用日志写入环形缓冲（Web 实时日志面板）+ 输出到 stdout（docker logs）
+
+    - 环形缓冲：仅内存，供前端日志面板轮询读取
+    - stdout handler：让 docker logs / 终端能看到应用日志；
+      通过 _ExcludeUvicornFilter 排除 uvicorn 日志（uvicorn 自带 handler 已输出到 stdout，
+      避免重复打印；uvicorn 日志仍会进入环形缓冲）
+    """
     # 消息本身已带业务前缀（如 [sync]、[115]），formatter 不再拼模块全名，减少冗余
     ring_handler.setFormatter(logging.Formatter("%(message)s"))
     ring_handler.setLevel(logging.INFO)
@@ -131,6 +148,17 @@ def setup_logging():
     # 会通过 propagate 自然向上传播到 root，避免重复记录
     if ring_handler not in root.handlers:
         root.addHandler(ring_handler)
+
+    # stdout handler：应用日志输出到容器 stdout（docker logs 可见）
+    if not any(getattr(h, "_is_stdout_handler", False) for h in root.handlers):
+        stdout_handler = logging.StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        )
+        stdout_handler.setLevel(logging.INFO)
+        stdout_handler._is_stdout_handler = True
+        stdout_handler.addFilter(_ExcludeUvicornFilter())
+        root.addHandler(stdout_handler)
 
 
 def get_logger(name: str = "strmhub") -> logging.Logger:
