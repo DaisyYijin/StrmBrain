@@ -8,16 +8,18 @@ API 路由 - 特色工具
 6. base_url 自动推导 + 批量替换（A6）
 7. STRM 清理（二次确认，S4）
 8. STRM 账号引用修复（Q3）
+9. STRM 刮削（NFO/海报刮削 + SQLite 海报墙索引，O2）
 """
 from pathlib import Path
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional
 
-from app.core.json_storage import read_setting, get_first_valid_account
+from app.core.json_storage import read_setting, get_first_valid_account, find_account
 from app.schemas import ApiResponse
 from app.config import DATA_DIR
 from app.services.client_115 import Client115Service
+from app.services.strmscrape_service import StrmScrapeService
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -1081,3 +1083,137 @@ async def account_repair_run(payload: AccountRepairRunRequest):
     if result.get("message"):
         return ApiResponse(code=400, message=result["message"])
     return ApiResponse(data=result)
+
+
+# ============ 工具9：STRM 刮削（NFO/海报刮削 + SQLite 海报墙索引，O2）============
+
+class StrmScrapeScanRequest(BaseModel):
+    account_id: int = 0    # 115 账号 ID（0/缺省时自动取第一个有效账号）
+    source_cid: str        # 115 网盘源目录 id
+
+
+class StrmScrapeRunRequest(BaseModel):
+    account_id: int = 0        # 115 账号 ID（0/缺省时自动取第一个有效账号）
+    source_cid: str = ""       # 115 网盘源目录 id（仅作上下文记录，刮削本身不使用）
+    tmdb_api_key: str = ""     # TMDB API Key
+    group: str = ""            # 分组名（相对同步根目录的路径，来自 scan 接口）
+    files: list[str] = []      # 组内视频文件名列表
+    local_dir: str = ""        # 本地目录（写 NFO/海报），缺省用同步计划 local_media_dir
+
+
+class StrmScrapeIndexRequest(BaseModel):
+    local_media_dir: str   # 本地媒体目录（扫描 nfo 构建 SQLite 海报墙索引）
+
+
+def _resolve_strmscrape_account(account_id: int) -> Optional[dict]:
+    """按 account_id 解析 115 账号；缺失/失效（status==0 或无水 cookies）时回退第一个有效账号"""
+    account = find_account(account_id) if account_id else None
+    if not account or account.get("status") == 0 or not account.get("cookies"):
+        account = get_first_valid_account()
+    return account
+
+
+def _get_default_local_dir() -> str:
+    """从同步计划读取 local_media_dir，作为 NFO 写入目录的默认值"""
+    try:
+        from app.services.sync_service import SyncService
+        return SyncService.load_schedule().get("local_media_dir", "") or ""
+    except Exception:
+        return ""
+
+
+@router.post("/strmscrape/scan", response_model=ApiResponse)
+async def strmscrape_scan(payload: StrmScrapeScanRequest):
+    """扫描 115 网盘源目录下的视频文件，按目录分组（供前端勾选后逐组刮削）。
+
+    返回 {"groups": [{"group", "files", "count"}], "count": 分组数量}
+    """
+    if not payload.source_cid:
+        return ApiResponse(code=400, message="source_cid 不能为空")
+    account = _resolve_strmscrape_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=400, message="未找到有效 115 账号")
+    try:
+        cookies = account.get("cookies", "")
+        groups = StrmScrapeService.scan_for_scrape(cookies, payload.source_cid)
+        return ApiResponse(data={"groups": groups, "count": len(groups)})
+    except Exception as e:
+        return ApiResponse(code=500, message=f"扫描失败: {str(e)}")
+
+
+@router.post("/strmscrape/run", response_model=ApiResponse)
+async def strmscrape_run(payload: StrmScrapeRunRequest):
+    """对单个分组执行 TMDB 刮削，命中后写 NFO + 下载海报。
+
+    返回 {"scraped": TMDB 结果, "nfo_path": NFO 绝对路径或 ""}；
+    刮削失败返回 {"scraped": {"status": "miss"}}
+    """
+    account = _resolve_strmscrape_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=400, message="未找到有效 115 账号")
+    try:
+        cookies = account.get("cookies", "")
+        scraped = StrmScrapeService.scrape_group(
+            cookies, payload.tmdb_api_key, payload.group, payload.files
+        )
+    except Exception as e:
+        return ApiResponse(code=500, message=f"刮削失败: {str(e)}")
+
+    # 未命中（无 key/无文件/TMDB 无结果）或缺少 tmdb_id：返回 miss
+    if not scraped.get("tmdb_id"):
+        return ApiResponse(data={"scraped": {"status": "miss"}})
+
+    # 写 NFO/海报（local_dir 缺省取同步计划配置）
+    local_dir = payload.local_dir or _get_default_local_dir()
+    nfo_path = ""
+    if local_dir:
+        poster_path = scraped.get("poster_path", "") or ""
+        poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else ""
+        nfo_path = StrmScrapeService.write_nfo(
+            local_dir, scraped.get("title", ""), scraped.get("year"),
+            scraped.get("tmdb_id"), poster_url,
+        ) or ""
+    return ApiResponse(data={"scraped": scraped, "nfo_path": nfo_path})
+
+
+@router.post("/strmscrape/index", response_model=ApiResponse)
+async def strmscrape_index(payload: StrmScrapeIndexRequest):
+    """扫描本地媒体目录中的 nfo，构建/更新 SQLite 海报墙索引。
+
+    索引库: DATA_DIR/strmscrape_index.db；返回 {"indexed": 索引总条数}
+    """
+    if not payload.local_media_dir:
+        return ApiResponse(code=400, message="local_media_dir 不能为空")
+    try:
+        count = StrmScrapeService.build_sqlite_index(payload.local_media_dir)
+        return ApiResponse(data={"indexed": count})
+    except Exception as e:
+        return ApiResponse(code=500, message=f"索引构建失败: {str(e)}")
+
+
+@router.get("/strmscrape/query", response_model=ApiResponse)
+async def strmscrape_query():
+    """查询海报墙索引（items 表，按 scraped_at 倒序，最多 500 条）。
+
+    返回 {"items": [{"title", "year", "tmdb_id", "path", "poster", "scraped_at"}], "count": int}；
+    索引库不存在时返回空列表。
+    """
+    import sqlite3
+
+    db_path = DATA_DIR / "strmscrape_index.db"
+    items = []
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT title, year, tmdb_id, path, poster, scraped_at "
+                    "FROM items ORDER BY scraped_at DESC LIMIT 500"
+                ).fetchall()
+                items = [dict(r) for r in rows]
+            finally:
+                conn.close()
+        except Exception as e:
+            return ApiResponse(code=500, message=f"查询索引失败: {str(e)}")
+    return ApiResponse(data={"items": items, "count": len(items)})

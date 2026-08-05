@@ -19,7 +19,7 @@ import re
 import threading
 import time as _time
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -299,8 +299,8 @@ def _inject_external_urls(src: dict, item_id: str, api_key: str, request_host: s
 # 特定客户端需要特殊处理才能正常播放：
 # - Infuse: 不跟随 302 重定向 → 优先使用 Range 代理
 # - dandanplay: Range 请求格式特殊 → 需要修正 Range 头
-# - VidHub/SenPlayer: seek 存在偏移 bug → 标记 need_seek_fix（简化：不做实际修正）
-# - Infuse-Download: 下载场景 → 标记 block_download（简化：仅记录日志）
+# - VidHub/SenPlayer: seek 存在偏移 bug → 标记 need_seek_fix（Range 代理起始偏移 +1）
+# - Infuse-Download: 下载场景 → 标记 block_download（下载请求直接 403 拒绝）
 # - 其他客户端: 标准处理
 # P6 参考 embyExternalUrl UA.txt 与 config/constant-common.js strHead.xUAs 扩充分类
 _UA_COMPAT_MATRIX = {
@@ -543,6 +543,24 @@ def _resolve_strm_target(content: str) -> str:
     return target
 
 
+def _extract_account_id(url: str) -> int:
+    """I4: 从 STRM 内容 URL 中解析 account_id 参数（用于每账号并发限流）。
+    参考 emby2Alist 的账号维度限流设计：同一账号的播放并发数被限制在
+    _MAX_CONCURRENT_PER_ACCOUNT 以内，防止 115 风控。
+    无该参数或解析失败时返回 0（回退全局并发限流，与旧行为一致）。
+    """
+    if not url:
+        return 0
+    try:
+        query = urlparse(url).query
+        values = parse_qs(query).get("account_id")
+        if not values:
+            return 0
+        return int(values[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _is_self_strm_url(target: str) -> bool:
     """判断 STRM 内容是否指向本服务的 302 播放接口（/api/115/url/）
     参考 emby2Alist redirectStrmLastLinkRule：STRM 内部链接指向自身反代/接口时，
@@ -648,6 +666,7 @@ async def handle_range_proxy(
     strm_target: str,
     client_ua: str,
     account_id: int = 0,
+    fix_seek: bool = False,
 ) -> Optional[Response]:
     """
     A1: Range 分片流代理 — 代理 115 CDN 内容流，支持 Range 请求和失效自愈。
@@ -659,6 +678,8 @@ async def handle_range_proxy(
     strm_target: STRM 内容中的本服务 302 接口 URL（/api/115/url/...）
     client_ua: 客户端 User-Agent（用于 115 直链 UA 一致性）
     account_id: 115 账号 ID（用于每账号并发限流）
+    fix_seek: I3 P6 — need_seek_fix 客户端（VidHub/SenPlayer）的 seek 偏移修正开关
+    （参考 embyExternalUrl seekBug 处理：Range 起始偏移 +1）
     返回 Response 或 None（失败时回退到 302 方式）
     """
     import asyncio
@@ -676,6 +697,20 @@ async def handle_range_proxy(
 
         # 解析客户端 Range 请求
         range_header = request.headers.get("range", "")
+
+        # I3 P6: need_seek_fix 客户端（VidHub/SenPlayer）存在 0 索引 seek 偏移 bug，
+        # 参考 embyExternalUrl seekBug 处理：Range 起始偏移 +1（并相应 +1 结束值）。
+        # 仅在起始值合法（>=0）时修正；格式解析失败则保持原 range_header。
+        if fix_seek and range_header:
+            seek_m = re.match(r"(?i)^bytes=(\d+)-(\d*)$", range_header.strip())
+            if seek_m:
+                start = int(seek_m.group(1))
+                if start >= 0:
+                    if seek_m.group(2) != "":
+                        range_header = f"bytes={start + 1}-{int(seek_m.group(2)) + 1}"
+                    else:
+                        range_header = f"bytes={start + 1}-"
+                    logger.info(f"[proxy] seek 偏移修正: {range_header}")
 
         # 最多重试 2 次（链接失效自愈）
         for attempt in range(2):
@@ -1070,8 +1105,12 @@ async def handle_stream(request: Request):
     client = client_compat["client_type"]
     # P6: 打印检测到的客户端类型到日志（最小侵入，不做额外分支）
     logger.info(f"[proxy] UA 检测: client_type={client_compat['client_type']}, ua={ua[:80]}")
-    # P6: Infuse-Download 等下载场景（block_download=True）— 简化实现：仅记录日志
+    # I3 P6: Infuse-Download 等下载场景（block_download=True）— 禁止下载请求
     if client_compat.get("block_download"):
+        # 请求路径含 download（/Items/{id}/Download 正则匹配，或路径含 /Download）时直接 403
+        if _REG_ITEM_DOWNLOAD.match(request.url.path) or "/Download" in request.url.path:
+            logger.warning(f"[proxy] 检测到下载场景客户端 (block_download=True)，禁止下载: {file_name}")
+            return JSONResponse(status_code=403, content={"detail": "该客户端禁止下载"})
         logger.info(f"[proxy] 检测到下载场景客户端 (block_download=True)，按常规流程处理: {file_name}")
     if client == "default":
         # 回退到原有日志友好名称
@@ -1126,7 +1165,15 @@ async def handle_stream(request: Request):
                 # A1 + A10: 根据 UA 兼容矩阵决定策略
                 # Infuse 强制使用 Range 代理（不跟随 302）；其他客户端优先 Range，失败回退 302
                 force_range = client_compat.get("force_range_proxy", False)
-                range_response = await handle_range_proxy(request, target, ua, account_id=0)
+                # I4: 从 STRM 内容解析真实 account_id，恢复每账号并发限流
+                #（原先写死 account_id=0 导致每账号 3 并发退化为全局 3 并发）
+                acct_id = _extract_account_id(target)
+                # I3 P6: need_seek_fix 客户端（VidHub/SenPlayer）开启 Range 起始偏移修正
+                range_response = await handle_range_proxy(
+                    request, target, ua,
+                    account_id=acct_id,
+                    fix_seek=client_compat.get("need_seek_fix", False),
+                )
                 if range_response:
                     if _should_log_play(play_label):
                         logger.info(f"{play_label} -> Range 分片流代理 (client={client})")

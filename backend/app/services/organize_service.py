@@ -1327,9 +1327,23 @@ class OrganizeService:
                         })
                         continue
 
-                    # ffprobe 探测媒体信息
+                    # I1: OOF 快速媒体信息探测（免下载，先于 ffprobe）
+                    # 命中 115 已有同 sha1 文件时，直接复用其 nfo/jpg 信息，跳过 ffprobe 硬下载
+                    oof_media_info = None
+                    if wash_config and wash_config.get("enabled"):
+                        try:
+                            f_sha1 = file_info.get("sha1", "")
+                            if f_sha1:
+                                oof_result = Client115Service.fetch_media_info_fast(cookies, f_sha1)
+                                if oof_result and (oof_result.get("nfo_files") or oof_result.get("image_files")):
+                                    oof_media_info = oof_result
+                                    logger.info(f"[organize] OOF 命中媒体信息: {orig_name} (sha1={f_sha1[:8]}...), nfo={len(oof_result.get('nfo_files', []))}, img={len(oof_result.get('image_files', []))}")
+                        except Exception as e:
+                            logger.warning(f"[organize] OOF 探测失败（跳过）: {orig_name} - {e}")
+
+                    # ffprobe 探测媒体信息（OOF 已命中时跳过，避免硬下载）
                     media_info = None
-                    if use_ffprobe and is_ffprobe_available() and (rename_rules or (wash_config and wash_config.get("enabled"))):
+                    if use_ffprobe and is_ffprobe_available() and (rename_rules or (wash_config and wash_config.get("enabled"))) and not oof_media_info:
                         try:
                             download_url = Client115Service.get_download_url(cookies, file_info.get("pickcode", ""), context=orig_name)
                             if download_url:
@@ -1345,7 +1359,7 @@ class OrganizeService:
                     skip_reason = ""
                     if wash_config and wash_config.get("enabled"):
                         should_move, wash_reason, old_files_to_replace = await cls._check_wash_replace(
-                            cookies, sub_cid, file_info, tmdb_info, media_type, wash_config, media_info, category, prefer_filename,
+                            cookies, sub_cid, file_info, tmdb_info, media_type, wash_config, media_info or oof_media_info, category, prefer_filename,
                             cached_existing_files=wash_cached_files,
                         )
                         if not should_move:
