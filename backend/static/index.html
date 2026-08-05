@@ -1728,6 +1728,30 @@
             z-index: 1000;
         }
 
+        /* 顶部滑出通知（TMDB 保存/测试结果等） */
+        .top-notice {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            transform: translate(-50%, -100%);
+            z-index: 10000;
+            padding: 14px 28px;
+            border-radius: 0 0 8px 8px;
+            font-size: 14px;
+            color: #fff;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+            max-width: 80vw;
+            word-break: break-all;
+            pointer-events: none;
+        }
+        .top-notice.success { background: #67c23a; }
+        .top-notice.error { background: #f56c6c; }
+        .top-notice.info { background: #409eff; }
+        .slide-down-enter-active { transition: all 0.35s ease; }
+        .slide-down-leave-active { transition: all 0.25s ease; }
+        .slide-down-enter-from, .slide-down-leave-to { transform: translate(-50%, -100%); opacity: 0; }
+        .slide-down-enter-to, .slide-down-leave-from { transform: translate(-50%, 0); opacity: 1; }
+
         /* Tag input - 可点击删除的标签输入框 */
         .tag-input {
             display: flex;
@@ -2818,10 +2842,7 @@
                                 </div>
                                 <span style="font-size:13px; margin-left:8px; color:#606266;">{{ tmdb.language === 'zh' ? '中文' : '英文' }}</span>
                             </div>
-                            <div v-if="tmdb.saving" style="margin-top:8px; color:#909399; font-size:13px;">保存中...</div>
-                            <div v-if="tmdb.saveResult" style="margin-top:8px; font-size:13px;" :style="{ color: tmdb.saveOk ? '#67c23a' : '#f56c6c' }">{{ tmdb.saveResult }}</div>
-                            <div v-if="tmdb.testing" style="margin-top:4px; color:#909399; font-size:13px;">测试中...</div>
-                            <div v-if="tmdb.testResult" style="margin-top:4px; font-size:13px;" :style="{ color: tmdb.testOk ? '#67c23a' : '#f56c6c' }">{{ tmdb.testResult }}</div>
+                            <!-- 保存/测试结果通过顶部滑出通知显示 -->
                         </div>
                     </div>
                     <!-- /TMDB 配置 -->
@@ -4514,6 +4535,11 @@
         </div>
 
         <div class="toast" v-if="toast.show">{{ toast.message }}</div>
+
+        <!-- 顶部滑出通知（TMDB 保存/测试结果） -->
+        <transition name="slide-down">
+            <div class="top-notice" :class="topNotice.type" v-if="topNotice.show">{{ topNotice.message }}</div>
+        </transition>
     </div>
     
     <script>
@@ -6375,6 +6401,17 @@ av:
                     toast.show = true;
                     setTimeout(() => toast.show = false, ms);
                 };
+
+                // 顶部滑出通知（type: success / error / info）
+                const topNotice = reactive({ show: false, message: '', type: 'info' });
+                let _topNoticeTimer = null;
+                const showTopNotice = (msg, type = 'info', ms = 3000) => {
+                    topNotice.message = msg;
+                    topNotice.type = type;
+                    topNotice.show = true;
+                    if (_topNoticeTimer) clearTimeout(_topNoticeTimer);
+                    _topNoticeTimer = setTimeout(() => { topNotice.show = false; }, ms);
+                };
                 
                 const qrStatusClass = computed(() => {
                     if (qr.status === 0) return 'status-wait';
@@ -6855,11 +6892,9 @@ av:
                         }
                     } catch (e) { console.warn('[app] 操作失败:', e); }
                 };
-                // 保存 TMDB 配置（静默模式不弹 toast，返回是否成功）
-                const saveTmdbSettings = async (silent = false) => {
+                // 保存 TMDB 配置（结果通过顶部滑出通知显示，返回是否成功）
+                const saveTmdbSettings = async () => {
                     tmdb.saving = true;
-                    tmdb.saveResult = '';
-                    tmdb.saveOk = false;
                     try {
                         const res = await api('/api/settings/tmdb', {
                             method: 'POST',
@@ -6875,17 +6910,17 @@ av:
                         if (data.code === 0) {
                             tmdb.saveOk = true;
                             tmdb.saveResult = '保存成功';
-                            if (!silent) showToast('TMDB 配置已保存');
+                            showTopNotice('TMDB 配置保存成功', 'success');
                         } else {
                             tmdb.saveOk = false;
                             tmdb.saveResult = data.message || '保存失败';
-                            if (!silent) showToast(tmdb.saveResult);
+                            showTopNotice(tmdb.saveResult, 'error', 4000);
                         }
                         return tmdb.saveOk;
                     } catch (e) {
                         tmdb.saveOk = false;
                         tmdb.saveResult = '保存失败：网络错误';
-                        if (!silent) showToast(tmdb.saveResult);
+                        showTopNotice(tmdb.saveResult, 'error', 4000);
                         return false;
                     } finally {
                         tmdb.saving = false;
@@ -6895,11 +6930,11 @@ av:
                     if (!tmdb.api_key) {
                         tmdb.testOk = false;
                         tmdb.testResult = '请填写 API Key 后再测试';
+                        showTopNotice(tmdb.testResult, 'error', 4000);
                         return false;
                     }
                     tmdb.testing = true;
-                    tmdb.testResult = '';
-                    tmdb.testOk = false;
+                    showTopNotice('正在测试 TMDB 连接...', 'info', 1500);
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 15000);
                     try {
@@ -6916,10 +6951,12 @@ av:
                         const data = await res.json();
                         tmdb.testOk = data.code === 0;
                         tmdb.testResult = data.message;
+                        showTopNotice(tmdb.testResult, tmdb.testOk ? 'success' : 'error', 4000);
                         return tmdb.testOk;
                     } catch (e) {
                         tmdb.testOk = false;
                         tmdb.testResult = e.name === 'AbortError' ? '连接超时，请检查域名是否可访问' : '测试失败';
+                        showTopNotice(tmdb.testResult, 'error', 4000);
                         return false;
                     } finally {
                         clearTimeout(timeoutId);
@@ -6928,14 +6965,17 @@ av:
                 };
                 // 输入框失焦（点击空白处）自动保存 + 测试连接
                 const autoSaveAndTestTmdb = async () => {
-                    // 先保存，再测试；显示各自结果
-                    await saveTmdbSettings(true);
-                    await testTmdbSettings();
+                    // 先保存，再测试；结果均以顶部滑出通知显示
+                    const saved = await saveTmdbSettings();
+                    if (saved) {
+                        await testTmdbSettings();
+                    }
                 };
                 // 切换识别语言（滑块）：中文 ⇄ 英文，切换后自动保存
                 const toggleTmdbLanguage = async () => {
                     tmdb.language = tmdb.language === 'zh' ? 'en' : 'zh';
-                    await saveTmdbSettings(true);
+                    await saveTmdbSettings();
+                    showTopNotice(`识别语言已切换为${tmdb.language === 'zh' ? '中文' : '英文'}`, 'success');
                 };
 
                 // ===== STRM 配置 =====
@@ -8681,7 +8721,7 @@ av:
 
                 return {
                     tab, configTab, sidebarCollapsed,
-                    accounts, loginApps, qr, qrStatusClass, files, toast,
+                    accounts, loginApps, qr, qrStatusClass, files, toast, topNotice,
                     version, logs, logViewer, localAccount, accountMenu,
                     openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, onKeywordInput, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount, fetchVersionInfo,
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
