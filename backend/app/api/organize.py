@@ -673,3 +673,71 @@ async def load_organize_config():
 async def check_ffprobe_status():
     """检查系统是否安装了 ffprobe"""
     return ApiResponse(data={"available": is_ffprobe_available()})
+
+
+# ===== P1-9: 媒体整理规划器（预览 -> 确认 -> 执行） =====
+
+class OrganizePlanRequest(BaseModel):
+    """生成整理预览计划请求"""
+    source_path: str                        # 源目录 cid
+    account_id: int = 0                     # 0=自动选择第一个有效账号
+    rename_rules: Optional[dict] = None     # 可选的重命名规则（覆盖已保存配置）
+
+
+class OrganizeExecuteRequest(BaseModel):
+    """执行整理计划请求"""
+    plan: dict                              # scan_and_plan 返回的计划字典（含 _context）
+    account_id: int = 0                     # 0=自动选择第一个有效账号
+
+
+@router.post("/plan", response_model=ApiResponse)
+async def generate_organize_plan(payload: OrganizePlanRequest):
+    """生成整理预览计划（不实际移动文件）
+
+    扫描源目录 + TMDB 匹配 + 生成操作计划，返回预览结果供用户确认。
+    """
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.source_path:
+        return ApiResponse(code=400, message="请选择需要整理的源目录")
+
+    try:
+        from app.services.organize_planner import get_organize_planner
+        plan = await get_organize_planner().scan_and_plan(
+            source_path=payload.source_path,
+            cookies=account.get("cookies", ""),
+            rename_rules=payload.rename_rules,
+        )
+        if plan.get("error"):
+            return ApiResponse(code=400, message=plan["error"])
+        return ApiResponse(data=plan)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"生成预览计划失败: {str(e)}")
+
+
+@router.post("/execute", response_model=ApiResponse)
+async def execute_organize_plan(payload: OrganizeExecuteRequest):
+    """执行确认后的整理计划（实际移动/重命名文件）
+
+    从计划中提取执行上下文，调用整理服务实际执行。
+    """
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.plan or not payload.plan.get("plan"):
+        return ApiResponse(code=400, message="计划为空，无可执行的操作")
+
+    try:
+        from app.services.organize_planner import get_organize_planner
+        result = await get_organize_planner().execute_plan(
+            plan=payload.plan,
+            cookies=account.get("cookies", ""),
+        )
+        return ApiResponse(data=result)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"执行计划失败: {str(e)}")

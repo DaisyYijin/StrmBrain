@@ -109,6 +109,31 @@ async def restart_emby_proxy():
     return ApiResponse(code=500, message="重启失败，请检查日志")
 
 
+# ===== P1-6: Emby 反代路由规则 =====
+
+class RouteRulesPayload(BaseModel):
+    """路由规则配置（P1-6）"""
+    route_rules: list[dict] = []
+
+
+@router.get("/emby-proxy/route-rules", response_model=ApiResponse)
+async def get_route_rules():
+    """获取 Emby 反代路由规则"""
+    data = read_setting("emby_proxy")
+    return ApiResponse(data={
+        "route_rules": data.get("route_rules", []),
+    })
+
+
+@router.post("/emby-proxy/route-rules", response_model=ApiResponse)
+async def save_route_rules(payload: RouteRulesPayload):
+    """保存 Emby 反代路由规则（合并到现有 emby_proxy 配置，不覆盖端口等字段）"""
+    data = read_setting("emby_proxy")
+    data["route_rules"] = payload.route_rules
+    save_setting("emby_proxy", data)
+    return ApiResponse(message="路由规则已保存")
+
+
 @router.get("/tmdb", response_model=ApiResponse)
 async def get_tmdb_settings():
     """获取 TMDB 设置"""
@@ -418,3 +443,123 @@ async def test_notification(payload: TestNotificationRequest):
         return ApiResponse(code=400, message="未知通知渠道")
 
     return ApiResponse(code=0 if ok else 500, message="测试通知发送成功" if ok else "测试通知发送失败")
+
+
+# ===== P1-10: 缓存预热配置 =====
+
+class CacheWarmerSettings(BaseModel):
+    """缓存预热配置"""
+    enabled: bool = False
+    cron: str = "0 3 * * *"
+    max_files: int = 100
+
+
+@router.get("/cache-warmer", response_model=ApiResponse)
+async def get_cache_warmer_settings():
+    """获取缓存预热配置与状态"""
+    from app.services.cache_warmer import get_cache_warmer
+    cfg = get_cache_warmer().get_config()
+    status = get_cache_warmer().get_status()
+    return ApiResponse(data={
+        "enabled": cfg.get("enabled", False),
+        "cron": cfg.get("cron", "0 3 * * *"),
+        "max_files": cfg.get("max_files", 100),
+        "status": status,
+    })
+
+
+@router.post("/cache-warmer", response_model=ApiResponse)
+async def save_cache_warmer_settings(payload: CacheWarmerSettings):
+    """保存缓存预热配置并重注册定时任务"""
+    from app.services.cache_warmer import get_cache_warmer
+    get_cache_warmer().save_config(
+        enabled=payload.enabled,
+        cron=payload.cron,
+        max_files=payload.max_files,
+    )
+    # 重注册定时任务
+    try:
+        from app.core.scheduler import register_cache_warmer
+        await register_cache_warmer()
+    except Exception as e:
+        from app.core.logbuffer import get_logger
+        get_logger().warning(f"[settings] 重注册缓存预热任务失败: {e}")
+    return ApiResponse(message="已保存")
+
+
+@router.post("/cache-warmer/run", response_model=ApiResponse)
+async def run_cache_warmer():
+    """立即执行一次缓存预热"""
+    from app.services.cache_warmer import get_cache_warmer
+    try:
+        result = await get_cache_warmer().warm_once()
+        return ApiResponse(data=result)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"预热失败: {str(e)}")
+
+
+# ===== P1-8: Telegram Bot 双向控制配置 =====
+
+class TelegramBotSettings(BaseModel):
+    """Telegram Bot 配置"""
+    enabled: bool = False
+    token: str = ""
+    allowed_chat_ids: list[int] = []
+
+
+@router.get("/telegram-bot", response_model=ApiResponse)
+async def get_telegram_bot_settings():
+    """获取 Telegram Bot 配置与状态"""
+    from app.services.telegram_bot import get_telegram_bot
+    cfg = get_telegram_bot().get_config()
+    status = get_telegram_bot().get_status()
+    return ApiResponse(data={
+        "enabled": cfg.get("enabled", False),
+        "token": cfg.get("token", ""),
+        "allowed_chat_ids": cfg.get("allowed_chat_ids", []),
+        "status": status,
+    })
+
+
+@router.post("/telegram-bot", response_model=ApiResponse)
+async def save_telegram_bot_settings(payload: TelegramBotSettings):
+    """保存 Telegram Bot 配置并重启 Bot"""
+    from app.services.telegram_bot import get_telegram_bot
+    get_telegram_bot().save_config(
+        enabled=payload.enabled,
+        token=payload.token,
+        allowed_chat_ids=payload.allowed_chat_ids,
+    )
+    # 重启 Bot（先停止再启动，配置变更后生效）
+    try:
+        get_telegram_bot().restart()
+    except Exception as e:
+        from app.core.logbuffer import get_logger
+        get_logger().warning(f"[settings] 重启 Telegram Bot 失败: {e}")
+    return ApiResponse(message="已保存")
+
+
+@router.post("/telegram-bot/test", response_model=ApiResponse)
+async def test_telegram_bot():
+    """发送测试消息到第一个允许的 Chat ID"""
+    from app.services.telegram_bot import get_telegram_bot
+    bot = get_telegram_bot()
+    cfg = bot.get_config()
+    token = cfg.get("token", "")
+    allowed_ids = cfg.get("allowed_chat_ids", [])
+
+    if not token:
+        return ApiResponse(code=400, message="请先配置 Bot Token")
+    if not allowed_ids:
+        return ApiResponse(code=400, message="请先配置允许的 Chat ID")
+
+    chat_id = allowed_ids[0]
+    test_text = (
+        "<b>STRMhub Telegram Bot 测试</b>\n"
+        "如果你收到了这条消息，说明 Bot 配置正常。"
+    )
+    ok = await bot.send_message_async(chat_id, test_text)
+    return ApiResponse(
+        code=0 if ok else 500,
+        message="测试消息发送成功" if ok else "测试消息发送失败",
+    )

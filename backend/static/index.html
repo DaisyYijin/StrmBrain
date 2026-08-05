@@ -2678,6 +2678,7 @@
                         <div class="config-tab" :class="{ active: configTab === 'strm' }" @click="configTab = 'strm'">STRM 配置</div>
                         <div class="config-tab" :class="{ active: configTab === 'emby_sync' }" @click="configTab = 'emby_sync'">入库刷新</div>
                         <div class="config-tab" :class="{ active: configTab === 'emby_notify' }" @click="configTab = 'emby_notify'">入库通知</div>
+                        <div class="config-tab" :class="{ active: configTab === 'advanced' }" @click="configTab = 'advanced'">高级功能</div>
                     </div>
 
                     <!-- 账号登录 -->
@@ -3132,6 +3133,109 @@
                         </div>
                     </div>
                     <!-- /EMBY 入库通知 -->
+
+                    <!-- ===== 高级功能（P1）===== -->
+                    <div v-show="configTab === 'advanced'">
+                        <!-- 路由规则 -->
+                        <div class="card">
+                            <div class="card-title">播放路由规则<span class="help-tip">?<span class="tip-text">声明式路由规则引擎：按文件路径/客户端UA/IP/文件名匹配，控制每个请求的处理模式。proxy=强制Range代理，redirect=强制302跳转，block=禁止播放。无匹配规则时使用默认策略。</span></span></div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                <span style="font-size:13px; color:#909399;">共 {{ advFeatures.routeRules.length }} 条规则</span>
+                                <div style="display:flex; gap:6px;">
+                                    <button class="btn btn-default btn-small" @click="loadRouteRules" :disabled="advFeatures.loadingRoute">刷新</button>
+                                    <button class="btn btn-primary btn-small" @click="addRouteRule">添加规则</button>
+                                </div>
+                            </div>
+                            <div v-if="advFeatures.routeRules.length === 0" style="color:#909399; font-size:13px; padding:12px 0;">暂无规则，添加后将按顺序匹配</div>
+                            <div v-for="(rule, idx) in advFeatures.routeRules" :key="idx" style="display:flex; align-items:center; gap:6px; margin-bottom:8px; flex-wrap:wrap;">
+                                <select v-model="rule.mode" style="padding:4px 8px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                    <option value="proxy">代理(proxy)</option>
+                                    <option value="redirect">跳转(redirect)</option>
+                                    <option value="block">禁止(block)</option>
+                                </select>
+                                <select v-model="rule.match_field" style="padding:4px 8px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                    <option value="path">路径</option>
+                                    <option value="ua">UA</option>
+                                    <option value="ip">IP</option>
+                                    <option value="filename">文件名</option>
+                                </select>
+                                <select v-model="rule.match_op" style="padding:4px 8px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                    <option value="contains">包含</option>
+                                    <option value="equals">等于</option>
+                                    <option value="startsWith">前缀</option>
+                                    <option value="regex">正则</option>
+                                </select>
+                                <input type="text" v-model="rule.match_value" placeholder="匹配值" style="flex:1; min-width:120px; padding:4px 8px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                <button class="btn btn-danger btn-small" @click="advFeatures.routeRules.splice(idx, 1)" style="padding:4px 10px;">删</button>
+                            </div>
+                            <div v-if="advFeatures.routeRules.length > 0" style="margin-top:8px;">
+                                <button class="btn btn-primary btn-small" @click="saveRouteRules" :disabled="advFeatures.savingRoute">{{ advFeatures.savingRoute ? '保存中...' : '保存规则' }}</button>
+                            </div>
+                        </div>
+
+                        <!-- 缓存预热 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">缓存预热<span class="help-tip">?<span class="tip-text">定时预加载 115 网盘目录树和下载链接到缓存，消除首次播放延迟。建议在用户活跃时段前执行（如凌晨3点）。</span></span></div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                                <span style="font-size:14px;">启用定时预热</span>
+                                <div class="tool-toggle" :class="{ 'toggle-on': cacheWarmer.enabled }" @click="cacheWarmer.enabled = !cacheWarmer.enabled; saveCacheWarmer()" style="flex-shrink:0;">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>预热时间（Cron）</label>
+                                <div style="display:flex; gap:6px; align-items:center;">
+                                    <input type="text" v-model="cacheWarmer.cron" placeholder="0 3 * * *" style="flex:1; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;">
+                                    <button class="btn btn-primary btn-small" @click="saveCacheWarmer" :disabled="cacheWarmer.saving">保存</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>最大预热文件数</label>
+                                <input type="number" v-model.number="cacheWarmer.maxFiles" min="10" max="1000" style="width:100px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;">
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                                <button class="btn btn-primary btn-small" @click="runCacheWarmer" :disabled="cacheWarmer.running">{{ cacheWarmer.running ? '预热中...' : '立即预热' }}</button>
+                                <span v-if="cacheWarmer.resultMsg" style="font-size:13px; color:#67c23a;">{{ cacheWarmer.resultMsg }}</span>
+                            </div>
+                        </div>
+
+                        <!-- Telegram Bot -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">Telegram Bot 双向控制<span class="help-tip">?<span class="tip-text">通过 Telegram Bot 远程控制 STRMhub：发送 /sync_inc 触发增量同步，/sync_full 全量同步，/checkin 签到，/status 查看状态。仅白名单 ChatID 可控制。</span></span></div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                                <span style="font-size:14px;">启用 Bot</span>
+                                <div class="tool-toggle" :class="{ 'toggle-on': tgBot.enabled }" @click="tgBot.enabled = !tgBot.enabled; saveTgBot()" style="flex-shrink:0;">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Bot Token<span class="help-tip">?<span class="tip-text">从 @BotFather 获取的 Bot Token</span></span></label>
+                                <input type="text" v-model="tgBot.token" placeholder="123456:ABC-DEF..." style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;">
+                            </div>
+                            <div class="form-group">
+                                <label>允许的 Chat ID<span class="help-tip">?<span class="tip-text">逗号分隔的白名单 Chat ID，仅这些用户可控制 Bot。从 @userinfobot 获取你的 Chat ID。</span></span></label>
+                                <input type="text" v-model="tgBot.allowedChatIds" placeholder="123456789,987654321" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:14px;">
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                                <button class="btn btn-primary btn-small" @click="saveTgBot" :disabled="tgBot.saving">{{ tgBot.saving ? '保存中...' : '保存' }}</button>
+                                <button class="btn btn-default btn-small" @click="testTgBot" :disabled="tgBot.testing">{{ tgBot.testing ? '发送中...' : '发送测试消息' }}</button>
+                                <span v-if="tgBot.resultMsg" style="font-size:13px;" :style="{ color: tgBot.resultMsg.includes('失败') ? '#f56c6c' : '#67c23a' }">{{ tgBot.resultMsg }}</span>
+                            </div>
+                            <div v-if="tgBot.status" style="margin-top:10px; font-size:13px; color:#909399;">
+                                状态：{{ tgBot.status.running ? '运行中' : '已停止' }} · 支持命令：/status /sync_inc /sync_full /scrape /checkin /help
+                            </div>
+                        </div>
+
+                        <!-- 整理规划器说明 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">整理预览<span class="help-tip">?<span class="tip-text">整理前先生成操作计划预览，确认后再执行，防止误整理。在"影视整理"页面点击"预览整理"按钮使用。</span></span></div>
+                            <p style="font-size:13px; color:#909399; line-height:1.8;">
+                                整理预览功能已集成到「影视整理」页面。整理前点击"预览整理"按钮，系统会扫描目录并生成操作计划（文件名、当前路径、目标路径、操作类型），您可以在确认后批量执行。<br>
+                                支持冲突检测（目标已存在时标记跳过）、剧集分组、配额限制。
+                            </p>
+                        </div>
+                    </div>
+                    <!-- /高级功能 -->
 
                 </div>
 
@@ -7534,6 +7638,21 @@ av:
                     data: null,
                 });
 
+                // P1 高级功能
+                const advFeatures = reactive({
+                    routeRules: [],
+                    loadingRoute: false,
+                    savingRoute: false,
+                });
+                const cacheWarmer = reactive({
+                    enabled: false, cron: '0 3 * * *', maxFiles: 100,
+                    saving: false, running: false, resultMsg: '',
+                });
+                const tgBot = reactive({
+                    enabled: false, token: '', allowedChatIds: '',
+                    saving: false, testing: false, resultMsg: '', status: null,
+                });
+
                 // STRM 播放安全配置
                 const strmSecurity = reactive({
                     loading: false,
@@ -7867,7 +7986,102 @@ av:
                     }
                     rateStats.loading = false;
                 };
-                
+
+                // ===== P1 高级功能方法 =====
+                const loadRouteRules = async () => {
+                    advFeatures.loadingRoute = true;
+                    try {
+                        const res = await api('/api/settings/emby-proxy/route-rules');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            advFeatures.routeRules = data.data.route_rules || [];
+                        }
+                    } catch (e) { console.warn('加载路由规则失败:', e); }
+                    advFeatures.loadingRoute = false;
+                };
+                const addRouteRule = () => {
+                    advFeatures.routeRules.push({ mode: 'proxy', match_field: 'ua', match_op: 'contains', match_value: '' });
+                };
+                const saveRouteRules = async () => {
+                    advFeatures.savingRoute = true;
+                    try {
+                        const res = await api('/api/settings/emby-proxy/route-rules', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ route_rules: advFeatures.routeRules }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '路由规则已保存' : (data.message || '保存失败'));
+                    } catch (e) { showToast('保存失败：网络错误'); }
+                    advFeatures.savingRoute = false;
+                };
+                const loadCacheWarmer = async () => {
+                    try {
+                        const res = await api('/api/settings/cache-warmer');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            cacheWarmer.enabled = !!data.data.enabled;
+                            cacheWarmer.cron = data.data.cron || '0 3 * * *';
+                            cacheWarmer.maxFiles = data.data.max_files || 100;
+                        }
+                    } catch (e) { console.warn('加载缓存预热配置失败:', e); }
+                };
+                const saveCacheWarmer = async () => {
+                    cacheWarmer.saving = true;
+                    try {
+                        const res = await api('/api/settings/cache-warmer', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: cacheWarmer.enabled, cron: cacheWarmer.cron, max_files: cacheWarmer.maxFiles }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '缓存预热配置已保存' : (data.message || '保存失败'));
+                    } catch (e) { showToast('保存失败'); }
+                    cacheWarmer.saving = false;
+                };
+                const runCacheWarmer = async () => {
+                    cacheWarmer.running = true; cacheWarmer.resultMsg = '';
+                    try {
+                        const res = await api('/api/settings/cache-warmer/run', { method: 'POST' });
+                        const data = await res.json();
+                        cacheWarmer.resultMsg = data.code === 0 ? `预热完成：${data.data.total_warmed || 0} 个文件` : (data.message || '预热失败');
+                    } catch (e) { cacheWarmer.resultMsg = '预热失败：网络错误'; }
+                    cacheWarmer.running = false;
+                };
+                const loadTgBot = async () => {
+                    try {
+                        const res = await api('/api/settings/telegram-bot');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            tgBot.enabled = !!data.data.enabled;
+                            tgBot.token = data.data.token || '';
+                            tgBot.allowedChatIds = (data.data.allowed_chat_ids || []).join(',');
+                            tgBot.status = data.data.status || null;
+                        }
+                    } catch (e) { console.warn('加载 TG Bot 配置失败:', e); }
+                };
+                const saveTgBot = async () => {
+                    tgBot.saving = true; tgBot.resultMsg = '';
+                    try {
+                        const chatIds = tgBot.allowedChatIds.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                        const res = await api('/api/settings/telegram-bot', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: tgBot.enabled, token: tgBot.token, allowed_chat_ids: chatIds }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) { showToast('TG Bot 配置已保存'); await loadTgBot(); }
+                        else showToast(data.message || '保存失败');
+                    } catch (e) { showToast('保存失败'); }
+                    tgBot.saving = false;
+                };
+                const testTgBot = async () => {
+                    tgBot.testing = true; tgBot.resultMsg = '';
+                    try {
+                        const res = await api('/api/settings/telegram-bot/test', { method: 'POST' });
+                        const data = await res.json();
+                        tgBot.resultMsg = data.code === 0 ? '测试消息已发送' : (data.message || '发送失败');
+                    } catch (e) { tgBot.resultMsg = '发送失败：网络错误'; }
+                    tgBot.testing = false;
+                };
+
                 // 检测账号
                 const checkAccount = async (a) => {
                     showToast('检测中...');
@@ -9455,6 +9669,8 @@ av:
                         await loadOrganizeConfig();
                         await loadClouddownloadConfig();
                         await checkFfprobeStatus();
+                        // P1 高级功能加载
+                        loadRouteRules(); loadCacheWarmer(); loadTgBot();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
                     } catch (e) {
@@ -11503,6 +11719,9 @@ av:
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
                     rateStats, loadRateStats,
+                    advFeatures, loadRouteRules, addRouteRule, saveRouteRules,
+                    cacheWarmer, loadCacheWarmer, saveCacheWarmer, runCacheWarmer,
+                    tgBot, loadTgBot, saveTgBot, testTgBot,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
                     formatTimestamp, formatBytes,

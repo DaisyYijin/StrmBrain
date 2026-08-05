@@ -43,6 +43,12 @@ async def init_scheduler():
     except Exception as e:
         logger.warning(f"注册自动化规则定时任务失败: {e}")
 
+    # P1-10: 注册缓存预热定时任务
+    try:
+        await register_cache_warmer()
+    except Exception as e:
+        logger.warning(f"注册缓存预热定时任务失败: {e}")
+
 
 async def shutdown_scheduler():
     """关闭调度器"""
@@ -686,3 +692,72 @@ async def _run_automation_rule(rule_id):
         logger.info(f"自动化规则 {rule_id} 执行完成: success={result.get('success')}")
     except Exception as e:
         logger.warning(f"自动化规则 {rule_id} 执行异常: {e}")
+
+
+# ===== P1-10: 缓存预热（cron 可配置，由设置页管理） =====
+
+# 缓存预热的 Job ID
+CACHE_WARMER_JOB_ID = "cache_warmer_schedule"
+
+# 缓存预热配置的 settings.json key
+CACHE_WARMER_SETTING_KEY = "cache_warmer"
+
+# 默认缓存预热 cron（每天凌晨 3 点）
+DEFAULT_CACHE_WARMER_CRON = "0 3 * * *"
+
+
+async def register_cache_warmer():
+    """注册缓存预热定时任务（cron 从配置读取，默认 '0 3 * * *'）
+
+    配置存储于 settings.json 的 cache_warmer 字段：{"enabled": bool, "cron": str, "max_files": int}。
+    - enabled=false 或 cron 为空时不注册
+    - 设置页修改配置后调用本函数重注册
+    """
+    global _scheduler
+    if _scheduler is None:
+        return
+
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_setting
+    logger = get_logger()
+
+    # 先移除旧任务（保证重注册生效）
+    try:
+        _scheduler.remove_job(CACHE_WARMER_JOB_ID)
+    except Exception:
+        pass
+
+    try:
+        cfg = read_setting(CACHE_WARMER_SETTING_KEY) or {}
+        enabled = cfg.get("enabled", False)
+        cron_str = str(cfg.get("cron") or DEFAULT_CACHE_WARMER_CRON).strip()
+        if not enabled or not cron_str:
+            logger.info("缓存预热定时任务未启用（enabled=false 或 cron 为空），跳过注册")
+            return
+        trigger = CronTrigger.from_crontab(cron_str)
+        _scheduler.add_job(
+            _run_cache_warmer,
+            trigger=trigger,
+            id=CACHE_WARMER_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(f"已注册缓存预热定时任务 (id={CACHE_WARMER_JOB_ID}, cron='{cron_str}')")
+    except Exception as e:
+        logger.warning(f"注册缓存预热定时任务失败: {e}")
+
+
+async def _run_cache_warmer():
+    """缓存预热 cron 触发执行体：调用 CacheWarmer.warm_once 预加载缓存"""
+    from app.core.logbuffer import get_logger
+    from app.services.cache_warmer import get_cache_warmer
+
+    logger = get_logger()
+    logger.info("缓存预热定时任务触发")
+    try:
+        result = await get_cache_warmer().warm_once()
+        logger.info(
+            f"缓存预热完成: 直链 {result.get('warmed', 0)} 个, "
+            f"扫描 {result.get('scanned', 0)} 个, 耗时 {result.get('duration', 0)}s"
+        )
+    except Exception as e:
+        logger.warning(f"缓存预热执行异常: {e}")

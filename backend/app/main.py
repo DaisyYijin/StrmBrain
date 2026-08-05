@@ -88,6 +88,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"通知管理器初始化失败: {e}")
 
+    # 初始化 Telegram Bot 双向控制服务
+    try:
+        from app.services.telegram_bot import get_telegram_bot
+        get_telegram_bot().start()
+        logger.info("Telegram Bot 服务已初始化")
+    except Exception as e:
+        logger.warning(f"Telegram Bot 服务初始化失败: {e}")
+
     # 初始化上传队列
     try:
         from app.services.upload_queue import init_upload_queue
@@ -155,6 +163,13 @@ async def lifespan(app: FastAPI):
         await get_life_event_monitor().stop()
     except Exception as e:
         logger.warning(f"停止 115 生活事件监控时异常: {e}")
+
+    # 停止 Telegram Bot 服务
+    try:
+        from app.services.telegram_bot import get_telegram_bot
+        await get_telegram_bot().stop()
+    except Exception as e:
+        logger.warning(f"停止 Telegram Bot 服务时异常: {e}")
 
     # 停止媒体库删除级联服务
     try:

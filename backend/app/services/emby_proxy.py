@@ -171,6 +171,72 @@ def _set_cached_response(key: str, content: bytes, status: int, headers: dict, t
         }
 
 
+# ===== P1-7: 多版本播放源排序 =====
+# 按 resolution/codec/bitrate 对 MediaSources 排序，优先返回高质量源。
+# 从每个 source 的 MediaStreams 中提取 Video stream 的 Height/Codec。
+
+# 编码优先级（数值越小优先级越高）
+_CODEC_PRIORITY = {
+    "hevc": 0,
+    "h265": 1,
+    "av1": 2,
+    "h264": 3,
+    "mpeg4": 4,
+}
+
+
+def _get_video_stream(src: dict) -> Optional[dict]:
+    """从 MediaSource 的 MediaStreams 数组中提取第一个 Video stream"""
+    streams = src.get("MediaStreams", []) or []
+    for stream in streams:
+        if (stream.get("Type", "") or "").lower() == "video":
+            return stream
+    return None
+
+
+def _sort_media_sources(sources: list) -> list:
+    """P1-7: 按 version_sort 配置对 MediaSources 排序。
+    读取 read_setting("emby_proxy") 中的 version_sort 字段：
+    - sort_by: "resolution"|"codec"|"bitrate"|"none"
+    - sort_desc: bool（是否降序）
+    sort_by=none 时不排序（保持原序）。
+    """
+    try:
+        cfg = read_setting("emby_proxy")
+    except Exception:
+        return sources
+    version_sort = cfg.get("version_sort", {}) or {}
+    sort_by = version_sort.get("sort_by", "none")
+    sort_desc = bool(version_sort.get("sort_desc", True))
+
+    if sort_by == "none":
+        return sources
+
+    def _key(src: dict):
+        video = _get_video_stream(src)
+        if sort_by == "resolution":
+            # 按 Video.Height 降序（4K > 1080P > 720P）
+            height = 0
+            if video:
+                height = video.get("Height", 0) or 0
+            return height
+        if sort_by == "codec":
+            # 按 Video.Codec 优先级（hevc > h265 > av1 > h264 > mpeg4 > 其他）
+            codec = ""
+            if video:
+                codec = (video.get("Codec", "") or "").lower()
+            return _CODEC_PRIORITY.get(codec, 99)
+        if sort_by == "bitrate":
+            # 按 Bitrate 降序
+            return src.get("Bitrate", 0) or 0
+        return 0
+
+    try:
+        return sorted(sources, key=_key, reverse=sort_desc)
+    except Exception:
+        return sources
+
+
 # ===== P3: MediaSources 改写辅助函数 =====
 # 供 handle_playback_info 与 handle_items 共用，保证改写逻辑一致。
 # 参考 qmediasync useCacheSpacePlaybackInfo：带 MediaSourceId 时将选中源移到最前。
@@ -189,6 +255,9 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
     data = _copy.deepcopy(data)
     sources = data.get("MediaSources", []) or []
 
+    # P1-7: 多版本播放源排序（在现有改写逻辑之前执行）
+    sources = _sort_media_sources(sources)
+
     # 带 MediaSourceId 时：将选中源移到最前，保证客户端优先使用
     if media_source_id:
         for idx, src in enumerate(sources):
@@ -196,6 +265,9 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
                 if idx > 0:
                     sources.insert(0, sources.pop(idx))
                 break
+
+    # P1-5: 收集 STRM 源的 pickcode（在 Path 被删除前提取，用于虚拟转码源注入）
+    strm_pickcodes: dict[str, str] = {}
 
     for src in sources:
         src_id = src.get("Id", "")
@@ -208,8 +280,12 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
         # 删除 Path 字段：STRM 内容是内部 URL（如 http://172.17.0.1:6060/...），
         # 客户端看到 HTTP 形式的 Path 会尝试 DirectPlay 直连该 URL。
         # 删除后客户端只能走 DirectStreamUrl → 反代 stream 接口 → 服务器端跟随获取 CDN 直链。
-        path = src.get("Path", "")
+        path = src.get("Path", "") or ""
         if path and (path.lower().endswith(".strm") or "pickcode=" in path or "account_id=" in path):
+            # P1-5: 在删除 Path 前提取 pickcode（用于虚拟转码源注入）
+            pcm = re.search(r"pickcode=([^&]+)", path)
+            if pcm:
+                strm_pickcodes[src_id] = pcm.group(1)
             src.pop("Path", None)
         # DirectStreamUrl 指向反代自身的 stream 接口（相对路径，客户端基于反代地址拼接）
         src["DirectStreamUrl"] = (
@@ -218,6 +294,37 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
         )
         # P1: 注入外部播放器 ExternalUrls（仅 STRM 源）
         _inject_external_urls(src, item_id, api_key, request_host)
+
+    # P1-5: 115 转码 HLS 虚拟播放源注入（改写完成后）
+    # 为每个含 pickcode 的 STRM 源注入一个虚拟转码 MediaSource，
+    # 指向 /api/playback/m3u8 端点（已存在，会拉取并重写 m3u8）。
+    if strm_pickcodes:
+        try:
+            proxy_cfg = read_setting("emby_proxy")
+        except Exception:
+            proxy_cfg = {}
+        # 配置开关 enable_hls_vsource（默认 True）
+        if proxy_cfg.get("enable_hls_vsource", True):
+            new_sources: list = []
+            for src in sources:
+                new_sources.append(src)
+                src_id = src.get("Id", "")
+                pickcode = strm_pickcodes.get(src_id, "")
+                if pickcode:
+                    # 虚拟转码源：插入到原源之后（原源在第一位，虚拟源在第二位）
+                    virtual_src = {
+                        "Id": f"virtual-transcoded_{src_id}",
+                        "Name": "115 转码直链 - 原画",
+                        "Container": "hls",
+                        "Protocol": "Hls",
+                        "SupportsDirectPlay": False,
+                        "SupportsDirectStream": True,
+                        "SupportsTranscoding": False,
+                        "DirectStreamUrl": f"/api/playback/m3u8?url={_b64url_encode(f'115://{pickcode}')}",
+                        "Path": "",
+                    }
+                    new_sources.append(virtual_src)
+            sources = new_sources
 
     data["MediaSources"] = sources
     # A2: 注入固定 DeviceProfile，双重保险防转码
@@ -428,6 +535,73 @@ def _fix_range_header(range_header: str) -> str:
     if not range_header.lower().startswith("bytes=") and range_header.startswith("0-"):
         return f"bytes={range_header}"
     return range_header
+
+
+# ===== P1-6: 路由规则系统（RouteRule）=====
+# 从 read_setting("emby_proxy") 读取 route_rules（list of dict），
+# 每条规则：{"mode": "proxy"|"redirect"|"block",
+#           "match_field": "path"|"ua"|"ip"|"filename",
+#           "match_op": "contains"|"equals"|"startsWith"|"regex",
+#           "match_value": str}
+# 在 handle_stream 中按规则顺序匹配，首个命中的 mode 决定处理策略。
+
+
+def _match_route_rule(rules: list, path: str, ua: str, ip: str, filename: str) -> Optional[str]:
+    """P1-6: 按规则顺序匹配路由规则，返回首个命中规则的 mode 或 None。
+
+    参数:
+        rules:  路由规则列表（list of dict）
+        path:   请求路径（request.url.path）
+        ua:     客户端 User-Agent
+        ip:     客户端 IP
+        filename: 媒体文件名
+    返回:
+        "proxy" | "redirect" | "block" | None
+    """
+    if not rules:
+        return None
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        match_field = rule.get("match_field", "") or ""
+        match_op = rule.get("match_op", "") or ""
+        match_value = rule.get("match_value", "") or ""
+        mode = rule.get("mode", "") or ""
+        if not mode or not match_field or not match_op:
+            continue
+
+        # 根据 match_field 取出待匹配的目标值
+        if match_field == "path":
+            target = path
+        elif match_field == "ua":
+            target = ua
+        elif match_field == "ip":
+            target = ip
+        elif match_field == "filename":
+            target = filename
+        else:
+            continue
+
+        # 根据 match_op 执行匹配
+        matched = False
+        if match_op == "contains":
+            matched = match_value in target
+        elif match_op == "equals":
+            matched = target == match_value
+        elif match_op == "startsWith":
+            matched = target.startswith(match_value)
+        elif match_op == "regex":
+            try:
+                matched = bool(re.search(match_value, target))
+            except re.error:
+                # 正则表达式无效，跳过该规则
+                continue
+        else:
+            continue
+
+        if matched:
+            return mode
+    return None
 
 
 # ===== 反代服务状态（全局单例）=====
@@ -661,6 +835,84 @@ async def _follow_strm_url(target: str, client_ua: str = "") -> Optional[str]:
     return None
 
 
+# ===== P1-11: 并行 Range 代理 =====
+# 当 Range 请求跨度 > 10MB 时，将 Range 拆分为多个子段并行拉取，加速大文件传输。
+# 每个子段最大 5MB，子段数不超过 4（防止过多并发）。
+# 每账号并发上限保持现有的 _MAX_CONCURRENT_PER_ACCOUNT（并行子段在同一个代理槽位内）。
+
+_PARALLEL_RANGE_THRESHOLD = 10_000_000  # 10MB：超过此跨度启用并行拉取
+_PARALLEL_CHUNK_SIZE = 5_000_000        # 5MB：每个子段的目标大小
+_PARALLEL_MAX_SEGMENTS = 4              # 最大子段数
+
+
+def _split_range(start: int, end: int) -> list[tuple[int, int]]:
+    """P1-11: 将大 Range 拆分为多个子段。
+
+    每个子段目标大小 5MB，子段数不超过 4。
+    若总跨度超过 4*5MB=20MB，则自动增大每段大小以保持在 4 段以内。
+
+    参数:
+        start: 起始字节偏移（含）
+        end:   结束字节偏移（含）
+    返回:
+        [(start1, end1), (start2, end2), ...] 子段列表
+    """
+    span = end - start + 1  # 字节数（含首尾）
+    # 目标每段 5MB；若总跨度超过 4*5MB=20MB，则增大每段以保持在 4 段以内
+    chunk_size = max(_PARALLEL_CHUNK_SIZE, (span + _PARALLEL_MAX_SEGMENTS - 1) // _PARALLEL_MAX_SEGMENTS)
+    ranges: list[tuple[int, int]] = []
+    pos = start
+    while pos <= end:
+        chunk_end = min(pos + chunk_size - 1, end)
+        ranges.append((pos, chunk_end))
+        pos = chunk_end + 1
+    return ranges
+
+
+async def _parallel_fetch(cdn_url: str, ranges: list[tuple[int, int]], ua: str) -> Optional[list[bytes]]:
+    """P1-11: 并行从 CDN 拉取多个子段并按序返回。
+
+    使用 asyncio.gather 并行拉取所有子段，任一子段失败则整体返回 None。
+    每账号并发上限由 handle_range_proxy 的代理槽位控制（本函数在槽位内执行）。
+
+    参数:
+        cdn_url: CDN 直链 URL
+        ranges:  子段列表 [(start, end), ...]
+        ua:      客户端 User-Agent（用于 115 直链 UA 一致性）
+    返回:
+        按序排列的字节块列表 [bytes, bytes, ...]，失败返回 None
+    """
+    import asyncio
+
+    async def _fetch_one(seg_start: int, seg_end: int) -> Optional[bytes]:
+        headers = {"Range": f"bytes={seg_start}-{seg_end}"}
+        if ua:
+            headers["User-Agent"] = ua
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=60, write=10, pool=10),
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(cdn_url, headers=headers)
+                if resp.status_code == 206:
+                    return resp.content
+                logger.warning(f"[proxy] 并行子段拉取失败: {seg_start}-{seg_end}, HTTP {resp.status_code}")
+                return None
+        except Exception as e:
+            logger.warning(f"[proxy] 并行子段拉取异常: {seg_start}-{seg_end}: {e}")
+            return None
+
+    try:
+        results = await asyncio.gather(*[_fetch_one(s, e) for s, e in ranges])
+    except Exception as e:
+        logger.warning(f"[proxy] 并行拉取 gather 异常: {e}")
+        return None
+
+    if any(r is None for r in results):
+        return None
+    return list(results)
+
+
 async def handle_range_proxy(
     request: Request,
     strm_target: str,
@@ -712,9 +964,66 @@ async def handle_range_proxy(
                         range_header = f"bytes={start + 1}-"
                     logger.info(f"[proxy] seek 偏移修正: {range_header}")
 
+        # P1-11: 并行 Range 代理 - 大跨度请求拆分并行拉取
+        # 当 Range 跨度 > 10MB 时，拆分为多个子段用 asyncio.gather 并行拉取
+        use_parallel = False
+        parallel_ranges: list[tuple[int, int]] = []
+        parallel_start: Optional[int] = None
+        parallel_end: Optional[int] = None
+        if range_header:
+            prm = re.match(r"(?i)^bytes=(\d+)-(\d*)$", range_header.strip())
+            if prm:
+                parallel_start = int(prm.group(1))
+                parallel_end = int(prm.group(2)) if prm.group(2) else None
+                # 仅当结束值存在且跨度 > 10MB 时启用并行
+                if parallel_end is not None and (parallel_end - parallel_start) > _PARALLEL_RANGE_THRESHOLD:
+                    parallel_ranges = _split_range(parallel_start, parallel_end)
+                    use_parallel = len(parallel_ranges) > 1
+                    if use_parallel:
+                        logger.info(f"[proxy] 并行 Range 代理: {parallel_start}-{parallel_end}, "
+                                    f"{len(parallel_ranges)} 子段")
+
         # 最多重试 2 次（链接失效自愈）
         for attempt in range(2):
             try:
+                # P1-11: 并行 Range 代理（大跨度请求）
+                # 当 Range 跨度 > 10MB 时，拆分为多个子段并行拉取，合并后流式返回
+                if use_parallel:
+                    chunks = await _parallel_fetch(cdn_url, parallel_ranges, client_ua)
+                    if chunks is not None:
+                        # 合并结果流式返回
+                        from starlette.responses import StreamingResponse
+
+                        total_size = sum(len(c) for c in chunks)
+
+                        async def parallel_stream():
+                            for chunk in chunks:
+                                yield chunk
+
+                        resp_headers = {
+                            "Content-Range": f"bytes {parallel_start}-{parallel_end}/*",
+                            "Accept-Ranges": "bytes",
+                            "Content-Length": str(total_size),
+                            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                        }
+                        logger.info(f"[proxy] 并行 Range 代理完成: {parallel_start}-{parallel_end}, "
+                                    f"{len(parallel_ranges)} 子段, {total_size} 字节")
+                        return StreamingResponse(
+                            parallel_stream(),
+                            status_code=206,
+                            headers=resp_headers,
+                            media_type="video/mp4",
+                        )
+                    # 并行拉取失败，标记链接失效并重试
+                    logger.info(f"[proxy] 并行 Range 代理失败（第 {attempt+1} 次），尝试重新获取直链")
+                    with _link_expiry_lock:
+                        _link_expiry_cache[strm_target] = _time.time() + _LINK_EXPIRY_SECONDS
+                    cdn_url = await _follow_strm_url(strm_target, client_ua)
+                    if cdn_url:
+                        continue
+                    return None
+
+                # 现有单流 Range 代理逻辑（跨度 <= 10MB 时走此路径）
                 headers = {}
                 if client_ua:
                     headers["User-Agent"] = client_ua
@@ -1132,6 +1441,22 @@ async def handle_stream(request: Request):
         fwd = request.headers.get("X-Forwarded-For", "")
         if fwd:
             client_ip = fwd.split(",")[0].strip()
+
+    # P1-6: 路由规则系统 - 按规则顺序匹配（获取到 emby_path、ua、ip、filename 后）
+    route_mode: Optional[str] = None
+    try:
+        _route_cfg = read_setting("emby_proxy")
+        _route_rules = _route_cfg.get("route_rules", []) or []
+    except Exception:
+        _route_rules = []
+    if _route_rules:
+        route_mode = _match_route_rule(_route_rules, request.url.path, ua, client_ip, file_name)
+        if route_mode == "block":
+            logger.warning(f"[proxy] 路由规则拦截 (block): {file_name}, path={request.url.path[:80]}")
+            return JSONResponse(status_code=403, content={"detail": "路由规则禁止访问"})
+        if route_mode:
+            logger.info(f"[proxy] 路由规则匹配: mode={route_mode}, file={file_name}")
+
     play_label = f"[proxy] 302 播放: {file_name} (客户端: {client}, IP: {client_ip or '未知'})"
 
     # 日志去重：播放器启动时会对同一文件发起多个请求（预探测/分段拉取/seek），
@@ -1164,28 +1489,31 @@ async def handle_stream(request: Request):
             if _is_self_strm_url(target):
                 # A1 + A10: 根据 UA 兼容矩阵决定策略
                 # Infuse 强制使用 Range 代理（不跟随 302）；其他客户端优先 Range，失败回退 302
-                force_range = client_compat.get("force_range_proxy", False)
+                # P1-6: 路由规则覆盖 UA 策略（proxy 强制 Range 代理，redirect 强制 302）
+                force_range = client_compat.get("force_range_proxy", False) or route_mode == "proxy"
                 # I4: 从 STRM 内容解析真实 account_id，恢复每账号并发限流
                 #（原先写死 account_id=0 导致每账号 3 并发退化为全局 3 并发）
                 acct_id = _extract_account_id(target)
-                # I3 P6: need_seek_fix 客户端（VidHub/SenPlayer）开启 Range 起始偏移修正
-                range_response = await handle_range_proxy(
-                    request, target, ua,
-                    account_id=acct_id,
-                    fix_seek=client_compat.get("need_seek_fix", False),
-                )
-                if range_response:
-                    if _should_log_play(play_label):
-                        logger.info(f"{play_label} -> Range 分片流代理 (client={client})")
-                    return range_response
+                # P1-6: route_mode == "redirect" 时跳过 Range 代理，直接走 302 重定向
+                if route_mode != "redirect":
+                    # I3 P6: need_seek_fix 客户端（VidHub/SenPlayer）开启 Range 起始偏移修正
+                    range_response = await handle_range_proxy(
+                        request, target, ua,
+                        account_id=acct_id,
+                        fix_seek=client_compat.get("need_seek_fix", False),
+                    )
+                    if range_response:
+                        if _should_log_play(play_label):
+                            logger.info(f"{play_label} -> Range 分片流代理 (client={client})")
+                        return range_response
 
-                # Infuse 等 force_range 客户端 Range 代理失败时不再回退 302（因为不跟随）
-                # 而是回源让 Emby 处理
-                if force_range:
-                    logger.warning(f"[proxy] Range 代理失败且客户端不支持 302，回源: {play_label}")
-                    return await proxy_origin(request)
+                    # Infuse 等 force_range 客户端 Range 代理失败时不再回退 302（因为不跟随）
+                    # 而是回源让 Emby 处理
+                    if force_range:
+                        logger.warning(f"[proxy] Range 代理失败且客户端不支持 302，回源: {play_label}")
+                        return await proxy_origin(request)
 
-                # 回退：302 重定向方式
+                # 回退：302 重定向方式（route_mode == "redirect" 时为强制路径）
                 final_url = await _follow_strm_url(target, ua)
                 if final_url:
                     if _should_log_play(play_label):
