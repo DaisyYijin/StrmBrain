@@ -3,6 +3,7 @@ TMDB (The Movie Database) API 服务
 用于搜索影视信息，获取元数据（genre_ids, original_language, origin_country 等）
 供二级分类使用
 """
+import difflib
 import re
 import time
 from collections import OrderedDict
@@ -158,6 +159,107 @@ def _extract_chinese_title(title: str) -> str:
     if not segments:
         return ''
     return max(segments, key=len)
+
+
+# ===== 搜索置信度评分（参考 qmediasync：候选评分 score 字段） =====
+
+# 低置信度阈值：评分低于此值的搜索结果视为"匹配存疑"
+# 整理服务根据 _confidence 决定是否移入识别不准目录
+CONFIDENCE_THRESHOLD = 0.45
+
+
+def _normalize_title(s: str) -> str:
+    """标题归一化：小写、去空格和常见标点，用于相似度比较。
+    如 'Spider-Man: No Way Home' -> 'spidermannowayhome'"""
+    if not s:
+        return ""
+    s = s.lower()
+    return re.sub(r'[\s._\-\[\]()【】（）:：,，;；!！?？\'"·&]+', '', s)
+
+
+def _score_candidate(query_title: str, query_year: Optional[str], candidate: dict) -> float:
+    """
+    计算 TMDB 候选结果的匹配评分（0.0 ~ 1.0）。
+
+    参考 qmediasync：对搜索结果计算 score（标题相似度 + 年份一致性），
+    选评分最高的候选，避免盲选 results[0] 导致识别错误。
+
+    评分构成：
+    - 标题相似度（权重 0.7）：归一化后完全相等=1.0，包含关系=0.85，否则 SequenceMatcher 相似度
+    - 年份一致性（权重 0.3）：候选年份与查询年份一致=1.0，查询无年份=0.6 中性，不一致=0.0
+    """
+    query_norm = _normalize_title(query_title)
+    if not query_norm:
+        return 0.0
+
+    # 标题候选：title/name/original_title/original_name 任一个匹配取最高分
+    # （中英文标题都可能出现，全部参与比较避免漏匹配）
+    cand_titles = [
+        candidate.get("title", ""),
+        candidate.get("name", ""),
+        candidate.get("original_title", ""),
+        candidate.get("original_name", ""),
+    ]
+    best_title_score = 0.0
+    for t in cand_titles:
+        tn = _normalize_title(t)
+        if not tn:
+            continue
+        if tn == query_norm:
+            score = 1.0
+        elif query_norm in tn or tn in query_norm:
+            score = 0.85
+        else:
+            score = difflib.SequenceMatcher(None, query_norm, tn).ratio()
+        best_title_score = max(best_title_score, score)
+
+    # 年份一致性
+    year_score = 0.6  # 查询无年份时中性
+    if query_year:
+        cand_date = candidate.get("release_date") or candidate.get("first_air_date") or ""
+        cand_year = cand_date[:4] if len(cand_date) >= 4 else ""
+        if cand_year:
+            year_score = 1.0 if cand_year == query_year else 0.0
+
+    return round(0.7 * best_title_score + 0.3 * year_score, 3)
+
+
+def _pick_best_result(results: list, query_title: str, query_year: Optional[str], kind: str) -> Optional[dict]:
+    """
+    从搜索结果中按评分选取最佳候选，附加置信度字段。
+    kind: "movie" / "tv"，仅用于日志。
+    返回附加了 _confidence / _candidates 字段的候选 dict（浅拷贝），无结果返回 None。
+    """
+    if not results:
+        return None
+    scored = [(_score_candidate(query_title, query_year, cand), cand) for cand in results]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    top_score, best = scored[0]
+
+    # 日志展示前 5 候选（参考 qmediasync：搜索结果前5）
+    log_candidates = [
+        {
+            "title": c.get("title") or c.get("name") or "",
+            "year": (c.get("release_date") or c.get("first_air_date") or "")[:4],
+            "tmdb_id": c.get("id"),
+            "score": round(s, 2),
+        }
+        for s, c in scored[:5]
+    ]
+    logger.info(f"TMDB 搜索{kind}候选前{len(log_candidates)}: {log_candidates}")
+
+    tmdb_id = best.get("id")
+    if not tmdb_id:
+        return None
+
+    logger.info(f"TMDB 搜索{kind}: 选中 id={tmdb_id}, title={best.get('title') or best.get('name')}, score={top_score:.2f}")
+
+    # 浅拷贝并附加置信度字段（_ 前缀为内部字段，不污染 TMDB 原始数据）
+    info = dict(best)
+    info["_confidence"] = top_score
+    info["_candidates"] = log_candidates
+    return info
 
 
 class TmdbService:
@@ -331,7 +433,7 @@ class TmdbService:
             logger.info(f"TMDB 搜索电影 (带年份): query='{title}', year={year}")
             data = await cls._http_get(f"{base_url}/search/movie", params_with_year)
             if data and data.get("results"):
-                return await cls._pick_movie_result(data["results"])
+                return await cls._pick_movie_result(data["results"], title, year)
 
         # 第二轮：不带年份搜索
         params = {
@@ -346,21 +448,26 @@ class TmdbService:
             logger.info(f"TMDB 搜索电影: 无结果 (title='{title}')")
             return None
 
-        return await cls._pick_movie_result(data["results"])
+        return await cls._pick_movie_result(data["results"], title, year)
 
     @classmethod
-    async def _pick_movie_result(cls, results: list) -> Optional[dict]:
-        """从电影搜索结果中选取最佳匹配并获取详情"""
-        movie = results[0]
-        tmdb_id = movie.get("id")
-        if not tmdb_id:
+    async def _pick_movie_result(cls, results: list, query_title: str = "", query_year: Optional[str] = None) -> Optional[dict]:
+        """从电影搜索结果中按评分选取最佳匹配并获取详情。
+        query_title/query_year: 搜索上下文，用于置信度评分（参考 qmediasync score）。"""
+        best = _pick_best_result(results, query_title, query_year, "电影")
+        if not best:
             return None
-
-        logger.info(f"TMDB 搜索电影: 找到 id={tmdb_id}, title={movie.get('title')}")
+        tmdb_id = best.get("id")
 
         # 获取详情（需要 production_countries）
         detail = await cls._get_movie_detail(tmdb_id)
-        return detail if detail else movie
+        if detail:
+            # 保留置信度字段
+            detail = dict(detail)
+            detail["_confidence"] = best.get("_confidence", 0.0)
+            detail["_candidates"] = best.get("_candidates", [])
+            return detail
+        return best
 
     @classmethod
     async def _search_tv(cls, title: str, year: Optional[str] = None) -> Optional[dict]:
@@ -379,7 +486,7 @@ class TmdbService:
             logger.info(f"TMDB 搜索电视剧 (带年份): query='{title}', year={year}")
             data = await cls._http_get(f"{base_url}/search/tv", params_with_year)
             if data and data.get("results"):
-                return await cls._pick_tv_result(data["results"])
+                return await cls._pick_tv_result(data["results"], title, year)
 
         # 第二轮：不带年份搜索（年份可能不准确或 TMDB 未收录该年份）
         params = {
@@ -394,21 +501,26 @@ class TmdbService:
             logger.info(f"TMDB 搜索电视剧: 无结果 (title='{title}')")
             return None
 
-        return await cls._pick_tv_result(data["results"])
+        return await cls._pick_tv_result(data["results"], title, year)
 
     @classmethod
-    async def _pick_tv_result(cls, results: list) -> Optional[dict]:
-        """从电视剧搜索结果中选取最佳匹配并获取详情"""
-        tv = results[0]
-        tmdb_id = tv.get("id")
-        if not tmdb_id:
+    async def _pick_tv_result(cls, results: list, query_title: str = "", query_year: Optional[str] = None) -> Optional[dict]:
+        """从电视剧搜索结果中按评分选取最佳匹配并获取详情。
+        query_title/query_year: 搜索上下文，用于置信度评分（参考 qmediasync score）。"""
+        best = _pick_best_result(results, query_title, query_year, "电视剧")
+        if not best:
             return None
-
-        logger.info(f"TMDB 搜索电视剧: 找到 id={tmdb_id}, name={tv.get('name')}")
+        tmdb_id = best.get("id")
 
         # 获取详情
         detail = await cls._get_tv_detail(tmdb_id)
-        return detail if detail else tv
+        if detail:
+            # 保留置信度字段
+            detail = dict(detail)
+            detail["_confidence"] = best.get("_confidence", 0.0)
+            detail["_candidates"] = best.get("_candidates", [])
+            return detail
+        return best
 
     @classmethod
     async def _http_get(cls, url: str, params: dict, retries: int = 2) -> Optional[dict]:

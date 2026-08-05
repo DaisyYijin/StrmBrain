@@ -326,3 +326,161 @@ def _parse_exts(exts_str: str) -> set:
             e = "." + e
         result.add(e)
     return result
+
+
+# ===== 下载完成自动整理（参考 qmediasync：离线下载 → 自动整理） =====
+
+# 自动整理相关配置 key（存于 clouddownload_config）
+AUTO_ORGANIZE_KEY = "auto_organize"         # bool：是否启用下载完成自动整理
+AUTO_ORGANIZE_DELAY_KEY = "auto_organize_delay"  # int：延迟秒数（等待下载开始/转存完成）
+
+# 视频扩展名（与 organize_service.VIDEO_EXTS 保持一致）
+_ORGANIZE_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".m2ts", ".rmvb", ".iso"}
+
+
+def schedule_auto_organize_after_download(cookies: str, save_cid: str, retry: int = 0) -> bool:
+    """
+    下载任务添加成功后，注册一次性自动整理任务。
+    参考 qmediasync：添加离线下载 → 增加一次性任务-自动整理 → 移动转存数据 → 整理待刮削库。
+
+    Args:
+        cookies: 115 账号 cookies
+        save_cid: 转存/保存目录 cid（下载完成后文件所在目录）
+        retry: 重试次数（转存目录暂无文件时递增重试）
+
+    Returns:
+        是否成功注册
+    """
+    global _scheduler
+    if _scheduler is None:
+        return False
+
+    from app.core.logbuffer import get_logger
+    from app.core.db_helper import read_setting
+
+    logger = get_logger()
+
+    # 读取配置：默认启用，延迟 60 秒（给 115 离线下载/转存留出时间）
+    cfg = read_setting("clouddownload_config") or {}
+    if not cfg.get(AUTO_ORGANIZE_KEY, True):
+        logger.info("下载完成自动整理未启用（auto_organize=false），跳过注册")
+        return False
+
+    # 基础延迟取配置值；重试时按 retry 递增（60s / 120s / 180s）
+    try:
+        base_delay = int(cfg.get(AUTO_ORGANIZE_DELAY_KEY, 60) or 60)
+    except (TypeError, ValueError):
+        base_delay = 60
+    if base_delay < 10:
+        base_delay = 10  # 最小 10 秒，避免配置错误导致立即执行
+    delay = base_delay * (retry + 1)
+
+    try:
+        from datetime import datetime, timedelta, timezone
+        from apscheduler.triggers.date import DateTrigger
+        run_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        job_id = f"auto_organize_dl_{int(time.time())}"
+        _scheduler.add_job(
+            _run_auto_organize_after_download,
+            trigger=DateTrigger(run_date=run_at),
+            id=job_id,
+            kwargs={"cookies": cookies, "save_cid": save_cid, "retry": retry + 1},
+        )
+        logger.info(f"已注册下载完成自动整理任务: {job_id}, {delay}s 后执行 (save_cid={save_cid}, retry={retry})")
+        return True
+    except Exception as e:
+        logger.warning(f"注册下载完成自动整理任务失败: {e}")
+        return False
+
+
+async def _run_auto_organize_after_download(cookies: str, save_cid: str, retry: int = 1):
+    """
+    下载完成自动整理执行体：
+    1. 检查转存目录是否有文件（无文件且重试次数内则延迟再试）
+    2. 移动转存数据到等待整理目录（organize_dirs.json 的 source_cid）
+    3. 执行整理（复用 _run_scheduled_organize）
+    参考 qmediasync：移动转存数据 → 整理待刮削库。
+    retry: 当前重试次数（schedule 时已 +1，默认 1 表示首次执行）。
+    """
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import get_first_valid_account
+    from app.config import CONFIG_DIR
+
+    logger = get_logger()
+
+    # 读取整理目录配置（等待整理目录 = organize source_cid）
+    dirs_file = CONFIG_DIR / "organize_dirs.json"
+    if not dirs_file.exists():
+        logger.info("自动整理：未找到整理目录配置，跳过")
+        return
+    try:
+        dirs_cfg = json.loads(dirs_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"自动整理：读取整理目录配置失败: {e}")
+        return
+
+    organize_source_cid = dirs_cfg.get("source_cid", "").strip()
+    if not organize_source_cid:
+        logger.info("自动整理：未配置等待整理目录，跳过")
+        return
+
+    # 使用当前有效账号（cookies 可能已切换）
+    account = get_first_valid_account()
+    if not account or account.get("status") == 0:
+        logger.warning("自动整理：未找到有效账号，跳过")
+        return
+    cookies = account.get("cookies", "")
+
+    from app.services.client_115 import Client115Service
+
+    # 1. 检查转存目录是否有文件（下载可能尚未完成）
+    if save_cid:
+        try:
+            listing = Client115Service.list_files(cookies, save_cid, 0, 10)
+            items = listing.get("data", []) if isinstance(listing, dict) else []
+            if not items:
+                if retry <= 3:
+                    # 暂无文件，延迟再试（下载/转存需要时间）
+                    logger.info(f"自动整理：转存目录暂无文件，重试 ({retry}/3)...")
+                    schedule_auto_organize_after_download(cookies, save_cid, retry)
+                else:
+                    logger.warning("自动整理：转存目录持续无文件，放弃自动整理")
+                return
+        except Exception as e:
+            logger.warning(f"自动整理：检查转存目录失败: {e}")
+            return
+
+        # 2. 移动转存数据到等待整理目录（保持目录结构：目录整体移动，文件单独移动）
+        if save_cid != organize_source_cid:
+            try:
+                listing = Client115Service.list_files(cookies, save_cid, 0, 1000)
+                items = listing.get("data", []) if isinstance(listing, dict) else []
+                moved = 0
+                for it in items:
+                    item_name = it.get("n", "")
+                    if not item_name:
+                        continue
+                    if not it.get("fid"):
+                        # 子目录：整体移动（保留结构）
+                        ok = Client115Service.move(cookies, [it.get("cid")], organize_source_cid, context=item_name)
+                    else:
+                        # 视频文件：移动到等待整理目录
+                        ext = ("." + item_name.rsplit(".", 1)[-1]).lower() if "." in item_name else ""
+                        if ext not in _ORGANIZE_VIDEO_EXTS:
+                            continue
+                        ok = Client115Service.move(cookies, [it.get("fid")], organize_source_cid, context=item_name)
+                    if ok:
+                        moved += 1
+                if moved > 0:
+                    logger.info(f"自动整理-移动转存数据: 移动 {moved} 项到等待整理目录")
+                else:
+                    logger.info("自动整理：转存目录无可移动的视频文件")
+            except Exception as e:
+                logger.warning(f"自动整理：移动转存数据失败: {e}")
+                return
+    else:
+        logger.info("自动整理：未指定转存目录（save_cid 为空），直接整理等待整理目录")
+
+    # 3. 执行整理
+    logger.info("自动整理：开始整理待刮削库...")
+    await _run_scheduled_organize(cookies=cookies, target_cid=organize_source_cid, logger=logger)

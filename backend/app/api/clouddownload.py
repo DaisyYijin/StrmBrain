@@ -69,6 +69,18 @@ async def add_task(payload: AddTaskRequest):
     if isinstance(result, dict) and result.get("error"):
         return ApiResponse(code=500, message=f"添加失败: {result['error']}")
 
+    # 下载任务添加成功后，注册一次性自动整理任务（参考 qmediasync：下载完成 → 自动整理）
+    # 从保存的目录配置读取 save_cid（请求未指定时），文件下载完成后自动移动并整理
+    if isinstance(result, dict) and result.get("state"):
+        try:
+            from app.core.scheduler import schedule_auto_organize_after_download
+            save_cid = payload.save_cid or (read_setting("clouddownload_config") or {}).get("save_cid", "")
+            if save_cid:
+                schedule_auto_organize_after_download(cookies, save_cid)
+        except Exception as e:
+            from app.core.logbuffer import get_logger
+            get_logger().warning(f"[clouddownload] 注册自动整理失败: {e}")
+
     return ApiResponse(data=result)
 
 

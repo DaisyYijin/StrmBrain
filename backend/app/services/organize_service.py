@@ -2102,6 +2102,21 @@ class OrganizeService:
                 logger.warning(f"[organize] TMDB 未找到 '{name}'，移到识别不准的目录")
                 return (None, None, None)
 
+        # 置信度评估（参考 qmediasync score 字段）：
+        # TMDB 返回的候选可能不是目标影视（如重名/同名不同作品），
+        # 评分低于阈值时移到识别不准目录，而不是盲选造成错误整理。
+        from app.services.tmdb_service import CONFIDENCE_THRESHOLD
+        confidence = tmdb_info.get("_confidence", 1.0)
+        if confidence < CONFIDENCE_THRESHOLD:
+            best_cand = (tmdb_info.get("_candidates") or [{}])[0]
+            cand_title = best_cand.get("title", "")
+            cand_year = best_cand.get("year", "")
+            logger.warning(
+                f"[organize] TMDB 匹配置信度过低 {confidence:.2f} '{name}' "
+                f"(候选: '{cand_title}' {cand_year})，移到识别不准的目录"
+            )
+            return (None, None, None)
+
         # 判断是电影还是电视剧
         # TMDB 搜索结果中有 release_date 的是电影，有 first_air_date 的是电视剧
         if "release_date" in tmdb_info and tmdb_info.get("release_date"):
