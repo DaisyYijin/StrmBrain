@@ -9915,7 +9915,7 @@ av:
                 const loadLifeMonitor = async () => {
                     lifeMonitor.loading = true;
                     try {
-                        const res = await api('/api/system/life-event-monitor');
+                        const res = await api('/api/life-event-monitor');
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
                             lifeMonitor.enabled = !!data.data.enabled;
@@ -9932,7 +9932,7 @@ av:
                     lifeMonitor.saving = true;
                     try {
                         const interval = Math.max(10, Math.floor(lifeMonitor.interval || 60));
-                        const res = await api('/api/system/life-event-monitor', {
+                        const res = await api('/api/life-event-monitor', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ enabled: lifeMonitor.enabled, interval }),
@@ -11280,6 +11280,9 @@ av:
                     clearRecycle, clearRecycleRun,
                     strmReplace, strmReplaceScan, strmReplaceRun,
                     missingEp, missingEpScan,
+                    strmClean, strmCleanScan, strmCleanRun,
+                    accountRepair, accountRepairExtract, accountRepairRun,
+                    baseUrlTool, baseUrlDetect, baseUrlExtract, baseUrlRun,
                     watcherState, loadWatcher, startWatcher, stopWatcher, stopAllWatchers, watcherPathText,
                     uploadQueueState, loadUploadQueue, retryUploads, clearUploads, uploadStatusLabel, uploadStatusIcon,
                     lifeMonitor, loadLifeMonitor, saveLifeMonitor,
