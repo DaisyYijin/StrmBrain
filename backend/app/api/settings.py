@@ -118,7 +118,7 @@ async def get_tmdb_settings():
         "api_key": data.get("api_key", ""),
         "api_domain": data.get("api_domain", "") or DEFAULT_API_DOMAIN,
         "image_domain": data.get("image_domain", "") or DEFAULT_IMAGE_DOMAIN,
-        "language": data.get("language", "both"),
+        "language": data.get("language", "zh"),
     })
 
 

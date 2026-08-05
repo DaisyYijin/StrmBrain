@@ -294,19 +294,18 @@ class TmdbService:
 
     @classmethod
     def _get_language(cls) -> str:
-        """获取 TMDB 搜索语言: both=中文+英文, zh=仅中文, en=仅英文"""
-        lang = cls._get_settings().get("language", "both")
-        if lang not in ("both", "zh", "en"):
-            lang = "both"
-        return lang
+        """获取 TMDB 搜索语言: zh=中文, en=英文（历史配置 both 兼容为中文）"""
+        lang = cls._get_settings().get("language", "zh")
+        if lang == "en":
+            return "en"
+        # zh 与历史 both 统一按中文处理（both 模式下 TMDB 自然回退英文）
+        return "zh"
 
     @classmethod
     def _get_tmdb_language_param(cls) -> str:
         """获取 TMDB API 的 language 参数值"""
-        lang = cls._get_language()
-        if lang == "en":
+        if cls._get_language() == "en":
             return "en-US"
-        # both 和 zh 都使用 zh-CN（both 模式下 TMDB 自然回退到英文）
         return "zh-CN"
 
     @classmethod
@@ -601,13 +600,12 @@ class TmdbService:
         如果 title/name 与 original_title/original_name 相同，且标题不包含中文字符，
         说明 TMDB 没有返回中文翻译，此时从 translations 列表中查找中文标题并替换。
         语言模式行为：
-          - both（中文+英文）：优先简体中文(zh-CN)，其次繁体中文(zh-TW)，最后任意 zh
-          - zh（仅中文）：仅使用简体中文(zh-CN)，不回退繁体，避免繁体标题
-          - en（仅英文）：不执行替换
+          - zh（中文）：优先简体中文(zh-CN)，其次繁体中文(zh-TW)，最后任意 zh
+          - en（英文）：不执行替换
         注意：如果标题已经包含中文字符（如国产剧原名就是中文），则不需要替换。
         """
         lang = cls._get_language()
-        # 仅英文模式：不需要强制中文标题
+        # 英文模式：不需要强制中文标题
         if lang == "en":
             return
         title = data.get(title_key, "") or ""
@@ -636,13 +634,8 @@ class TmdbService:
                             zh_tw_title = candidate
                         elif not zh_title:
                             zh_title = candidate
-            # 按语言模式选择
-            if lang == "zh":
-                # 仅中文：只用简体，不回退繁体
-                final = zh_cn_title
-            else:
-                # 中文+英文：简体 → 繁体 → 任意中文
-                final = zh_cn_title or zh_tw_title or zh_title
+            # zh 模式：简体 → 繁体 → 任意中文
+            final = zh_cn_title or zh_tw_title or zh_title
             if final:
                 data[title_key] = final
                 logger.info(f"TMDB 从 translations 提取中文标题: {original} -> {final}")
