@@ -2,6 +2,7 @@
 API 路由 - 系统信息（版本号、实时日志、本地账号、本地目录浏览、登录认证）
 """
 import os
+import threading
 import time
 from pathlib import Path
 from fastapi import APIRouter, Query, Depends, Request
@@ -25,29 +26,36 @@ router = APIRouter(prefix="/api", tags=["system"])
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_LOCKOUT_SECONDS = 300  # 5 分钟锁定
 _login_attempts: dict[str, list[float]] = {}  # IP -> [timestamp, ...]
+_login_attempts_lock = threading.Lock()
+
+# 注册互斥锁：保证"检查是否已注册 → 写入账号"是原子操作，
+# 防止并发请求同时通过检查导致重复注册（单人注册后其他人无法再注册）
+_register_lock = threading.Lock()
 
 
 def _check_login_rate_limit(client_ip: str) -> tuple[bool, str]:
     """检查登录速率限制，返回 (是否允许, 提示消息)"""
     now = time.time()
     cutoff = now - _LOGIN_LOCKOUT_SECONDS
-    # 清理过期记录
-    if client_ip in _login_attempts:
-        _login_attempts[client_ip] = [t for t in _login_attempts[client_ip] if t > cutoff]
-    else:
-        _login_attempts[client_ip] = []
-    attempts = _login_attempts[client_ip]
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        remaining = int(attempts[-1] + _LOGIN_LOCKOUT_SECONDS - now)
-        return False, f"登录失败次数过多，请 {remaining} 秒后重试"
+    with _login_attempts_lock:
+        # 清理过期记录
+        if client_ip in _login_attempts:
+            _login_attempts[client_ip] = [t for t in _login_attempts[client_ip] if t > cutoff]
+        else:
+            _login_attempts[client_ip] = []
+        attempts = _login_attempts[client_ip]
+        if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+            remaining = int(attempts[-1] + _LOGIN_LOCKOUT_SECONDS - now)
+            return False, f"登录失败次数过多，请 {remaining} 秒后重试"
     return True, ""
 
 
 def _record_login_failure(client_ip: str) -> None:
     """记录一次登录失败"""
-    if client_ip not in _login_attempts:
-        _login_attempts[client_ip] = []
-    _login_attempts[client_ip].append(time.time())
+    with _login_attempts_lock:
+        if client_ip not in _login_attempts:
+            _login_attempts[client_ip] = []
+        _login_attempts[client_ip].append(time.time())
 
 
 class LocalAccountIn(BaseModel):
@@ -125,13 +133,15 @@ async def login(payload: LoginIn, request: Request):
 
 @router.post("/register", response_model=ApiResponse)
 async def register(payload: RegisterIn, request: Request):
-    """首次部署注册管理账号。
+    """首次部署注册管理账号（单次注册制）。
     仅当本地账号不存在时可用；已注册后返回 409 拒绝再次注册。
+    使用互斥锁保证"检查-写入"原子性：并发请求下也只会成功一次，
+    一旦注册成功，任何其他人（含新部署实例）都无法再注册。
     账号密码存储在 local_account.json（持久化，升级/重启不丢失）。
     """
     client_ip = request.client.host if request.client else "unknown"
 
-    # 已存在本地账号 → 拒绝重复注册
+    # 已存在本地账号 → 拒绝重复注册（快速路径，无需拿锁）
     if has_local_account():
         return ApiResponse(code=409, message="管理账号已注册，请直接登录")
 
@@ -146,10 +156,20 @@ async def register(payload: RegisterIn, request: Request):
     if len(password) > 72:
         return ApiResponse(code=400, message="密码长度不能超过 72 位")
 
-    # 生成 bcrypt 哈希并保存
-    pwd_bytes = password.encode("utf-8")[:72]
-    pwd_hash = bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("utf-8")
-    save_local_account(username, pwd_hash)
+    # 加锁执行"再次检查 + 写入"，杜绝并发重复注册
+    with _register_lock:
+        # 锁内二次检查：并发请求同时通过上方快速检查时，这里只有一个能通过
+        if has_local_account():
+            logger.warning(f"并发注册被拒绝: username={username}, ip={client_ip}")
+            return ApiResponse(code=409, message="管理账号已注册，请直接登录")
+
+        # 生成 bcrypt 哈希并保存
+        pwd_bytes = password.encode("utf-8")[:72]
+        pwd_hash = bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("utf-8")
+        ok = save_local_account(username, pwd_hash)
+        if not ok:
+            logger.error(f"管理账号保存失败: username={username}")
+            return ApiResponse(code=500, message="账号保存失败，请检查 config 目录权限")
 
     logger.info(f"管理账号注册成功: username={username}, ip={client_ip}")
     # 注册成功直接发放 token，无需再次登录
