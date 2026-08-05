@@ -68,6 +68,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"115 生活事件监控初始化失败: {e}")
 
+    # 初始化媒体库删除级联服务（Emby 删除事件 → 115 网盘级联删除）
+    try:
+        from app.services.mediasyncdel_service import get_mediasync_del_service
+        get_mediasync_del_service().start()
+        logger.info("媒体库删除级联服务已启动")
+    except Exception as e:
+        logger.warning(f"媒体库删除级联服务初始化失败: {e}")
+
     # 初始化通知管理器
     try:
         from app.services.notification_manager import init_notification_manager
@@ -143,6 +151,13 @@ async def lifespan(app: FastAPI):
         await get_life_event_monitor().stop()
     except Exception as e:
         logger.warning(f"停止 115 生活事件监控时异常: {e}")
+
+    # 停止媒体库删除级联服务
+    try:
+        from app.services.mediasyncdel_service import get_mediasync_del_service
+        get_mediasync_del_service().stop()
+    except Exception as e:
+        logger.warning(f"停止媒体库删除级联服务时异常: {e}")
 
     # 停止上传队列
     try:

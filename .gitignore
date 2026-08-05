@@ -56,6 +56,13 @@ Thumbs.db
 embyExternalUrl-main/
 qmediasync-main/
 LitePan-main/
+MoviePilot-Plugins-main/
+
+# 本地分析文档（可选上传，默认排除）
+strmhub-ref-analysis/
+.trae-html-share-packages/
+.uploads/
+.reasonix/
 
 # 临时文件
 forum-post.*

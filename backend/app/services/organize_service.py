@@ -32,6 +32,12 @@ VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".m
 # 冗余关键词（小写匹配）
 REDUNDANT_KEYWORDS = {"sample", "预告", "花絮", "番外", "特典", "menu", "extras", "bonus", "trailer", "featurette"}
 
+# 预编译冗余关键词正则：一次性匹配所有关键词（比逐个 `in` 检查更高效）
+_REDUNDANT_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in REDUNDANT_KEYWORDS),
+    re.IGNORECASE,
+)
+
 
 def extract_av_code(name: str) -> Optional[str]:
     """
@@ -109,9 +115,10 @@ def auto_classify(name: str) -> str:
 
 
 def is_redundant(name: str) -> bool:
-    """判断文件是否为冗余文件（sample、预告等）"""
-    lower = name.lower()
-    return any(kw in lower for kw in REDUNDANT_KEYWORDS)
+    """判断文件是否为冗余文件（sample、预告等）
+    使用预编译正则一次性匹配所有关键词，避免逐个字符串搜索。
+    """
+    return bool(_REDUNDANT_PATTERN.search(name))
 
 
 def extract_title(name: str) -> str:
@@ -676,6 +683,44 @@ def _evaluate_block(content: str, variables: dict) -> tuple:
     return ''.join(result_parts), should_output
 
 
+def _clip_filename(name: str, max_len: int = 200) -> str:
+    """O4: 重命名结果超长智能裁剪（参考 LitePan naming.go FitFilenameBytes 思路，简化版）。
+
+    若 len(name) <= max_len 直接返回原名。
+    若超长：优先保留扩展名（.mkv/.mp4 等），先去掉尾部标签/空格，
+    再从尾部（扩展名前）逐字符裁剪到 max_len，再拼接扩展名；
+    若裁剪后仍超长（如扩展名本身超长），从头部裁。
+    返回裁剪结果并记录 info 日志。
+    仅用于最终文件名（renamed_to），不改变目录名逻辑。
+    """
+    if len(name) <= max_len:
+        return name
+
+    # 提取扩展名（取最后一个点之后的部分，如 .mkv/.mp4）
+    ext = ""
+    stem = name
+    head, dot, tail = name.rpartition(".")
+    if dot and head and len(tail) <= 12:  # 尾部过长的视为普通文件名，不当作扩展名
+        ext = dot + tail
+        stem = head
+
+    # 优先保留扩展名：去掉尾部标签/空格后，从尾部（扩展名前）逐字符裁剪
+    stem = stem.rstrip(" .-_")
+    keep = max_len - len(ext)
+    if keep > 0:
+        stem = stem[:keep]
+    else:
+        stem = ""
+    result = stem + ext
+
+    # 仍超长（扩展名本身超长）：从头部裁
+    if len(result) > max_len:
+        result = result[:max_len]
+
+    logger.info(f"[organize] 重命名结果超长已裁剪: 长度 {len(name)} -> {len(result)}（max_len={max_len}）")
+    return result
+
+
 def apply_rename_template(
     template: str,
     tmdb_info: Optional[dict],
@@ -1162,13 +1207,20 @@ class OrganizeService:
                     renamed_to = new_name or orig_name
                 else:
                     renamed_to = orig_name
-                result["organized"].append({
+                # O4: 最终文件名超长智能裁剪（仅作用于 renamed_to，不改变目录名逻辑）
+                _clipped = _clip_filename(renamed_to)
+                _is_clipped = _clipped != renamed_to
+                renamed_to = _clipped
+                _preview_entry = {
                     "name": orig_name,
                     "category": category,
                     "from": file_info.get("parent_path", ""),
                     "to": f"{category}/{new_folder or ''}/{renamed_to}",
                     "renamed_to": renamed_to if renamed_to != orig_name else "",
-                })
+                }
+                if _is_clipped:
+                    _preview_entry["clipped"] = True
+                result["organized"].append(_preview_entry)
             for item in to_redundant:
                 result["redundant"].append({"name": item["file"]["name"], "reason": item["reason"]})
             for item in to_unrecognized:
@@ -1318,6 +1370,7 @@ class OrganizeService:
 
                     # 计算重命名
                     new_name, new_folder, season_folder = "", "", ""
+                    is_clipped = False
                     if rename_rules:
                         if not tmdb_info:
                             logger.warning(f"[organize] 跳过重命名（无 TMDB 信息）: {orig_name}")
@@ -1330,6 +1383,11 @@ class OrganizeService:
                             ok_rename = Client115Service.rename(cookies, file_info["file_id"], new_name, context=orig_name)
                             if ok_rename:
                                 renamed_to = new_name
+                                # O4: 重命名结果超长智能裁剪（仅作用于最终文件名的结果记录，不改目录名）
+                                clipped_renamed = _clip_filename(renamed_to)
+                                if clipped_renamed != renamed_to:
+                                    is_clipped = True
+                                    renamed_to = clipped_renamed
                                 logger.info(f"[organize] 重命名: {orig_name} -> {new_name}")
                             else:
                                 logger.warning(f"[organize] 重命名失败: {orig_name}")
@@ -1347,25 +1405,75 @@ class OrganizeService:
                         "season_folder": season_folder, "media_info": media_info,
                         "sub_cid": sub_cid, "category": category,
                     })
+                    if is_clipped:
+                        rename_results[-1]["clipped"] = True
 
             logger.info(f"[organize] 阶段 1/2 完成：重命名和 ffprobe 探测结束")
 
             # ===== 阶段 2：统一移动所有文件 =====
             logger.info(f"[organize] 阶段 2/2：开始统一移动文件")
+
+            # C1: 目标同名预检 — 移动前预检目标目录是否已有同名文件
+            # 收集所有即将移动的文件的目标路径和文件名，批量查询目标目录查重
+            # 同名文件（文件名相同但 SHA1 不同）移到「已存在影视的目录」而非覆盖
+            target_name_map: dict[str, list[dict]] = {}  # "cid:filename" -> [rename_result, ...]
             for rr in rename_results:
                 if rr.get("skip_move"):
-                    # 处理已存在文件的移动
-                    if rr.get("skip_reason") == "existing":
+                    continue
+                item = rr["item"]
+                file_info = item["file"]
+                renamed_to = rr.get("renamed_to", "") or file_info["name"]
+                sub_cid = rr.get("sub_cid", "")
+                if sub_cid and renamed_to:
+                    key = f"{sub_cid}:{renamed_to}"
+                    if key not in target_name_map:
+                        target_name_map[key] = []
+                    target_name_map[key].append(rr)
+
+            # 对有潜在重名的目标目录执行预检
+            if target_name_map and existing_cid and not dry_run:
+                # 收集需要查询的唯一 cid 集合
+                check_cids = set()
+                for k in target_name_map:
+                    cid_part = k.split(":", 1)[0]
+                    check_cids.add(cid_part)
+                
+                # 预检：列出每个目标目录已有文件名
+                target_existing_names: dict[str, set] = {}  # cid -> {filename, ...}
+                for cid in check_cids:
+                    try:
+                        existing_items = Client115Service.list_all_files_with_meta(
+                            cookies, cid, VIDEO_EXTS, min_size=0, recursive=False
+                        )
+                        target_existing_names[cid] = {f["name"] for f in existing_items}
+                        logger.info(f"[organize] C1 预检: 目标目录已有 {len(target_existing_names[cid])} 个文件")
+                    except Exception as e:
+                        logger.warning(f"[organize] C1 预检失败 cid={cid}: {e}")
+
+                # 标记同名文件为 skip_move（移到已存在影视目录）
+                for key, rrs in target_name_map.items():
+                    cid_part, name_part = key.split(":", 1)
+                    existing_names = target_existing_names.get(cid_part, set())
+                    if name_part in existing_names:
+                        for rr in rrs:
+                            rr["skip_move"] = True
+                            rr["skip_reason"] = "target_duplicate"
+                            logger.info(f"[organize] C1 预检: 目标目录已有同名文件「{name_part}」，移到已存在影视目录")
+            for rr in rename_results:
+                if rr.get("skip_move"):
+                    # 处理已存在文件的移动（SHA1 重复 或 C1 目标同名预检）
+                    if rr.get("skip_reason") in ("existing", "target_duplicate"):
                         item = rr["item"]
                         file_info = item["file"]
                         orig_name = file_info["name"]
                         ok_exist = Client115Service.move(cookies, [file_info["file_id"]], existing_cid, context=orig_name)
                         if ok_exist:
+                            reason_label = "目标同名" if rr.get("skip_reason") == "target_duplicate" else "已存在影视"
                             result["organized"].append({
                                 "name": orig_name,
                                 "category": item["category"],
                                 "from": file_info.get("parent_path", ""),
-                                "to": f"已存在影视/{orig_name}",
+                                "to": f"{reason_label}/{orig_name}",
                                 "renamed_to": "",
                                 "media_type": item.get("media_type", "movie"),
                             })

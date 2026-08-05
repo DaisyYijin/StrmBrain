@@ -31,6 +31,12 @@ async def init_scheduler():
     # 加载已保存的同步计划
     await register_sync_schedule()
 
+    # E2: 注册每日 115 签到任务
+    try:
+        await register_daily_checkin()
+    except Exception as e:
+        logger.warning(f"注册每日 115 签到任务失败: {e}")
+
 
 async def shutdown_scheduler():
     """关闭调度器"""
@@ -484,3 +490,94 @@ async def _run_auto_organize_after_download(cookies: str, save_cid: str, retry: 
     # 3. 执行整理
     logger.info("自动整理：开始整理待刮削库...")
     await _run_scheduled_organize(cookies=cookies, target_cid=organize_source_cid, logger=logger)
+
+
+# ===== E2: 115 每日签到 =====
+
+# 每日签到的 Job ID
+DAILY_CHECKIN_JOB_ID = "daily_115_checkin"
+
+
+async def register_daily_checkin():
+    """注册每日 115 签到任务（每天 00:05 执行，cron='5 0 * * *'）"""
+    global _scheduler
+    if _scheduler is None:
+        return
+
+    from app.core.logbuffer import get_logger
+    logger = get_logger()
+
+    try:
+        trigger = CronTrigger(hour=0, minute=5)
+        _scheduler.add_job(
+            _run_daily_checkin,
+            trigger=trigger,
+            id=DAILY_CHECKIN_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(f"已注册每日 115 签到任务 (id={DAILY_CHECKIN_JOB_ID}, cron='5 0 * * *')")
+    except Exception as e:
+        logger.warning(f"注册每日 115 签到任务失败: {e}")
+
+
+def _is_checkin_success(result: dict) -> bool:
+    """判断签到结果是否成功（115 签到接口返回 {"state": True, ...} 或 {"data": {...}}）"""
+    if not result:
+        return False
+    if result.get("error"):
+        return False
+    if result.get("state") is False:
+        return False
+    return True
+
+
+async def _run_daily_checkin():
+    """每日 115 签到执行体：遍历所有有效账号（status==1）逐个签到，日志记录成功/失败。
+
+    - 账号 cookies 为空或签到失败（cookies 可能已失效）时跳过并警告
+    - 逐个账号独立签到，单个账号失败不影响其它账号
+    """
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_accounts
+    from app.services.client_115 import Client115Service
+
+    logger = get_logger()
+    accounts = read_accounts()
+    valid = [acc for acc in accounts if acc.get("status") == 1]
+    if not valid:
+        logger.info("每日 115 签到：无有效账号，跳过")
+        return
+
+    ok = 0
+    fail = 0
+    for acc in valid:
+        account_id = acc.get("id", 0)
+        cookies = acc.get("cookies", "")
+        if not cookies:
+            logger.warning(f"每日 115 签到：账号 {account_id} cookies 为空，跳过")
+            fail += 1
+            continue
+        try:
+            result = await asyncio.to_thread(Client115Service.daily_checkin, cookies)
+        except Exception as e:
+            logger.warning(f"每日 115 签到：账号 {account_id} 异常: {e}")
+            fail += 1
+            continue
+
+        if not isinstance(result, dict) or not _is_checkin_success(result):
+            err = result.get("error") if isinstance(result, dict) else str(result)
+            # cookies 失效等场景：跳过并警告
+            logger.warning(f"每日 115 签到：账号 {account_id} 失败（cookies 可能已失效）: {err}")
+            fail += 1
+            continue
+
+        ok += 1
+        # 记录签到结果（含"已签到"等状态信息）
+        data = result.get("data", result) if isinstance(result, dict) else result
+        if isinstance(data, dict):
+            msg = data.get("error_msg") or data.get("msg") or data.get("message") or "OK"
+            logger.info(f"每日 115 签到：账号 {account_id} 成功 ({msg})")
+        else:
+            logger.info(f"每日 115 签到：账号 {account_id} 成功")
+
+    logger.info(f"每日 115 签到完成: 成功 {ok} 个账号, 失败 {fail} 个账号")

@@ -583,3 +583,94 @@ async def trigger_emby_refresh(path: str = "") -> bool:
     except Exception as e:
         logger.warning(f"触发 Emby 刷新异常: {e}")
         return False
+
+
+async def sync_media_info(item_id: str = "") -> dict:
+    """通过 Emby Items/RemoteInfo 接口同步媒体信息
+
+    获取 Emby 中指定项目（或所有最近项目）的媒体信息，
+    包括 Path、MediaSources 等，用于与本地 STRM 文件做交叉校验。
+    """
+    try:
+        from app.core.db_helper import read_setting
+
+        settings = read_setting("emby")
+        if not settings:
+            return {"success": False, "error": "Emby 未配置"}
+
+        host = (settings.get("host") or "").strip()
+        api_key = (settings.get("api_key") or "").strip()
+
+        if not host or not api_key:
+            return {"success": False, "error": "Emby 未配置"}
+
+        # 规范化地址：补全协议前缀，去掉尾部斜杠
+        if not host.lower().startswith(("http://", "https://")):
+            host = "http://" + host
+        host = host.rstrip("/")
+
+        headers = {"X-Emby-Token": api_key}
+        raw_items: list[dict] = []
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if item_id:
+                # 获取单个项目的详细信息（含 MediaSources）
+                url = f"{host}/Items/{item_id}"
+                params = {"Fields": "Path,MediaSources"}
+                r = await client.get(url, params=params, headers=headers)
+                if r.status_code != 200:
+                    return {
+                        "success": False,
+                        "error": f"获取项目信息失败: HTTP {r.status_code}",
+                    }
+                raw_items = [r.json()]
+            else:
+                # 获取最近添加的项目列表（按创建时间倒序）
+                url = f"{host}/Items"
+                params = {
+                    "SortBy": "DateCreated",
+                    "SortOrder": "Descending",
+                    "Recursive": "true",
+                    "Fields": "Path,MediaSources",
+                    "Limit": 100,
+                }
+                r = await client.get(url, params=params, headers=headers)
+                if r.status_code != 200:
+                    return {
+                        "success": False,
+                        "error": f"获取项目列表失败: HTTP {r.status_code}",
+                    }
+                data = r.json()
+                raw_items = data.get("Items", []) if data else []
+
+        # 提取所需字段：Id / Name / Path / Type / Size
+        result: list[dict] = []
+        for it in raw_items:
+            media_sources = it.get("MediaSources", []) or []
+            path = it.get("Path", "")
+            size = 0
+            if media_sources:
+                # 取第一个 MediaSource 作为主文件信息
+                ms = media_sources[0]
+                if not path:
+                    path = ms.get("Path", "")
+                size = ms.get("Size", 0) or 0
+            result.append({
+                "id": it.get("Id", ""),
+                "name": it.get("Name", ""),
+                "path": path,
+                "type": it.get("Type", ""),
+                "size": size,
+            })
+
+        return {
+            "success": True,
+            "total": len(result),
+            "items": result,
+        }
+    except httpx.HTTPError as e:
+        logger.warning(f"同步媒体信息网络错误: {e}")
+        return {"success": False, "error": f"网络错误: {e}"}
+    except Exception as e:
+        logger.warning(f"同步媒体信息异常: {e}")
+        return {"success": False, "error": f"同步媒体信息异常: {e}"}

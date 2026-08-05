@@ -9,6 +9,9 @@ import time
 import asyncio
 import shutil
 import hashlib
+import sqlite3
+import threading
+import os
 from typing import Optional
 from pathlib import Path
 
@@ -18,6 +21,20 @@ from app.core.logbuffer import get_logger
 from app.core.db_helper import get_api_intervals
 
 logger = get_logger("app.services.sync_service")
+
+
+def _compare_strm_content(existing_content: str, new_content: str) -> bool:
+    """S3: STRM 内容级比对。
+
+    参考 qmediasync sync_strm.go 的 CompareStrm 思路（简化版）：
+    目标文件已存在时，若其内容与待写入内容一致（去首尾空白后比较），
+    则无需重新写入，避免无效 I/O 与 mtime 抖动。
+    返回 True 表示内容相同（可跳过写入）。
+    """
+    try:
+        return (existing_content or "").strip() == (new_content or "").strip()
+    except Exception:
+        return False
 
 
 # 默认视频后缀
@@ -30,11 +47,51 @@ SCHEDULE_FILE = CONFIG_DIR / "sync_schedule.json"
 MANIFEST_DIR = DATA_DIR / "manifests"
 MANIFEST_DIR.mkdir(exist_ok=True)
 
+# SQLite 清单数据库（替代 JSON，支持路径索引和高效查询）
+MANIFEST_DB = MANIFEST_DIR / "manifests.db"
+_manifest_db_lock = threading.Lock()
+
 
 def _manifest_path(local_root: Path) -> Path:
     """根据本地媒体目录路径生成清单文件路径（按路径哈希命名，避免特殊字符）"""
     key = hashlib.md5(str(local_root.resolve()).encode("utf-8")).hexdigest()[:16]
     return MANIFEST_DIR / f"manifest_{key}.json"
+
+
+def _manifest_hash(local_root: Path) -> str:
+    """根据本地媒体目录路径生成哈希键（用于 SQLite 分区）"""
+    return hashlib.md5(str(local_root.resolve()).encode("utf-8")).hexdigest()[:16]
+
+
+def _init_manifest_db():
+    """初始化 SQLite 清单数据库（线程安全，仅初始化一次）"""
+    with _manifest_db_lock:
+        conn = sqlite3.connect(str(MANIFEST_DB))
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS manifest_entries (
+                    local_root_hash TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    sha1 TEXT,
+                    pickcode TEXT,
+                    parent_path TEXT,
+                    name TEXT,
+                    size INTEGER,
+                    PRIMARY KEY (local_root_hash, file_id)
+                )
+            """)
+            # 路径索引：支持按目录路径快速查询（增量同步中按目录筛选）
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_manifest_path
+                ON manifest_entries (local_root_hash, parent_path)
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# 模块加载时初始化数据库
+_init_manifest_db()
 
 
 class SyncService:
@@ -53,6 +110,42 @@ class SyncService:
             asyncio.run_coroutine_threadsafe(coro, loop)
         except RuntimeError:
             coro.close()
+
+    @classmethod
+    def _notify_sync_failures(cls, errors: list, sync_type: str, loop: Optional[asyncio.AbstractEventLoop] = None):
+        """Q5: 扫描失败聚合通知。
+
+        同步结束后若 errors 非空，取前 10 条错误（每条 {"name", "error"}）拼成文本，
+        调用 NotificationService.notify 推送"同步失败提醒"。整体 try/except 包裹，
+        通知失败不影响同步主流程。
+        """
+        if not errors:
+            return
+        try:
+            # 拼接聚合文本：[STRMhub] {sync_type} 同步失败 {N} 项\n1. xxx: 错误
+            top = errors[:10]
+            lines = [f"[STRMhub] {sync_type} 同步失败 {len(errors)} 项"]
+            for i, e in enumerate(top, 1):
+                name = (e or {}).get("name", "") or "未知文件"
+                err = (e or {}).get("error", "") or "未知错误"
+                lines.append(f"{i}. {name}: {err}")
+            content = "\n".join(lines)
+
+            async def _do_notify():
+                try:
+                    from app.services.notification_service import NotificationService
+                    await NotificationService.notify("同步失败提醒", content)
+                except Exception:
+                    pass
+
+            # 优先调度到主事件循环（同步方法通常运行在工作线程）；无可用循环时独立运行
+            if loop is not None and loop.is_running():
+                cls._safe_schedule(loop, _do_notify())
+            else:
+                asyncio.run(_do_notify())
+            logger.info(f"[sync] 已发送同步失败聚合通知: {sync_type} {len(errors)} 项")
+        except Exception as e:
+            logger.warning(f"[sync] 发送同步失败通知失败: {e}")
 
     # ============ 全量同步 ============
 
@@ -128,6 +221,8 @@ class SyncService:
         manifest = {}
         # 目录去重显示：同一目录（影视）只打印一次，避免每个文件都输出导致刷屏
         _logged_dirs: set = set()
+        # 收集延迟下载任务（数据/图片文件），主循环结束后批量下载
+        _pending_downloads: list[dict] = []
         for idx, f in enumerate(filtered):
             cls._safe_schedule(loop, progress_manager.update_progress(idx, f["name"]))
             _cur_no = idx + 1
@@ -146,11 +241,23 @@ class SyncService:
 
             synced, entry = cls._sync_single_file(
                 cookies, f, local_root, video_exts, image_exts, data_exts,
-                account_id, strm_settings,
+                account_id, strm_settings, defer_download=True,
             )
             if synced:
                 if synced.get("type") == "skipped":
                     result["skipped"] += 1
+                elif synced.get("type") == "pending_download":
+                    # 收集到批量下载列表，稍后统一下载
+                    _pending_downloads.append({
+                        "pickcode": synced["pickcode"],
+                        "local_path": synced["local_path"],
+                        "context": synced["name"],
+                        "_manifest_key": f["file_id"],
+                        "_synced_entry": {
+                            "name": synced["name"], "type": "download",
+                            "path": synced["path"],
+                        },
+                    })
                 else:
                     result["synced"].append(synced)
                 if entry:
@@ -158,9 +265,34 @@ class SyncService:
             elif entry:
                 result["errors"].append(entry)
 
-            # 文件间等待
+            # 文件间等待（仅对需要 API 调用的操作，STRM 生成无 API 调用可跳过）
             if _interval > 0:
                 time.sleep(_interval)
+
+        # 批量下载数据/图片文件（串行获取链接 + 并发下载内容）
+        if _pending_downloads:
+            logger.info(f"[sync] 开始批量下载 {_pending_downloads.__len__()} 个数据/图片文件...")
+            cls._safe_schedule(loop, progress_manager.update_progress(
+                len(filtered), f"批量下载 {len(_pending_downloads)} 个文件"))
+            batch_results = Client115Service.download_files_batch(cookies, _pending_downloads)
+            for i, br in enumerate(batch_results):
+                if br["success"]:
+                    result["synced"].append({
+                        "name": _pending_downloads[i]["context"],
+                        "type": "download",
+                        "path": _pending_downloads[i]["local_path"],
+                    })
+                else:
+                    result["errors"].append({
+                        "name": _pending_downloads[i]["context"],
+                        "error": br.get("error", "下载失败"),
+                    })
+                    # 失败的文件从清单中移除，下次同步会重试
+                    mk = _pending_downloads[i].get("_manifest_key", "")
+                    if mk and mk in manifest:
+                        del manifest[mk]
+            logger.info(f"[sync] 批量下载完成: 成功 {sum(1 for r in batch_results if r['success'])}, "
+                        f"失败 {sum(1 for r in batch_results if not r['success'])}")
 
         # 保存清单
         cls._save_manifest(local_root, manifest)
@@ -168,6 +300,10 @@ class SyncService:
         summary = f"共 {result['total']} 个文件，成功 {len(result['synced'])}，跳过 {result['skipped']}，失败 {len(result['errors'])}"
         logger.info(f"[sync] 全量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
+
+        # Q5: 扫描失败聚合通知（errors 非空时推送前 10 条错误）
+        if result["errors"]:
+            cls._notify_sync_failures(result["errors"], "全量", loop)
 
         return result
 
@@ -240,10 +376,52 @@ class SyncService:
         logger.info(f"[sync] 本地已有 {len(local_existing_files)} 个文件")
 
         # 扫描源目录
-        all_files = Client115Service.list_all_files_with_meta(
-            cookies, source_cid, all_exts, min_size=0, recursive=True
-        )
+        # S2: 优先尝试 115 导出目录树快速扫描（export_dir），失败/不支持则回退递归扫描
+        all_files = []
+        try:
+            tree = Client115Service.export_dir_tree(cookies, source_cid)
+        except Exception as e:
+            tree = {}
+            logger.warning(f"[sync] export_dir 树快速扫描异常，回退递归扫描: {e}")
+        if tree and tree.get("files"):
+            # 基于树结构生成 all_files 等价列表（字段与 list_all_files_with_meta 兼容）
+            for f in tree["files"]:
+                name = f.get("name", "")
+                if cls._get_ext(name) not in all_exts:
+                    continue
+                all_files.append({
+                    "file_id": f.get("file_id", ""),
+                    "pickcode": f.get("pickcode", ""),
+                    "name": name,
+                    "size": f.get("size", 0) or 0,
+                    "parent_path": f.get("parent_path", ""),
+                    "sha1": f.get("sha1", "") or "",
+                })
+            logger.info(f"[sync] 使用 export_dir 树快速扫描，{len(all_files)} 个文件")
+        if not all_files:
+            # 回退：递归扫描（与原有逻辑一致）
+            all_files = Client115Service.list_all_files_with_meta(
+                cookies, source_cid, all_exts, min_size=0, recursive=True
+            )
+            logger.info(f"[sync] 扫描到 {len(all_files)} 个匹配文件")
         result["total"] = len(all_files)
+
+        # 防误删保护：远端扫描返回 0 结果但本地清单有记录时，
+        # 极大概率是 115 API 异常（限流/cookies 过期/网络问题），而非文件真的全部被删。
+        # 此时中止清理逻辑，保留本地 STRM 文件不被误删。
+        if len(all_files) == 0 and len(last_manifest) > 0:
+            logger.warning(
+                f"[sync] 远端扫描返回 0 结果但本地清单有 {len(last_manifest)} 条记录，"
+                f"疑似 115 API 异常，跳过删除清理以保护本地文件"
+            )
+            result["errors"].append({
+                "name": "",
+                "error": "远端扫描 0 结果，已中止清理（疑似 API 异常）",
+            })
+            summary = f"远端扫描 0 结果，已跳过清理保护 {len(last_manifest)} 个本地文件"
+            logger.info(f"[sync] 增量同步完成（防误删保护触发）: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
+            cls._safe_schedule(loop, progress_manager.complete_task(summary))
+            return result
 
         # 更新进度总数
         cls._safe_schedule(loop, progress_manager.update_total(len(all_files)))
@@ -356,6 +534,10 @@ class SyncService:
         logger.info(f"[sync] 增量同步完成: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
         cls._safe_schedule(loop, progress_manager.complete_task(summary))
 
+        # Q5: 扫描失败聚合通知（errors 非空时推送前 10 条错误）
+        if result["errors"]:
+            cls._notify_sync_failures(result["errors"], "增量", loop)
+
         return result
 
     # ============ 同步计划管理 ============
@@ -425,10 +607,12 @@ class SyncService:
         data_exts: set,
         account_id: int,
         strm_settings: dict,
+        defer_download: bool = False,
     ) -> tuple[Optional[dict], Optional[dict]]:
         """
         同步单个文件：生成 STRM 或下载文件。
         返回 (synced_entry, error_entry)，成功时 error_entry 为 None。
+        defer_download=True 时，数据/图片文件不立即下载，返回 pending_download 类型。
         """
         name = f["name"]
         ext = cls._get_ext(name)
@@ -439,6 +623,17 @@ class SyncService:
         sha1 = f.get("sha1", "")
 
         local_dir = local_root / parent_path if parent_path else local_root
+
+        # 路径长度防护：Windows MAX_PATH=260，预留余量取 250。
+        # 超长路径会导致文件创建失败（FilesystemError），跳过并记录。
+        local_name = name + ".strm" if ext in video_exts else name
+        full_path = local_dir / local_name
+        if len(str(full_path)) > 250:
+            logger.warning(
+                f"[sync] 路径长度 {len(str(full_path))} 超过 250 字符限制，跳过: {parent_path}/{name}"
+            )
+            return None, {"name": name, "error": f"路径过长（{len(str(full_path))}字符），已跳过"}
+
         local_dir.mkdir(parents=True, exist_ok=True)
 
         manifest_entry = {
@@ -461,6 +656,25 @@ class SyncService:
                 if not content:
                     logger.warning(f"[sync] STRM 内容为空（server_url 未配置），跳过: {parent_path}/{strm_name}")
                     return None, {"name": name, "error": "server_url 未配置，无法生成 STRM"}
+
+                # S3: 内容级比对 + mtime 保持（参考 qmediasync CompareStrm）
+                # 目标 STRM 已存在时，先读取其内容与待写入内容比对：
+                # - 内容相同 → 跳过写入，并尝试把 mtime 设为远端文件的时间（取不到则用当前时间）
+                # - 内容不同 → 正常写入
+                if strm_path.exists():
+                    try:
+                        existing_content = strm_path.read_text(encoding="utf-8")
+                    except Exception:
+                        existing_content = None
+                    if existing_content is not None and _compare_strm_content(existing_content, content):
+                        try:
+                            mtime = cls._extract_remote_mtime(f)
+                            os.utime(strm_path, (mtime, mtime))
+                        except Exception:
+                            pass
+                        logger.info(f"[sync] STRM 内容未变更，跳过写入并保持 mtime: {parent_path}/{strm_name}")
+                        # 跳过写入不应算作"新增"，按 skipped 计数（由调用方统一累加）
+                        return {"name": name, "type": "skipped"}, manifest_entry
                 strm_path.write_text(content, encoding="utf-8")
 
                 return {
@@ -469,8 +683,17 @@ class SyncService:
                 }, manifest_entry
 
             elif ext in image_exts or ext in data_exts:
-                # 图片/数据文件：直接下载
+                # 图片/数据文件：直接下载或延迟批量下载
                 local_path = local_dir / name
+
+                if defer_download:
+                    # 返回下载任务信息，由调用方批量下载
+                    return {
+                        "name": name, "type": "pending_download",
+                        "path": str(local_path.relative_to(local_root)),
+                        "pickcode": pickcode, "local_path": str(local_path),
+                    }, manifest_entry
+
                 ok = Client115Service.download_file(cookies, pickcode, str(local_path), context=name)
                 if ok:
                     return {
@@ -493,6 +716,24 @@ class SyncService:
         if "." in name:
             return ("." + name.rsplit(".", 1)[-1]).lower()
         return ""
+
+    @staticmethod
+    def _extract_remote_mtime(f: dict) -> float:
+        """S3: 从远端文件元数据中提取 mtime（时间戳秒）。
+
+        优先使用文件元数据里的 time / updated_at 字段；取不到时间字段时用当前时间。
+        兼容毫秒级时间戳（大于 10^11 视为毫秒，转换为秒）。
+        """
+        ts = f.get("time") or f.get("updated_at")
+        if ts:
+            try:
+                ts = float(ts)
+                if ts > 1e11:
+                    ts = ts / 1000.0
+                return ts
+            except (TypeError, ValueError):
+                pass
+        return time.time()
 
     @staticmethod
     def _load_strm_settings() -> dict:
@@ -540,34 +781,108 @@ class SyncService:
         encoded_path = file_name.replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("=", "%3D")
 
         # 获取 STRM 播放 Token（自动生成，写入 URL 供播放时验证）
-        from app.services.strm_token import get_token, is_enabled
-        token_part = ""
+        # A5: 使用 HMAC-SHA256 路径签名替代明文 token，token 不暴露在 URL 中
+        from app.services.strm_token import get_token, is_enabled, sign_path
+        sig_part = ""
         if is_enabled():
-            token = get_token()
-            token_part = f"&t={token}"
+            signature = sign_path(pickcode)
+            sig_part = f"&s={signature}"
 
-        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id=0{token_part}"
+        return f"{base}/api/115/url/{encoded_path}?pickcode={pickcode}&account_id=0{sig_part}"
 
     @classmethod
     def _save_manifest(cls, local_root: Path, manifest: dict):
-        """保存同步清单到后端数据目录"""
+        """保存同步清单到 SQLite 数据库（支持路径索引，高效查询）"""
+        root_hash = _manifest_hash(local_root)
         try:
-            manifest_path = _manifest_path(local_root)
-            manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            with _manifest_db_lock:
+                conn = sqlite3.connect(str(MANIFEST_DB))
+                try:
+                    # 使用事务：先删除该 local_root 的所有旧条目，再批量插入新条目
+                    conn.execute("DELETE FROM manifest_entries WHERE local_root_hash = ?", (root_hash,))
+                    rows = []
+                    for file_id, entry in manifest.items():
+                        rows.append((
+                            root_hash,
+                            str(file_id),
+                            entry.get("sha1", ""),
+                            entry.get("pickcode", ""),
+                            entry.get("parent_path", ""),
+                            entry.get("name", ""),
+                            entry.get("size", 0),
+                        ))
+                    if rows:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO manifest_entries "
+                            "(local_root_hash, file_id, sha1, pickcode, parent_path, name, size) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            rows,
+                        )
+                    conn.commit()
+                finally:
+                    conn.close()
         except Exception as e:
-            logger.warning(f"[sync] 保存清单失败: {e}")
+            logger.warning(f"[sync] 保存清单到 SQLite 失败: {e}")
+            # 降级到 JSON 存储
+            try:
+                manifest_path = _manifest_path(local_root)
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception:
+                pass
 
     @classmethod
     def _load_manifest(cls, local_root: Path) -> dict:
-        """加载上次同步清单"""
+        """加载上次同步清单（优先从 SQLite 加载，自动迁移旧 JSON 清单）"""
+        root_hash = _manifest_hash(local_root)
+        manifest = {}
+
+        # 优先从 SQLite 加载
+        try:
+            with _manifest_db_lock:
+                conn = sqlite3.connect(str(MANIFEST_DB))
+                try:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute(
+                        "SELECT file_id, sha1, pickcode, parent_path, name, size "
+                        "FROM manifest_entries WHERE local_root_hash = ?",
+                        (root_hash,),
+                    )
+                    for row in cursor:
+                        manifest[row["file_id"]] = {
+                            "sha1": row["sha1"] or "",
+                            "pickcode": row["pickcode"] or "",
+                            "parent_path": row["parent_path"] or "",
+                            "name": row["name"] or "",
+                            "size": row["size"] or 0,
+                        }
+                finally:
+                    conn.close()
+        except Exception as e:
+            logger.warning(f"[sync] 从 SQLite 加载清单失败: {e}")
+
+        # 如果 SQLite 中有数据，直接返回
+        if manifest:
+            return manifest
+
+        # 自动迁移：SQLite 中无数据但旧 JSON 清单存在时，导入到 SQLite
         try:
             manifest_path = _manifest_path(local_root)
             if manifest_path.exists():
-                return json.loads(manifest_path.read_text(encoding="utf-8"))
+                old_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if old_manifest:
+                    logger.info(f"[sync] 迁移 JSON 清单到 SQLite: {len(old_manifest)} 条记录")
+                    cls._save_manifest(local_root, old_manifest)
+                    # 迁移成功后删除旧 JSON 文件
+                    try:
+                        manifest_path.unlink()
+                    except Exception:
+                        pass
+                    return old_manifest
         except Exception as e:
-            logger.warning(f"[sync] 加载清单失败: {e}")
+            logger.warning(f"[sync] 迁移旧 JSON 清单失败: {e}")
+
         return {}
 
     @classmethod
@@ -722,6 +1037,130 @@ class SyncService:
 
         if cleaned:
             logger.info(f"[sync] 清理了 {cleaned} 个已从网盘移除的本地文件")
+
+    # ============ 目录树导出 ============
+
+    @classmethod
+    def export_directory_tree(cls, local_root: Path) -> dict:
+        """
+        导出本地媒体目录的目录树结构，用于增量同步结果的展示。
+
+        扫描 local_root 下的所有文件和目录，构建嵌套的树形结构：
+        - 目录节点：type="dir"，包含 children 列表
+        - .strm 文件节点：type="strm"，包含 size
+        - 其他文件节点：type="file"，包含 size
+
+        返回格式：
+        {
+            "name": "root_dir_name",
+            "path": "",
+            "type": "dir",
+            "children": [...],
+            "stats": {"total_dirs": N, "total_files": N, "total_strm_files": N, "total_other_files": N}
+        }
+        """
+        local_root = Path(local_root)
+        root_name = local_root.name or str(local_root)
+
+        stats = {
+            "total_dirs": 0,
+            "total_files": 0,
+            "total_strm_files": 0,
+            "total_other_files": 0,
+        }
+
+        if not local_root.exists():
+            logger.warning(f"[sync] 导出目录树失败：目录不存在 {local_root}")
+            return {
+                "name": root_name,
+                "path": "",
+                "type": "dir",
+                "children": [],
+                "stats": stats,
+            }
+
+        # 扁平化节点表：rel_path_str -> node dict
+        # 先收集所有 rglob 条目，再按路径关系组装父子层级
+        nodes: dict[str, dict] = {}
+
+        for item in local_root.rglob("*"):
+            try:
+                rel = item.relative_to(local_root)
+            except ValueError:
+                continue
+            rel_str = str(rel).replace("\\", "/")
+
+            if item.is_dir():
+                node = {
+                    "name": rel.name,
+                    "path": rel_str,
+                    "type": "dir",
+                    "children": [],
+                }
+                nodes[rel_str] = node
+                stats["total_dirs"] += 1
+            else:
+                # 区分 .strm 文件和其他文件
+                is_strm = item.suffix.lower() == ".strm"
+                try:
+                    size = item.stat().st_size
+                except OSError:
+                    size = 0
+                node = {
+                    "name": rel.name,
+                    "path": rel_str,
+                    "type": "strm" if is_strm else "file",
+                    "size": size,
+                }
+                nodes[rel_str] = node
+                stats["total_files"] += 1
+                if is_strm:
+                    stats["total_strm_files"] += 1
+                else:
+                    stats["total_other_files"] += 1
+
+        # 构建父子关系：将每个节点挂到父节点的 children 列表
+        root_children: list[dict] = []
+        for rel_str, node in nodes.items():
+            if "/" in rel_str:
+                parent_path = rel_str.rsplit("/", 1)[0]
+                parent = nodes.get(parent_path)
+                if parent is not None:
+                    parent["children"].append(node)
+                else:
+                    # 父目录不在节点表中（理论上不会发生），挂到根节点
+                    root_children.append(node)
+            else:
+                # 直接位于根目录下的条目
+                root_children.append(node)
+
+        # 排序：目录在前、文件在后，各自按名称排序，保证输出稳定可读
+        def _sort_key(n: dict):
+            type_order = 0 if n["type"] == "dir" else 1
+            return (type_order, n["name"])
+
+        def _sort_tree(n: dict):
+            if n.get("type") == "dir" and n.get("children"):
+                n["children"].sort(key=_sort_key)
+                for child in n["children"]:
+                    _sort_tree(child)
+
+        root_children.sort(key=_sort_key)
+        for child in root_children:
+            _sort_tree(child)
+
+        logger.info(
+            f"[sync] 目录树导出完成: 目录 {stats['total_dirs']}，"
+            f"文件 {stats['total_files']}（STRM {stats['total_strm_files']}，其他 {stats['total_other_files']}）"
+        )
+
+        return {
+            "name": root_name,
+            "path": "",
+            "type": "dir",
+            "children": root_children,
+            "stats": stats,
+        }
 
     @staticmethod
     def _cleanup_empty_dirs(local_root: Path, start_dir: Path):

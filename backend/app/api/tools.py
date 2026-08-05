@@ -5,9 +5,12 @@ API 路由 - 特色工具
 3. 清空 115 回收站
 4. 替换 STRM 字符串
 5. Emby 影视缺集管理
+6. base_url 自动推导 + 批量替换（A6）
+7. STRM 清理（二次确认，S4）
+8. STRM 账号引用修复（Q3）
 """
 from pathlib import Path
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from typing import Optional
 
@@ -878,3 +881,203 @@ async def missing_ep_scan(payload: MissingEpRequest):
         "count": len(shows_with_missing),
         "total_missing": total_missing,
     })
+
+
+# ============ 工具6：base_url 自动推导 + 批量替换（A6）===========
+
+class BaseUrlExtractRequest(BaseModel):
+    directory: str  # 本地 STRM 文件目录
+
+
+class BaseUrlReplaceRequest(BaseModel):
+    directory: str   # 本地 STRM 文件目录
+    old_base: str    # 旧 base_url（可从 extract 接口获取）
+    new_base: str    # 新 base_url（可从 detect 接口获取）
+
+
+@router.get("/base-url/detect", response_model=ApiResponse)
+async def detect_base_url(request: Request):
+    """自动推导当前访问的 base_url（从请求头解析，支持反代场景）"""
+    from app.services.base_url_util import detect_base_url
+    base = detect_base_url(request)
+    if not base:
+        return ApiResponse(code=400, message="无法从请求头推导 base_url")
+    return ApiResponse(data={"base_url": base})
+
+
+@router.post("/base-url/extract", response_model=ApiResponse)
+async def extract_strm_base_url(payload: BaseUrlExtractRequest):
+    """从已有 STRM 文件中提取当前使用的 base_url"""
+    from app.services.base_url_util import extract_strm_base_url
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+    base = extract_strm_base_url(payload.directory)
+    if not base:
+        return ApiResponse(code=404, message="未找到有效的 STRM 文件或无法解析 base_url")
+    return ApiResponse(data={"current_base_url": base})
+
+
+@router.post("/base-url/replace", response_model=ApiResponse)
+async def batch_replace_base_url(payload: BaseUrlReplaceRequest):
+    """批量替换 STRM 文件中的 base_url"""
+    from app.services.base_url_util import batch_replace_strm_base_url
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+    if not payload.old_base or not payload.new_base:
+        return ApiResponse(code=400, message="请输入旧地址和新地址")
+    result = batch_replace_strm_base_url(payload.directory, payload.old_base, payload.new_base)
+    if result.get("message"):
+        return ApiResponse(code=400, message=result["message"])
+    return ApiResponse(data=result)
+
+
+# ============ 工具7：STRM 清理（二次确认，参考 MoviePilot p115strmhelper full/interaction）============
+
+class StrmCleanScanRequest(BaseModel):
+    directory: str   # 本地 STRM 文件目录
+    recursive: bool = True
+
+
+class StrmCleanRunRequest(BaseModel):
+    directory: str          # 本地 STRM 文件目录
+    paths: list[str] = []   # 待删除的相对路径清单（二次确认的关键：必须显式列出）
+    recursive: bool = True
+
+
+@router.post("/strm-clean/scan", response_model=ApiResponse)
+async def strm_clean_scan(payload: StrmCleanScanRequest):
+    """扫描目录下指向本服务 302 接口（/api/115/url/ 且含 pickcode 参数）的 .strm 文件。
+
+    只列出清单不删除，返回:
+    {
+        "pending": [{"path": 相对路径, "content": STRM 内容前 100 字符}],
+        "count": 命中数量,
+        "total_strm": 目录下 .strm 总数,
+    }
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+
+    root = Path(payload.directory)
+    if not root.exists() or not root.is_dir():
+        return ApiResponse(code=400, message="目录不存在或不是有效目录")
+
+    try:
+        strm_files = list(root.rglob("*.strm")) if payload.recursive else list(root.glob("*.strm"))
+        pending = []
+        for strm_path in strm_files:
+            try:
+                content = strm_path.read_text(encoding="utf-8").strip()
+            except Exception:
+                continue
+            if not content:
+                continue
+            # 检测是否指向本服务 302 接口（/api/115/url/）且 pickcode 参数存在
+            if "/api/115/url/" not in content:
+                continue
+            query = urlparse(content).query
+            if not parse_qs(query).get("pickcode"):
+                continue
+            pending.append({
+                "path": str(strm_path.relative_to(root)),
+                "content": content[:100],
+            })
+
+        return ApiResponse(data={
+            "pending": pending,
+            "count": len(pending),
+            "total_strm": len(strm_files),
+        })
+    except Exception as e:
+        return ApiResponse(code=500, message=f"扫描失败: {str(e)}")
+
+
+@router.post("/strm-clean/run", response_model=ApiResponse)
+async def strm_clean_run(payload: StrmCleanRunRequest):
+    """仅删除 paths 中明确列出的相对路径文件（二次确认后执行）。
+
+    防误删设计：
+    - paths 为空直接返回 400
+    - 每个路径用 resolve 校验，必须位于 directory 内（拒绝路径穿越）
+    返回 {"deleted": int, "failed": [{"path", "error"}]}
+    """
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+    if not payload.paths:
+        return ApiResponse(code=400, message="未指定待删除文件（paths 不能为空，需显式列出）")
+
+    root = Path(payload.directory)
+    if not root.exists() or not root.is_dir():
+        return ApiResponse(code=400, message="目录不存在或不是有效目录")
+
+    root_resolved = root.resolve()
+    deleted = 0
+    failed = []
+    for rel in payload.paths:
+        rel = str(rel).strip().replace("\\", "/")
+        if not rel:
+            continue
+        target = (root / rel).resolve()
+        # 路径必须位于 directory 内（防路径穿越/误删目录外文件）
+        try:
+            target.relative_to(root_resolved)
+        except ValueError:
+            failed.append({"path": rel, "error": "路径不在指定目录内，已拒绝"})
+            continue
+        # 仅允许删除 .strm 文件（本工具定位是 STRM 清理）
+        if target.suffix.lower() != ".strm":
+            failed.append({"path": rel, "error": "仅允许删除 .strm 文件"})
+            continue
+        try:
+            if target.exists() and target.is_file():
+                target.unlink()
+                deleted += 1
+            elif not target.exists():
+                failed.append({"path": rel, "error": "文件不存在"})
+        except Exception as e:
+            failed.append({"path": rel, "error": str(e)})
+
+    return ApiResponse(data={
+        "deleted": deleted,
+        "failed": failed,
+    })
+
+
+# ============ 工具8：STRM 账号引用修复（Q3，参考 LitePan account_repair.go）============
+
+class AccountRepairExtractRequest(BaseModel):
+    directory: str   # 本地 STRM 文件目录
+
+
+class AccountRepairRunRequest(BaseModel):
+    directory: str         # 本地 STRM 文件目录
+    old_account_id: int    # 旧账号 ID
+    new_account_id: int    # 新账号 ID
+
+
+@router.post("/account-repair/extract", response_model=ApiResponse)
+async def account_repair_extract(payload: AccountRepairExtractRequest):
+    """采样前 10 个 STRM 文件，返回当前使用的 account_id（出现次数最多的值）。"""
+    from app.services.base_url_util import extract_strm_account_id
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+    account_id = extract_strm_account_id(payload.directory)
+    if account_id is None:
+        return ApiResponse(code=404, message="未找到有效的 STRM 文件或无法解析 account_id")
+    return ApiResponse(data={"account_id": account_id})
+
+
+@router.post("/account-repair/run", response_model=ApiResponse)
+async def account_repair_run(payload: AccountRepairRunRequest):
+    """批量替换 STRM 文件中的 account_id（账号更换后重写引用）。"""
+    from app.services.base_url_util import batch_replace_strm_account
+    if not payload.directory:
+        return ApiResponse(code=400, message="请输入 STRM 文件目录")
+    result = batch_replace_strm_account(
+        payload.directory, payload.old_account_id, payload.new_account_id
+    )
+    if result.get("message"):
+        return ApiResponse(code=400, message=result["message"])
+    return ApiResponse(data=result)

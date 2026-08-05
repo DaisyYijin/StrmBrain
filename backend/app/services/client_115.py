@@ -47,22 +47,382 @@ _MAX_RETRIES = 3
 _rate_limit_stats = {"count": 0, "total_wait": 0.0}
 _rate_limit_stats_lock = threading.Lock()
 
+# 失败路径黑名单缓存：(parent_id, name) -> timestamp
+# 当 _find_subdir 查询 115 返回 None（目录不存在）时缓存，
+# 后续相同查询直接短路返回 None，避免重复 API 调用。
+# TTL 300 秒（5 分钟），到期后自动失效，允许重试。
+_path_not_found_cache: dict[tuple[str, str], float] = {}
+_path_not_found_lock = threading.Lock()
+_PATH_NOT_FOUND_TTL = 300  # 5 分钟
+
+# ===== Q4: 写后冷却栅栏（参考 LitePan-main/internal/cache/fence.go 的 mutationFence） =====
+# 115 写操作（mkdir/move/rename/delete_files/upload_file）成功后，服务端目录索引
+# 存在短暂不一致：此时 _find_subdir 可能读到 stale 数据，且"查无目录"结果会被
+# 失败黑名单缓存污染（TTL 5 分钟）。故写操作成功后在 3 秒冷却期内：
+# - _find_subdir 跳过失败黑名单缓存查询，直接走 API
+# - 目录创建/找到成功后调用 _mark_dir_clear 提前解除冷却
+_dir_write_cooldowns: dict[str, float] = {}
+_dir_write_lock = threading.Lock()
+_DIR_WRITE_COOLDOWN = 3.0  # 秒
+
+
+def _mark_dir_written(parent_id: str) -> None:
+    """记录 parent_id 的写操作时间，使其进入写后冷却期（3 秒）。
+
+    115 写操作成功后调用：冷却期内 _find_subdir 跳过失败黑名单缓存，
+    避免读到 stale 的"查无目录"记录。
+    """
+    if not parent_id:
+        return
+    with _dir_write_lock:
+        _dir_write_cooldowns[str(parent_id)] = _time.time()
+
+
+def _dir_in_cooldown(parent_id: str) -> bool:
+    """判断 parent_id 是否处于写后冷却期。
+
+    冷却期内 _find_subdir 不查失败黑名单缓存，直接走 API。
+    冷却已过期时顺手清理记录。
+    """
+    if not parent_id:
+        return False
+    with _dir_write_lock:
+        ts = _dir_write_cooldowns.get(str(parent_id))
+        if ts is None:
+            return False
+        if _time.time() - ts < _DIR_WRITE_COOLDOWN:
+            return True
+        # 冷却已过期，清理记录
+        _dir_write_cooldowns.pop(str(parent_id), None)
+        return False
+
+
+def _mark_dir_clear(parent_id: str) -> None:
+    """清除 parent_id 的写后冷却记录（目录创建/找到成功后调用）。"""
+    if not parent_id:
+        return
+    with _dir_write_lock:
+        _dir_write_cooldowns.pop(str(parent_id), None)
+
+
+def _resolve_parent_ids(client, file_ids, max_items: int = 10) -> list[str]:
+    """best-effort 解析文件/目录的父目录 id 列表（通过 fs_file）。
+
+    用于 rename/delete_files 的写后冷却标记：方法签名中没有父目录 id。
+    - 文件条目：data["cid"] 即父目录
+    - 目录条目：data["pid"] 即父目录（data["cid"] 是自身 id）
+    最多解析前 max_items 个，避免大批次操作产生过多额外请求。
+    """
+    parents: list[str] = []
+    for fid in list(file_ids)[:max_items]:
+        if not fid:
+            continue
+        try:
+            finfo = client.fs_file(fid)
+            pdata = (finfo or {}).get("data") or {}
+            if pdata.get("fid"):
+                pid = pdata.get("cid")  # 文件：cid 即父目录
+            else:
+                pid = pdata.get("pid")  # 目录：pid 即父目录
+            if pid:
+                parents.append(str(pid))
+        except Exception:
+            continue
+    return parents
+
+
+# ===== O3: OOF 快速媒体信息缓存 =====
+# key=sha1 -> {"ts": 时间戳, "data": 结果}，TTL 1 小时，上限 500，锁保护，
+# 避免对同一 sha1 重复探测 115。
+_oof_cache: dict[str, dict] = {}
+_oof_lock = threading.Lock()
+_OOF_CACHE_TTL = 3600  # 1 小时
+_OOF_CACHE_MAX = 500
+
+
+# ===== D2: 滑动窗口限流器 =====
+# 替换全局固定间隔，实现 per-op 精细限流：
+# 每种操作类型维护独立的滑动时间窗口，确保在窗口内不超过最大调用次数。
+# 相比固定 sleep(interval)，滑动窗口允许突发请求，平均速率受限。
+from collections import deque as _deque
+
+
+class _SlidingWindowRateLimiter:
+    """滑动窗口限流器：per-op 精细限流
+
+    每种操作类型维护一个时间戳队列，超出窗口内的最大请求数时等待。
+    相比固定 sleep(interval)：
+    - 允许短时间突发（如连续重命名多个小文件）
+    - 平均速率不超过配置上限
+    - 不同操作类型独立限流（file_list 不阻塞 download_url）
+    """
+
+    def __init__(self):
+        self._windows: dict[str, _deque] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, op_type: str, max_requests: int = 1, window_seconds: float = 3.0,
+                context: str = "") -> None:
+        """获取限流许可，必要时等待。
+
+        op_type: 操作类型（如 "download_url", "file_list", "rename", "move", "mkdir"）
+        max_requests: 窗口内最大请求数（默认 1）
+        window_seconds: 窗口大小（秒，默认 3.0）
+        context: 可选的操作描述（用于日志）
+        """
+        if window_seconds <= 0 or max_requests <= 0:
+            return
+
+        with self._lock:
+            if op_type not in self._windows:
+                self._windows[op_type] = _deque()
+            window = self._windows[op_type]
+            now = _time.time()
+            # 移除窗口外的旧时间戳
+            cutoff = now - window_seconds
+            while window and window[0] < cutoff:
+                window.popleft()
+            # 检查是否超过窗口限制
+            if len(window) >= max_requests:
+                # 计算需要等待的时间
+                oldest = window[0]
+                wait = oldest + window_seconds - now
+                if wait > 0:
+                    with _rate_limit_stats_lock:
+                        _rate_limit_stats["count"] += 1
+                        _rate_limit_stats["total_wait"] += wait
+                    if wait >= 1.0:
+                        ctx = f" - {context}" if context else ""
+                        logger.info(f"[115] 滑动窗口限流 {op_type} 等待 {wait:.1f}s{ctx}...")
+                    # 释放锁后等待（不阻塞其他操作类型）
+                    pass
+                else:
+                    wait = 0
+            else:
+                wait = 0
+            # 记录本次请求时间戳
+            window.append(now)
+
+        if wait > 0:
+            _time.sleep(wait)
+
+
+# 全局限流器实例
+_rate_limiter = _SlidingWindowRateLimiter()
+
+
+# ===== O5: 同账号跨任务互斥 =====
+# 同一 115 账号的同步/整理/清理任务串行执行，防止并发触发 115 风控。
+# 账号级锁：account_id -> threading.Lock
+# 使用 RLock 允许同一线程内嵌套获取（如整理内部调用同步）
+_account_task_locks: dict[int, threading.RLock] = {}
+_account_task_locks_guard = threading.Lock()
+
+
+def get_account_lock(account_id: int) -> threading.RLock:
+    """获取指定账号的任务锁（可重入）。
+    
+    同一 account_id 的同步/整理/清理任务通过此锁串行执行，
+    避免同账号并发操作触发 115 风控。
+    """
+    with _account_task_locks_guard:
+        if account_id not in _account_task_locks:
+            _account_task_locks[account_id] = threading.RLock()
+        return _account_task_locks[account_id]
+
+
+# ===== Q2: 全局熔断器 =====
+# 检测到 115 限流码（REQUEST_MAX_LIMIT_CODE）后全局熔断 1 分钟，
+# 期间所有 115 API 调用直接拒绝（抛出异常），避免继续打 115 导致更严重的封号。
+# 熔断到期后自动恢复，恢复后通过通知通道告知调用方。
+_circuit_breaker_until: float = 0.0  # 熔断到期时间戳
+_circuit_breaker_lock = threading.Lock()
+_CIRCUIT_BREAKER_DURATION = 60  # 熔断 60 秒
+
+
+def _trip_circuit_breaker(reason: str = ""):
+    """触发全局熔断器"""
+    global _circuit_breaker_until
+    with _circuit_breaker_lock:
+        _circuit_breaker_until = _time.time() + _CIRCUIT_BREAKER_DURATION
+    logger.warning(f"[115] 全局熔断器已触发，熔断 {_CIRCUIT_BREAKER_DURATION}s。原因: {reason}")
+
+
+def _is_circuit_open() -> bool:
+    """检查全局熔断器是否处于开启状态"""
+    with _circuit_breaker_lock:
+        return _time.time() < _circuit_breaker_until
+
+
+def _check_circuit_breaker():
+    """检查熔断器状态，若开启则抛出异常拒绝调用。
+    
+    在所有 115 API 调用入口调用此函数。
+    """
+    if _is_circuit_open():
+        remaining = int(_circuit_breaker_until - _time.time())
+        raise RuntimeError(f"115 全局熔断中，请等待 {remaining}s 后重试")
+
+
+# ===== Q1: 账号认证状态机（阶梯冷却 + 失败暂停） =====
+# 内存态（不持久化），参考 LitePan internal/auth 的 state_machine / cooldown 设计：
+# - 连续失败按阶梯冷却：60s / 120s / 300s / 1800s，超出后保持最后一级
+# - 累计失败达到阈值后暂停该账号（failed），需手动重置或重新授权
+# - 网络类错误（超时/连接失败）不计数，避免误伤（对应 LitePan 的 AuthFailureNetwork）
+_AUTH_COOLDOWN_STEPS = [60, 120, 300, 1800]   # 阶梯冷却秒数
+_AUTH_FAIL_ACTIVE_LIMIT = 5     # 主动失败阈值（达到后记录警告，提示接近暂停）
+_AUTH_FAIL_PASSIVE_LIMIT = 10   # 累计失败达到该次数 → 暂停账号（failed）
+_auth_state: dict[int, dict] = {}  # account_id -> {"fail_count","cooldown_level","cooldown_until","failed"}
+_auth_state_lock = threading.Lock()
+
+
+def _is_network_error(exc: Exception) -> bool:
+    """判断异常是否为网络类错误（超时/连接失败），用于认证状态机不计数"""
+    return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError,
+                            ConnectionError, TimeoutError, OSError))
+
+
+def _auth_record_success(account_id: int):
+    """认证成功：重置失败计数 / 冷却等级 / 暂停标记（若有冷却或暂停则清除）"""
+    with _auth_state_lock:
+        st = _auth_state.get(account_id)
+        if st is None:
+            return
+        if st["failed"] or st["cooldown_until"] > 0:
+            logger.info(f"[115] 账号 {account_id} 认证成功，重置失败状态")
+        st["fail_count"] = 0
+        st["cooldown_level"] = 0
+        st["cooldown_until"] = 0.0
+        st["failed"] = False
+
+
+def _auth_record_failure(account_id: int, is_network_error: bool = False):
+    """记录一次认证失败。
+
+    - 网络类错误（超时/连接失败）不计数（仅记录时间戳），避免误伤
+    - 其它失败 fail_count+1，并按 fail_count 决定冷却等级（阶梯 60/120/300/1800s，超出用最后一级）
+    - fail_count >= _AUTH_FAIL_PASSIVE_LIMIT 时置 failed=True（暂停该账号）
+    """
+    now = _time.time()
+    with _auth_state_lock:
+        st = _auth_state.setdefault(account_id, {
+            "fail_count": 0, "cooldown_level": 0,
+            "cooldown_until": 0.0, "failed": False,
+        })
+        if is_network_error:
+            # 网络类错误不计数，仅记录最近一次网络错误时间戳
+            st["last_network_error_ts"] = now
+            return
+        st["fail_count"] += 1
+        # 阶梯冷却：第 1 次 60s、第 2 次 120s、第 3 次 300s、第 4 次起 1800s
+        level = min(st["fail_count"], len(_AUTH_COOLDOWN_STEPS)) - 1
+        st["cooldown_level"] = level
+        st["cooldown_until"] = now + _AUTH_COOLDOWN_STEPS[level]
+        if st["fail_count"] >= _AUTH_FAIL_PASSIVE_LIMIT:
+            st["failed"] = True
+            logger.warning(
+                f"[115] 账号 {account_id} 连续失败 {st['fail_count']} 次，"
+                f"认证已暂停（需手动重置或重新授权）"
+            )
+        elif st["fail_count"] == _AUTH_FAIL_ACTIVE_LIMIT:
+            logger.warning(
+                f"[115] 账号 {account_id} 连续失败 {st['fail_count']} 次，"
+                f"即将达到暂停阈值 {_AUTH_FAIL_PASSIVE_LIMIT}"
+            )
+        else:
+            logger.warning(
+                f"[115] 账号 {account_id} 认证失败（第 {st['fail_count']} 次），"
+                f"冷却 {_AUTH_COOLDOWN_STEPS[level]}s"
+            )
+
+
+def _auth_check_ready(account_id: int) -> Optional[str]:
+    """检查账号认证状态是否就绪。
+
+    返回 None 表示就绪；否则返回不可用原因提示：
+    - failed：已暂停，需手动重置/重新授权
+    - 冷却中：返回剩余秒数提示
+    - 冷却已到期：自动恢复（惰性巡检），视为就绪
+    """
+    now = _time.time()
+    with _auth_state_lock:
+        st = _auth_state.get(account_id)
+        if st is None:
+            return None
+        if st["failed"]:
+            return (f"账号 {account_id} 认证已暂停（连续失败 {st['fail_count']} 次），"
+                    f"请手动重置或重新授权")
+        if st["cooldown_until"] > now:
+            remaining = int(st["cooldown_until"] - now)
+            return f"账号 {account_id} 认证冷却中，剩余 {remaining}s 后允许再次尝试"
+        if st["cooldown_until"] > 0:
+            # 冷却到期，自动恢复（惰性巡检）
+            st["cooldown_until"] = 0.0
+            st["cooldown_level"] = 0
+    return None
+
+
+def _auth_sweep_cooldowns():
+    """后台巡检：冷却到期的账号自动恢复（failed 的账号需手动 _auth_reset 解除）"""
+    now = _time.time()
+    with _auth_state_lock:
+        for account_id, st in list(_auth_state.items()):
+            if st["failed"]:
+                continue
+            if st["cooldown_until"] > 0 and now >= st["cooldown_until"]:
+                st["cooldown_until"] = 0.0
+                st["cooldown_level"] = 0
+                logger.info(f"[115] 账号 {account_id} 认证冷却到期，已自动恢复")
+
+
+def _auth_reset(account_id: int):
+    """手动重置账号认证状态（用户重新授权/手动重试后调用）"""
+    with _auth_state_lock:
+        st = _auth_state.get(account_id)
+        if st is None:
+            return
+        was_failed = st["failed"]
+        st["fail_count"] = 0
+        st["cooldown_level"] = 0
+        st["cooldown_until"] = 0.0
+        st["failed"] = False
+    if was_failed:
+        logger.info(f"[115] 账号 {account_id} 认证状态已手动重置")
+
+
+# 115 限流错误码（从异常消息中检测）
+_RATE_LIMIT_KEYWORDS = ["访问频率", "频率过高", "too many", "REQUEST_MAX_LIMIT", "请求过于频繁"]
+
+
+def _check_rate_limit_error(exc: Exception) -> bool:
+    """检测异常是否为 115 限流，若是则触发熔断器。
+    返回 True 表示触发了熔断。
+    """
+    msg = str(exc)
+    for kw in _RATE_LIMIT_KEYWORDS:
+        if kw in msg or kw.lower() in msg.lower():
+            _trip_circuit_breaker(reason=msg[:200])
+            return True
+    return False
+
 
 def _apply_rate_limit(operation: str = "", context: str = ""):
     """对 115 API 写操作应用速率限制（重命名、移动、获取下载链接等）
+    
+    D2: 使用滑动窗口限流器替代固定 sleep(interval)。
+    每种操作类型独立限流，允许突发请求但平均速率受限。
     context: 可选的操作对象（如文件名），用于等待日志展示当前处理进度
     """
-    _interval = get_api_intervals().get("download_url_interval", 3.0)
-    if _interval > 0:
-        with _rate_limit_stats_lock:
-            _rate_limit_stats["count"] += 1
-            _rate_limit_stats["total_wait"] += _interval
-        # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
-        if _interval >= 1.0:
-            op = f" ({operation})" if operation else ""
-            ctx = f" - {context}" if context else ""
-            logger.info(f"[115] API 请求间隔等待 {_interval}s{op}{ctx}...")
-        _time.sleep(_interval)
+    intervals = get_api_intervals()
+    interval = intervals.get("download_url_interval", 3.0)
+    if interval > 0:
+        # D2: 使用滑动窗口限流（1 请求 / interval 秒）
+        _rate_limiter.acquire(
+            op_type=operation or "write",
+            max_requests=1,
+            window_seconds=interval,
+            context=context,
+        )
 
 
 def _get_retry_cooldown() -> float:
@@ -72,15 +432,18 @@ def _get_retry_cooldown() -> float:
 
 def _apply_file_list_interval(context: str = ""):
     """文件列表分页间隔（跟随用户配置，默认 0.3s）
+    
+    D2: 使用滑动窗口限流器替代固定 sleep(interval)。
     context: 可选的操作对象（如目录名），用于等待日志展示当前进度
     """
-    _interval = get_api_intervals().get("file_list_interval", 3.0)
-    if _interval > 0:
-        # 间隔 >= 1s 时输出日志，避免 0.3s 级别的正常节流刷屏
-        if _interval >= 1.0:
-            ctx = f" - {context}" if context else ""
-            logger.info(f"[115] 文件列表分页等待 {_interval}s{ctx}...")
-        _time.sleep(_interval)
+    interval = get_api_intervals().get("file_list_interval", 3.0)
+    if interval > 0:
+        _rate_limiter.acquire(
+            op_type="file_list",
+            max_requests=1,
+            window_seconds=interval,
+            context=context,
+        )
 
 
 def get_rate_limit_stats() -> dict:
@@ -99,15 +462,102 @@ def _run_in_thread(func, *args, **kwargs):
 
 
 def _is_rate_limited(exc: Exception) -> bool:
-    """判断异常是否为 115 访问频率过高"""
+    """判断异常是否为 115 访问频率过高
+    
+    Q2: 若检测到限流，自动触发全局熔断器。
+    """
     msg = str(exc)
-    return "访问频率" in msg or "频率过高" in msg or "too many" in msg.lower()
+    is_limited = "访问频率" in msg or "频率过高" in msg or "too many" in msg.lower() or "REQUEST_MAX_LIMIT" in msg or "请求过于频繁" in msg
+    if is_limited:
+        _trip_circuit_breaker(reason=msg[:200])
+    return is_limited
 
 
 def _is_method_not_allowed(exc) -> bool:
     """判断是否为 405 Method Not Allowed 错误"""
     msg = str(exc)
     return "405" in msg or "Method Not Allowed" in msg
+
+
+# 端点级冷却状态：记录每个端点最近一次限流时间，避免一个端点限流影响全局
+_endpoint_cooldowns: dict[str, float] = {}
+_endpoint_cooldowns_lock = threading.Lock()
+
+
+def _is_endpoint_in_cooldown(endpoint: str) -> bool:
+    """检查某端点是否仍在冷却期（限流后需要等待冷却时间）"""
+    with _endpoint_cooldowns_lock:
+        cd_until = _endpoint_cooldowns.get(endpoint, 0)
+        return _time.time() < cd_until
+
+
+def _mark_endpoint_cooldown(endpoint: str, duration: float = 0):
+    """标记端点进入冷却期（duration=0 时使用用户配置的 retry_cooldown）"""
+    if duration <= 0:
+        duration = _get_retry_cooldown()
+    with _endpoint_cooldowns_lock:
+        _endpoint_cooldowns[endpoint] = _time.time() + duration
+
+
+def _call_write_with_405_fallback(client, primary_method_name: str, app_method_name: str,
+                                   *args, max_retries: int = _MAX_RETRIES, **kwargs):
+    """
+    通用写操作 405 降级：先调 primary_method，405 时降级到 app_method。
+    支持限流重试和端点级冷却。
+
+    - primary_method_name: 主方法名（如 'fs_move'）
+    - app_method_name: 降级方法名（如 'fs_move_app'）
+    - 返回 API 响应 dict，或抛出最终异常
+    """
+    primary = getattr(client, primary_method_name, None)
+    app_fallback = getattr(client, app_method_name, None)
+    cooldown = _get_retry_cooldown()
+
+    for attempt in range(max_retries):
+        # 端点级冷却：主端点在冷却期时直接用 app 端点
+        use_app = _is_endpoint_in_cooldown(primary_method_name) and app_fallback
+        method = app_fallback if use_app else primary
+        method_name = app_method_name if use_app else primary_method_name
+        if method is None:
+            continue
+
+        try:
+            return method(*args, **kwargs)
+        except Exception as e:
+            # Q1: 记录认证失败（限流不计入认证失败；网络类错误不计数；无法识别账号时传 0）
+            _rate_limited = _is_rate_limited(e)
+            if not _rate_limited:
+                _auth_record_failure(0, is_network_error=_is_network_error(e))
+            if _is_method_not_allowed(e):
+                if app_fallback and not use_app:
+                    logger.info(f"[115] {primary_method_name} 返回 405，降级到 {app_method_name}")
+                    _mark_endpoint_cooldown(primary_method_name, duration=300)  # 主端点冷却 5 分钟
+                    try:
+                        return app_fallback(*args, **kwargs)
+                    except Exception as e2:
+                        if _is_method_not_allowed(e2):
+                            _mark_endpoint_cooldown(app_method_name, duration=300)
+                            if attempt < max_retries - 1:
+                                _time.sleep(cooldown)
+                                continue
+                            raise
+                        if _is_rate_limited(e2) and attempt < max_retries - 1:
+                            logger.warning(f"[115] {app_method_name} 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                            _mark_endpoint_cooldown(app_method_name)
+                            _time.sleep(cooldown)
+                            continue
+                        raise
+                if attempt < max_retries - 1:
+                    _time.sleep(cooldown)
+                    continue
+                raise
+            if _rate_limited and attempt < max_retries - 1:
+                logger.warning(f"[115] {method_name} 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
+                _mark_endpoint_cooldown(method_name)
+                _time.sleep(cooldown)
+                continue
+            raise
+    return {}
 
 
 def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) -> dict:
@@ -117,6 +567,10 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
         try:
             return client.fs_files(params)
         except Exception as e:
+            # Q1: 记录认证失败（限流不计入认证失败；网络类错误不计数；无法识别账号时传 0）
+            _rate_limited = _is_rate_limited(e)
+            if not _rate_limited:
+                _auth_record_failure(0, is_network_error=_is_network_error(e))
             # 405 错误：依次降级到 fs_files_app、fs_files_aps
             if _is_method_not_allowed(e):
                 logger.info(f"[115] fs_files 返回 405，降级到 fs_files_app")
@@ -138,7 +592,7 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
                         _time.sleep(cooldown)
                         continue
                     raise
-            if _is_rate_limited(e) and attempt < max_retries - 1:
+            if _rate_limited and attempt < max_retries - 1:
                 logger.warning(f"[115] 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
                 _time.sleep(cooldown)
                 continue
@@ -413,8 +867,20 @@ class Client115Service:
             return {"user_id": "", "username": ""}
     
     @classmethod
-    def create_client_from_cookies(cls, cookies: str) -> P115Client:
-        """创建或复用 P115Client 实例（按 cookies 哈希缓存，减少重复初始化开销）"""
+    def create_client_from_cookies(cls, cookies: str, account_id: int = 0, skip_auth_check: bool = False) -> P115Client:
+        """创建或复用 P115Client 实例（按 cookies 哈希缓存，减少重复初始化开销）
+
+        Q1: 增加 account_id 参数（默认 0），创建前检查认证状态机：
+        - 冷却/暂停中的账号直接抛 RuntimeError，避免继续打 115
+        - 现有调用不传 account_id 的默认 0，不受影响
+        - skip_auth_check=True 时跳过检查（用于用户主动校验 cookies 等恢复场景，
+          校验成功后由调用方调用 _auth_record_success 重置状态）
+        """
+        # Q1: 认证状态机检查（冷却/暂停时拒绝创建客户端）
+        if not skip_auth_check:
+            block_reason = _auth_check_ready(account_id)
+            if block_reason:
+                raise RuntimeError(f"[115] {block_reason}")
         cookies_hash = hashlib.md5(cookies.encode()).hexdigest()
         with _clients_cache_lock:
             client = _clients_cache.get(cookies_hash)
@@ -431,8 +897,10 @@ class Client115Service:
     
     @classmethod
     def get_client(cls, account_id: int, cookies: str) -> P115Client:
-        """获取缓存的 P115Client（兼容旧接口，实际按 cookies 缓存）"""
-        return cls.create_client_from_cookies(cookies)
+        """获取缓存的 P115Client（兼容旧接口，实际按 cookies 缓存）
+        Q1: account_id 透传给认证状态机检查
+        """
+        return cls.create_client_from_cookies(cookies, account_id=account_id)
     
     @classmethod
     def remove_client(cls, account_id: int = None, cookies: str = None):
@@ -446,9 +914,13 @@ class Client115Service:
     
     @classmethod
     def check_cookies_valid(cls, cookies: str) -> tuple[bool, dict]:
-        """检测 cookies 可用性，并返回账号详情（含空间容量）"""
+        """检测 cookies 可用性，并返回账号详情（含空间容量）
+
+        Q1: 用户主动校验场景跳过认证状态机检查（避免暂停状态下无法重新校验），
+        校验成功时重置认证状态（视为认证成功）。
+        """
         try:
-            client = cls.create_client_from_cookies(cookies)
+            client = cls.create_client_from_cookies(cookies, skip_auth_check=True)
             user_info = client.user_info()
             data = user_info.get("data", user_info) if isinstance(user_info, dict) else {}
 
@@ -488,9 +960,28 @@ class Client115Service:
             except Exception as e:
                 logger.warning(f"[115] 获取空间信息失败: {e}")
 
+            # Q1: 用户主动校验成功 → 视为认证成功，重置失败状态
+            _auth_record_success(0)
             return True, info
         except Exception as e:
             return False, {"error": str(e)}
+
+    @classmethod
+    def daily_checkin(cls, cookies: str) -> dict:
+        """115 每日签到（积分签到）。
+
+        调用 p115client 的 user_points_sign 方法获取并执行签到，
+        方法不存在（老版本）时抛异常由 try/except 兜底，返回结果 dict：
+        - 成功：签到接口返回的 dict（如 {"state": true, "data": {...}}）
+        - 失败：{"error": 原因}（含 cookies 失效 / 方法不存在等情况）
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            result = client.user_points_sign()
+            return result if isinstance(result, dict) else {"data": result}
+        except Exception as e:
+            logger.warning(f"[115] 每日签到失败: {e}")
+            return {"error": str(e)}
 
     @staticmethod
     def _to_bytes(v) -> int:
@@ -525,6 +1016,7 @@ class Client115Service:
         """获取 115 文件下载链接，带 TTL 缓存 + 并发合并（Coalesce）
         context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
+        _check_circuit_breaker()  # Q2: 熔断器检查
         if not pickcode:
             return None
         # 检查缓存
@@ -625,6 +1117,7 @@ class Client115Service:
         115 直链要求下载 UA 与获取 UA 一致（f=1 参数控制），播放器用自己的
         UA 直连时，必须用该 UA 换取直链，否则 115 拒绝 → NoCompatibleStream。
         参考 emby2Alist fetchLastLink：携带客户端 UA 换直链。
+        405 时自动降级备用端点：download_url → download_url_app → download_url_web2
         """
         if not pickcode or not ua:
             return None
@@ -637,31 +1130,41 @@ class Client115Service:
         _apply_rate_limit("download_url", context)
         try:
             client = cls.create_client_from_cookies(cookies)
-            result = client.download_url(pickcode, user_agent=ua)
-            if isinstance(result, dict):
-                # 注意：or/if 三元表达式有优先级陷阱，必须用括号分隔
-                url = result.get("url") or (result.get("data", {}).get("url") if isinstance(result.get("data"), dict) else None)
-                if not url:
-                    url = str(result) if result else None
-            else:
-                url = str(result) if result else None
+            # 使用带 405 降级和限流重试的下载链接获取
+            result = _download_url_with_retry(client, pickcode, ua)
+            url = _extract_download_url(result)
             if url:
                 with _cache_lock:
                     _DOWNLOAD_URL_CACHE[cache_key] = {
                         "url": url, "ts": _time.time(), "account_id": account_id,
                         "user_agent": ua,
                     }
-            return url
+                    # 清理过期条目
+                    if len(_DOWNLOAD_URL_CACHE) > 5000:
+                        cutoff = _time.time() - _DOWNLOAD_URL_TTL
+                        expired = [k for k, v in _DOWNLOAD_URL_CACHE.items() if v["ts"] < cutoff]
+                        for k in expired:
+                            _DOWNLOAD_URL_CACHE.pop(k, None)
+            return url or None
         except Exception as e:
             logger.warning(f"[115] get_download_url_with_ua 失败 pickcode={pickcode}: {e}")
             return None
 
     @classmethod
     def invalidate_download_url_cache(cls, pickcode: str = None):
-        """清除直链缓存（pickcode 为 None 时清除全部）"""
+        """清除直链缓存
+        - pickcode 为 None 时清除全部
+        - pickcode 指定时，同时清除 pickcode 和 pickcode|ua（不同 UA 的缓存变体）
+        """
         with _cache_lock:
             if pickcode:
+                # 清除无 UA 的缓存键
                 _DOWNLOAD_URL_CACHE.pop(pickcode, None)
+                # 清除所有 pickcode|ua 变体（不同客户端 UA）
+                prefix = f"{pickcode}|"
+                keys_to_remove = [k for k in _DOWNLOAD_URL_CACHE if k.startswith(prefix)]
+                for k in keys_to_remove:
+                    _DOWNLOAD_URL_CACHE.pop(k, None)
             else:
                 _DOWNLOAD_URL_CACHE.clear()
 
@@ -771,32 +1274,69 @@ class Client115Service:
     def mkdir(cls, cookies: str, name: str, parent_id: str = "0") -> Optional[str]:
         """
         新建目录，返回目录 ID。如已存在则返回已存在目录 ID。
+        405 时自动降级到 fs_mkdir_app。
         """
         _apply_rate_limit("mkdir")
         client = cls.create_client_from_cookies(cookies)
         try:
-            resp = client.fs_mkdir({"cname": name, "pid": parent_id})
+            resp = _call_write_with_405_fallback(
+                client, "fs_mkdir", "fs_mkdir_app",
+                {"cname": name, "pid": parent_id},
+            )
             # 成功返回 {"cid": ...} 或 {"file_id": ...}
             cid = resp.get("cid") or resp.get("file_id") or resp.get("category_id")
             if cid:
+                # 目录创建成功，清除失败黑名单缓存
+                cache_key = (str(parent_id), name)
+                with _path_not_found_lock:
+                    _path_not_found_cache.pop(cache_key, None)
+                # Q4: 标记父目录进入写后冷却（新目录可能尚未在服务端索引中可见）
+                _mark_dir_written(parent_id)
                 return str(cid)
             # 目录已存在：115 返回 errno=20004，需要查找已有目录
-            return cls._find_subdir(client, name, parent_id)
+            found = cls._find_subdir(client, name, parent_id)
+            if found:
+                # 目录找到，清除失败黑名单缓存
+                cache_key = (str(parent_id), name)
+                with _path_not_found_lock:
+                    _path_not_found_cache.pop(cache_key, None)
+            return found
         except Exception as e:
             # 尝试查找已存在目录
             found = cls._find_subdir(client, name, parent_id)
             if found:
+                # 目录找到，清除失败黑名单缓存
+                cache_key = (str(parent_id), name)
+                with _path_not_found_lock:
+                    _path_not_found_cache.pop(cache_key, None)
                 return found
             logger.warning(f"[115] mkdir 失败 {name}: {e}")
             return None
 
     @classmethod
     def _find_subdir(cls, client, name: str, parent_id: str) -> Optional[str]:
-        """在父目录下查找同名子目录，返回其 cid"""
+        """在父目录下查找同名子目录，返回其 cid（使用 405 降级重试）
+        
+        集成失败黑名单缓存：查询返回 None 时缓存 (parent_id, name)，
+        后续相同查询在 TTL 内直接短路返回 None，避免重复 API 调用。
+        """
+        # 失败黑名单短路：TTL 内的"查无"记录直接返回 None
+        # Q4: 写后冷却期内跳过黑名单（避免刚写入的目录被 stale 的"查无"记录短路），直接走 API
+        cache_key = (str(parent_id), name)
+        if not _dir_in_cooldown(parent_id):
+            with _path_not_found_lock:
+                cached_ts = _path_not_found_cache.get(cache_key)
+                if cached_ts is not None:
+                    if _time.time() - cached_ts < _PATH_NOT_FOUND_TTL:
+                        return None
+                    else:
+                        # 过期，移除旧记录
+                        del _path_not_found_cache[cache_key]
+
         try:
             offset = 0
             while True:
-                resp = client.fs_files({
+                resp = _fs_files_with_retry(client, {
                     "cid": parent_id, "offset": offset, "limit": 1000, "show_dir": 1,
                 })
                 items = resp.get("data", []) or []
@@ -804,6 +1344,8 @@ class Client115Service:
                     break
                 for it in items:
                     if not it.get("fid") and it.get("n") == name:
+                        # Q4: 目录找到成功，解除该目录的写后冷却
+                        _mark_dir_clear(parent_id)
                         return str(it.get("cid"))
                 total = resp.get("count", 0)
                 offset += len(items)
@@ -813,6 +1355,10 @@ class Client115Service:
                 _apply_file_list_interval(context=f"查找目录 {name}")
         except Exception:
             pass
+
+        # 查无此目录，写入失败黑名单缓存
+        with _path_not_found_lock:
+            _path_not_found_cache[cache_key] = _time.time()
         return None
 
     @classmethod
@@ -836,15 +1382,22 @@ class Client115Service:
 
         注意：fs_rename 接受单个元组 (file_id, new_name) 或 dict，
         不能传列表。返回 dict 含 state 字段，需检查。
+        405 时自动降级到 fs_rename_app。
         context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
         _apply_rate_limit("rename", context)
         client = cls.create_client_from_cookies(cookies)
         try:
-            resp = client.fs_rename((file_id, new_name))
+            resp = _call_write_with_405_fallback(
+                client, "fs_rename", "fs_rename_app",
+                (file_id, new_name),
+            )
             if isinstance(resp, dict) and resp.get("state") is False:
                 logger.warning(f"[115] rename 失败 {file_id} -> {new_name}: {resp.get('error', '')}")
                 return False
+            # Q4: 重命名成功，解析源父目录并标记写后冷却（best-effort）
+            for pid in _resolve_parent_ids(client, [file_id]):
+                _mark_dir_written(pid)
             return True
         except Exception as e:
             logger.warning(f"[115] rename 失败 {file_id} -> {new_name}: {e}")
@@ -859,8 +1412,22 @@ class Client115Service:
         不能传 {"fid": [...]} 因为 API 不接受 fid 为列表。
         返回 dict 含 state 字段，需检查。
         遇到"操作尚未执行完成"时自动等待重试。
+        405 时自动降级到 fs_move_app。
         context: 可选的操作对象（如文件名），用于等待日志展示当前进度
         """
+        _check_circuit_breaker()  # Q2: 熔断器检查
+
+        def _do_move(cli, fids, pid):
+            """带 405 降级的 fs_move 调用"""
+            try:
+                return cli.fs_move(fids, pid=pid)
+            except Exception as e:
+                if _is_method_not_allowed(e):
+                    logger.info("[115] fs_move 返回 405，降级到 fs_move_app")
+                    _mark_endpoint_cooldown("fs_move", duration=300)
+                    return cli.fs_move_app(fids, pid=pid)
+                raise
+
         _apply_rate_limit("move", context)
         client = cls.create_client_from_cookies(cookies)
         # 异步操作等待基础值（跟随用户配置的直链间隔，避免低于配置）
@@ -868,7 +1435,7 @@ class Client115Service:
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                resp = client.fs_move(file_ids, pid=dest_id)
+                resp = _do_move(client, file_ids, dest_id)
                 if isinstance(resp, dict) and resp.get("state") is False:
                     err_msg = resp.get("error", "")
                     # 115 移动操作是异步的，连续操作可能返回"操作尚未执行完成"
@@ -879,6 +1446,8 @@ class Client115Service:
                         continue
                     logger.warning(f"[115] move 失败 -> {dest_id}: {err_msg}")
                     return False
+                # Q4: 移动成功，目标目录内容已变化，标记写后冷却
+                _mark_dir_written(dest_id)
                 return True
             except Exception as e:
                 if "尚未执行完成" in str(e) and attempt < max_retries - 1:
@@ -895,10 +1464,15 @@ class Client115Service:
         """复制文件到目标目录
 
         注意：fs_copy 的调用方式与 fs_move 相同。
+        405 时自动降级到 fs_copy_app。
         """
+        _apply_rate_limit("copy")
         client = cls.create_client_from_cookies(cookies)
         try:
-            resp = client.fs_copy(file_ids, pid=dest_id)
+            resp = _call_write_with_405_fallback(
+                client, "fs_copy", "fs_copy_app",
+                file_ids, pid=dest_id,
+            )
             if isinstance(resp, dict) and resp.get("state") is False:
                 logger.warning(f"[115] copy 失败 -> {dest_id}: {resp.get('error', '')}")
                 return False
@@ -914,28 +1488,40 @@ class Client115Service:
         注意：使用 upload_file_sample 而非 upload_file，因为后者调用的
         uplb.115.com/4.0/initupload.php 接口会返回 405 Method Not Allowed。
         upload_file_sample 使用不同的 API 端点，对小文件上传更稳定。
+
+        支持秒传优化：上传前计算 SHA1，传给 115 服务端检查是否已有相同哈希的文件，
+        若已存在则跳过实际上传，节省带宽和时间。
         """
         import tempfile
         import os
         client = cls.create_client_from_cookies(cookies)
         tmp_path = None
         try:
+            # 计算文件的 SHA1 哈希，用于秒传判断
+            sha1 = hashlib.sha1(data).hexdigest()
             # 写入临时文件再上传
             fd, tmp_path = tempfile.mkstemp(suffix=f"_{filename}")
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
             # 使用 upload_file_sample 代替 upload_file
             # upload_file 的 initupload.php 端点返回 405，upload_file_sample 更稳定
+            # 传入 sha1 参数，让 115 服务端检查是否已有相同哈希的文件（秒传）
             resp = client.upload_file_sample(
                 tmp_path,
                 pid=dest_id,
                 filename=filename,
+                sha1=sha1,
             )
-            if isinstance(resp, dict) and resp.get("state") is False:
-                errno = resp.get("errno", "?")
-                error = resp.get("error", str(resp)[:200])
-                logger.warning(f"[115] upload 失败 {filename}: errno={errno}, error={error}")
-                return False
+            if isinstance(resp, dict):
+                # 检查是否秒传成功（文件已存在，跳过实际上传）
+                if resp.get("bak_num") or resp.get("already_exists"):
+                    logger.info(f"[115] 秒传成功: {filename}")
+                    return True
+                if resp.get("state") is False:
+                    errno = resp.get("errno", "?")
+                    error = resp.get("error", str(resp)[:200])
+                    logger.warning(f"[115] upload 失败 {filename}: errno={errno}, error={error}")
+                    return False
             logger.info(f"[115] upload 成功: {filename}")
             return True
         except Exception as e:
@@ -973,6 +1559,8 @@ class Client115Service:
                 logger.warning(f"[115] upload_file 失败 {filename}: errno={errno}, error={error}")
                 return False
             logger.info(f"[115] upload_file 成功: {filename}")
+            # Q4: 上传成功，目标目录内容已变化，标记写后冷却
+            _mark_dir_written(dest_id)
             return True
         except Exception as e:
             cause = e.__cause__
@@ -983,6 +1571,151 @@ class Client115Service:
             return False
 
     # ============ STRM 同步专用方法 ============
+
+    # ===== S2: 115 导出目录树（export_dir 快速扫描） =====
+    # 参考 MoviePilot p115strmhelper 的 increment.py 设计思想：
+    # 用 115 服务端"导出目录树"一次性导出整个目录的路径清单（比逐目录递归 fs_files
+    # 少一次全量遍历），再用 fs_files 为树中的文件补全元数据（file_id/pickcode/size/sha1）。
+    # 注意：115 同一时间只允许运行一个导出目录树任务，需加锁串行。
+    _export_dir_lock = threading.Lock()
+    _EXPORT_DIR_TIMEOUT = 600  # 导出任务等待超时（秒）
+
+    @classmethod
+    def export_dir_tree(cls, cookies: str, cid: str, timeout: float = 600.0) -> dict:
+        """使用 115 导出目录树功能快速获取目录结构（含元数据补全）。
+
+        返回: {
+            "files": [{"name", "path", "size", "pickcode", "file_id", "sha1", "parent_path"}],
+            "dirs":  [{"name", "path"}],
+        }
+        - path 为相对同步根目录（cid）的完整路径，如 "电影/2025/某片/xxx.mkv"
+        - 115 导出树仅含路径名，size/pickcode 等元数据由 _fill_tree_meta 逐目录补全
+        - 返回 {} 表示不支持 / 导出失败（调用方回退递归扫描）
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            from p115client.tool.export_dir import (
+                export_dir_start, export_dir_result, export_dir_parse_iter,
+            )
+        except ImportError:
+            logger.warning("[115] 当前 p115client 不支持导出目录树，降级为递归扫描")
+            return {}
+        try:
+            with cls._export_dir_lock:
+                # 1. 提交导出目录树任务（layer_limit=0 表示不限深度）
+                export_id = export_dir_start(client, file_ids=str(cid), layer_limit=0)
+                # 2. 轮询等待任务完成（超时抛 TimeoutError，不取消远程任务）
+                export_dir_result(client, export_id, timeout=timeout, check_interval=2)
+                # 3. 下载并解析目录树（按路径解析，根路径为第一项），完成后删除导出文件
+                paths = list(export_dir_parse_iter(
+                    client, export_id, parse_iter="path", delete=True,
+                ))
+        except Exception as e:
+            logger.warning(f"[115] export_dir 树导出失败 cid={cid}: {e}")
+            return {}
+        if not paths:
+            return {}
+
+        # 4. 剥离导出根路径前缀，得到相对路径清单；用前缀关系区分目录与文件
+        root = paths[0]
+        rel_paths = []
+        for p in paths[1:]:
+            if p == root:
+                continue
+            if p.startswith(root + "/"):
+                rel_paths.append(p[len(root) + 1:])
+            else:
+                rel_paths.append(p)
+        dir_set: set[str] = set()
+        for p in rel_paths:
+            parts = p.split("/")
+            for i in range(1, len(parts)):
+                dir_set.add("/".join(parts[:i]))
+        dir_paths: list[dict] = [{"name": p.rsplit("/", 1)[-1], "path": p}
+                                 for p in sorted(dir_set)]
+        file_paths: list[dict] = []
+        for p in rel_paths:
+            if p in dir_set:
+                continue
+            file_paths.append({
+                "name": p.rsplit("/", 1)[-1],
+                "path": p,
+                "size": 0,
+                "pickcode": "",
+                "file_id": "",
+                "sha1": "",
+                "parent_path": p.rsplit("/", 1)[0] if "/" in p else "",
+            })
+
+        # 5. 元数据补全：按树中目录路径逐目录 fs_files，为文件补全 fid/pickcode/size/sha1
+        if not cls._fill_tree_meta(client, str(cid), dir_paths, file_paths):
+            logger.warning("[115] export_dir 树元数据补全失败，回退递归扫描")
+            return {}
+
+        return {"files": file_paths, "dirs": dir_paths}
+
+    @classmethod
+    def _fill_tree_meta(cls, client, root_cid: str, dir_paths: list[dict],
+                        file_paths: list[dict]) -> bool:
+        """为 export_dir 树中的文件补全元数据（file_id/pickcode/size/sha1）。
+
+        按树中目录路径逐目录调用 fs_files（分页），把目录内条目按 "相对路径" 建立
+        索引后回填到 files 列表。任一层级失败即返回 False（调用方回退递归扫描）。
+        注意：115 导出树不导出空目录，故树中目录必然存在；对树外目录不继续下钻。
+        """
+        if not file_paths:
+            return True
+        dir_path_set = {d["path"] for d in dir_paths}
+        # 相对路径 -> cid 映射（"" 为同步根）
+        cid_of: dict[str, str] = {"": str(root_cid)}
+        # 相对路径 -> 元数据
+        meta: dict[str, dict] = {}
+        pending = [""]
+        while pending:
+            p = pending.pop()
+            cur_cid = cid_of.get(p)
+            if cur_cid is None:
+                continue
+            offset = 0
+            while True:
+                try:
+                    resp = _fs_files_with_retry(client, {
+                        "cid": cur_cid, "offset": offset, "limit": 1150, "show_dir": 1,
+                    })
+                except Exception as e:
+                    logger.warning(f"[115] export_dir 元数据补全失败 cid={cur_cid}: {e}")
+                    return False
+                items = resp.get("data", []) or []
+                if not items:
+                    break
+                for it in items:
+                    name = it.get("n", "")
+                    if not name:
+                        continue
+                    key = f"{p}/{name}" if p else name
+                    if not it.get("fid"):
+                        # 子目录：仅当在树中时才继续下钻（避免扫描树外目录）
+                        if key in dir_path_set:
+                            cid_of[key] = str(it.get("cid", ""))
+                            pending.append(key)
+                    else:
+                        meta[key] = {
+                            "file_id": str(it.get("fid", "")),
+                            "pickcode": it.get("pc", ""),
+                            "size": it.get("s", 0) or 0,
+                            "sha1": it.get("sha", ""),
+                        }
+                total = resp.get("count", 0)
+                offset += len(items)
+                if offset >= total:
+                    break
+                _apply_file_list_interval(context=p or "根目录")
+        # 回填元数据（树中已导出但 fs_files 未命中的文件保留空元数据，极罕见）
+        for f in file_paths:
+            m = meta.get(f["path"])
+            if m:
+                f.update(m)
+        return True
 
     @classmethod
     def list_all_files_with_meta(cls, cookies: str, cid: str, exts: set,
@@ -997,6 +1730,7 @@ class Client115Service:
         - excludes: 排除关键字列表（小写）
         - parent_path: 相对于同步根目录的完整相对路径（如 "电影/2025/某片"）
         """
+        _check_circuit_breaker()  # Q2: 熔断器检查
         excludes = excludes or []
         client = cls.create_client_from_cookies(cookies)
         # 视频扩展名集合（用于判断是否应用 min_size）
@@ -1132,14 +1866,120 @@ class Client115Service:
         logger.warning(f"[115] download_file 失败 {local_path}: {last_error}")
         return False
 
+    @classmethod
+    def download_files_batch(cls, cookies: str, tasks: list[dict]) -> list[dict]:
+        """批量下载文件（用于字幕、图片、NFO 等元数据文件并发下载）
+
+        策略（参考 MoviePilot 批量字幕下载优化）：
+        1. 先串行获取所有下载链接（受速率限制，避免并发触发 115 风控）
+        2. 再并发下载文件内容（CDN 下载不受 API 速率限制）
+        3. 下载失败的文件自动重试（最多 2 次）
+
+        tasks: [{"pickcode": str, "local_path": str, "context": str}, ...]
+        返回: [{"pickcode": str, "local_path": str, "success": bool, "error": str}, ...]
+        """
+        if not tasks:
+            return []
+
+        import os
+        results = []
+        # 第一阶段：串行获取下载链接（含速率限制）
+        dl_infos = []  # [(task, url, ua), ...]
+        for task in tasks:
+            pickcode = task.get("pickcode", "")
+            local_path = task.get("local_path", "")
+            context = task.get("context", "")
+            if not pickcode:
+                results.append({"pickcode": pickcode, "local_path": local_path,
+                                "success": False, "error": "无 pickcode"})
+                continue
+            dl_info = cls.get_download_url_with_headers(cookies, pickcode, context=context)
+            if not dl_info or not dl_info.get("url"):
+                results.append({"pickcode": pickcode, "local_path": local_path,
+                                "success": False, "error": "获取下载链接失败"})
+                continue
+            dl_infos.append((task, dl_info["url"], dl_info.get("user_agent") or cls.DOWNLOAD_USER_AGENT))
+
+        # 第二阶段：并发下载文件内容
+        def _download_one(task_info):
+            task, url, ua = task_info
+            local_path = task["local_path"]
+            context = task.get("context", "")
+            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+            headers = {
+                "User-Agent": ua,
+                "Referer": "https://115.com/",
+                "Accept": "*/*",
+            }
+            last_error = None
+            for attempt in range(2):
+                try:
+                    with httpx.Client(timeout=60.0, follow_redirects=True, headers=headers) as c:
+                        with c.stream("GET", url) as r:
+                            if r.status_code == 403:
+                                # 链接过期，重新获取
+                                pickcode = task["pickcode"]
+                                cls.invalidate_download_url_cache(pickcode)
+                                new_info = cls.get_download_url_with_headers(
+                                    cookies, pickcode, context=context)
+                                if new_info and new_info.get("url"):
+                                    url = new_info["url"]
+                                    headers["User-Agent"] = new_info.get("user_agent") or ua
+                                last_error = "403 Forbidden"
+                                continue
+                            r.raise_for_status()
+                            with open(local_path, "wb") as f:
+                                for chunk in r.iter_bytes(chunk_size=65536):
+                                    f.write(chunk)
+                    return {"pickcode": task["pickcode"], "local_path": local_path,
+                            "success": True, "error": ""}
+                except Exception as e:
+                    last_error = str(e)
+                    if attempt < 1:
+                        _time.sleep(1)
+            return {"pickcode": task["pickcode"], "local_path": local_path,
+                    "success": False, "error": last_error}
+
+        # 使用线程池并发下载（最多 4 个并发）
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(_download_one, info): info for info in dl_infos}
+            for future in futures:
+                try:
+                    results.append(future.result(timeout=120))
+                except Exception as e:
+                    info = futures[future]
+                    results.append({"pickcode": info[0]["pickcode"],
+                                    "local_path": info[0]["local_path"],
+                                    "success": False, "error": str(e)})
+
+        _ok = sum(1 for r in results if r["success"])
+        _fail = len(results) - _ok
+        if _fail > 0:
+            logger.info(f"[115] 批量下载完成: 成功 {_ok}, 失败 {_fail}")
+        return results
+
     # ============ 特色工具：删除/回收站操作 ============
 
     @classmethod
     def delete_files(cls, cookies: str, file_ids: list[str]) -> dict:
-        """删除文件或目录（移入回收站），返回 115 API 响应"""
+        """删除文件或目录（移入回收站），返回 115 API 响应
+        405 时自动降级到 fs_delete_app。
+        """
+        _check_circuit_breaker()  # Q2: 熔断器检查
+        _apply_rate_limit("delete")
         client = cls.create_client_from_cookies(cookies)
+        # Q4: 删除会改变源父目录内容。fs_file 对已入回收站的文件不可用，
+        # 故在删除前解析父目录 id（best-effort，最多前 10 个，避免大批次额外请求）
+        deleted_parents = _resolve_parent_ids(client, file_ids)
         try:
-            resp = client.fs_delete(file_ids)
+            resp = _call_write_with_405_fallback(
+                client, "fs_delete", "fs_delete_app",
+                file_ids,
+            )
+            # Q4: 删除成功，标记源父目录进入写后冷却
+            if not (isinstance(resp, dict) and resp.get("error")):
+                for pid in deleted_parents:
+                    _mark_dir_written(pid)
             return resp
         except Exception as e:
             logger.warning(f"[115] fs_delete 失败: {e}")
@@ -1466,7 +2306,10 @@ class Client115Service:
                 # 再检查子目录是否已变空
                 if _is_empty(subdir["cid"]):
                     try:
-                        resp = client.fs_delete([subdir["cid"]])
+                        resp = _call_write_with_405_fallback(
+                            client, "fs_delete", "fs_delete_app",
+                            [subdir["cid"]],
+                        )
                         if isinstance(resp, dict) and resp.get("state") is False:
                             logger.warning(f"[115] 删除空目录失败: {subdir['name']}: {resp.get('error', '')}")
                         else:
@@ -1477,3 +2320,125 @@ class Client115Service:
             return count
 
         return _cleanup(root_cid)
+
+    # ===== O3: OOF 快速媒体信息（sha1 秒传探测，免下载） =====
+    # 参考 MoviePilot-Plugins p115strmhelper 的 OOF 思路：用 115 的"文件校验/秒传"
+    # 接口按 sha1 探测网盘是否已存在该文件，并尝试拉取同目录的 nfo/jpg 媒体信息，
+    # 免实际下载。p115client 提供了 fs_shasearch（GET /files/shasearch）实现探测。
+
+    @classmethod
+    def probe_by_sha1(cls, cookies: str, sha1: str) -> dict:
+        """按 sha1 探测 115 网盘是否已存在该文件（秒传校验思路，免下载）。
+
+        调用 p115client 的 fs_shasearch（GET https://webapi.115.com/files/shasearch）。
+        该接口最多返回一条记录；未命中时 115 返回 {"state": false, "error": "文件错误"}，
+        p115client 会将其转为异常抛出，此处统一视为"不存在"。
+
+        返回: {
+            "exists": bool,
+            "file_id": str,   # 命中时为文件 id，否则空串
+            "pickcode": str,  # 命中时为 pickcode，否则空串
+            "parent_id": str, # 命中时为父目录 id（供 fetch_media_info_fast 列目录用）
+            "name": str,      # 命中时为文件名
+        }
+        若当前 p115client 不支持 fs_shasearch，则降级返回
+        {"exists": False, "reason": "p115client 不支持 sha1 探测", ...}。
+        """
+        if not sha1:
+            return {"exists": False, "file_id": "", "pickcode": "", "parent_id": "", "name": ""}
+        client = cls.create_client_from_cookies(cookies)
+        if not hasattr(client, "fs_shasearch"):
+            # 降级：p115client 版本过低，无 sha1 探测能力（遍历/搜索不可行，直接返回未命中）
+            return {"exists": False, "reason": "p115client 不支持 sha1 探测",
+                    "file_id": "", "pickcode": "", "parent_id": "", "name": ""}
+        try:
+            resp = client.fs_shasearch(sha1)
+            if not (isinstance(resp, dict) and resp.get("state") and resp.get("data")):
+                return {"exists": False, "file_id": "", "pickcode": "", "parent_id": "", "name": ""}
+            data = resp["data"]
+            return {
+                "exists": True,
+                "file_id": str(data.get("fid") or data.get("file_id") or ""),
+                "pickcode": str(data.get("pc") or data.get("pickcode") or ""),
+                "parent_id": str(data.get("cid") or data.get("category_id") or ""),
+                "name": str(data.get("n") or data.get("file_name") or ""),
+            }
+        except Exception as e:
+            # 未命中（state:false 抛异常）或网络错误均视为不存在
+            logger.debug(f"[115] probe_by_sha1 未命中 {str(sha1)[:12]}: {e}")
+            return {"exists": False, "file_id": "", "pickcode": "", "parent_id": "", "name": ""}
+
+    @classmethod
+    def fetch_media_info_fast(cls, cookies: str, sha1: str) -> dict:
+        """OOF 快速媒体信息：按 sha1 探测文件存在后，拉取同目录 nfo/jpg 信息列表。
+
+        先 probe_by_sha1 探测；探测成功拿到 file_id 后调用 list_files 列出其父目录
+        下的 nfo/jpg 文件并返回信息列表（不实际下载文件本体）。
+        结果按 sha1 缓存 1 小时（上限 500，锁保护），避免重复探测 115。
+
+        返回: {
+            "nfo_files": [{"name", "file_id", "pickcode", "size"}],
+            "image_files": [...],
+        }
+        探测失败或无父目录信息时返回空 dict {}。
+        """
+        if not sha1:
+            return {}
+        # 1. 命中缓存直接返回
+        with _oof_lock:
+            cached = _oof_cache.get(sha1)
+            if cached is not None:
+                if _time.time() - cached.get("ts", 0) < _OOF_CACHE_TTL:
+                    return cached.get("data") or {}
+                else:
+                    _oof_cache.pop(sha1, None)
+        # 2. 按 sha1 探测是否已存在
+        probe = cls.probe_by_sha1(cookies, sha1)
+        if not probe.get("exists"):
+            result: dict = {}
+            # 探测失败（含"网盘无此文件"）：也缓存，避免重复探测
+            return cls._oof_cache_put(sha1, result)
+        # 3. 探测成功：列出父目录下所有条目，筛出 nfo/jpg
+        parent_id = probe.get("parent_id") or ""
+        nfo_files: list[dict] = []
+        image_files: list[dict] = []
+        if parent_id:
+            resp = cls.list_files(cookies, parent_id, offset=0, limit=1000)
+            if not (isinstance(resp, dict) and not resp.get("_error")):
+                # 列目录失败：返回空（不缓存，下次重试）
+                return {}
+            for it in (resp.get("data") or []):
+                if not isinstance(it, dict) or not it.get("fid"):
+                    continue  # 仅关注文件条目，跳过目录
+                it_name = str(it.get("n") or "")
+                low = it_name.lower()
+                entry = {
+                    "name": it_name,
+                    "file_id": str(it.get("fid") or ""),
+                    "pickcode": str(it.get("pc") or ""),
+                    "size": it.get("s") or 0,
+                }
+                if low.endswith(".nfo"):
+                    nfo_files.append(entry)
+                elif low.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    image_files.append(entry)
+        result = {"nfo_files": nfo_files, "image_files": image_files}
+        return cls._oof_cache_put(sha1, result)
+
+    @classmethod
+    def _oof_cache_put(cls, sha1: str, data: dict) -> dict:
+        """写入 OOF 缓存（TTL 1 小时，上限 500，锁保护），并返回原数据。"""
+        with _oof_lock:
+            if len(_oof_cache) >= _OOF_CACHE_MAX:
+                now = _time.time()
+                # 先清过期条目
+                expired = [k for k, v in _oof_cache.items()
+                           if now - v.get("ts", 0) >= _OOF_CACHE_TTL]
+                for k in expired:
+                    _oof_cache.pop(k, None)
+                # 仍超上限则移除最旧条目
+                if len(_oof_cache) >= _OOF_CACHE_MAX and _oof_cache:
+                    oldest_key = min(_oof_cache, key=lambda k: _oof_cache[k].get("ts", 0))
+                    _oof_cache.pop(oldest_key, None)
+            _oof_cache[sha1] = {"ts": _time.time(), "data": data}
+        return data

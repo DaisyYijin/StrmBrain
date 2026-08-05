@@ -102,20 +102,22 @@ async def get_download_url(
     pickcode: str,
     account_id: int,
     t: str = "",
+    s: str = "",
     request: Request = None,
 ):
     """
     获取 115 文件下载链接（302 重定向）
-    URL 格式: /api/115/url/video.mp4?pickcode=xxx&account_id=0&t=token
+    URL 格式（新）: /api/115/url/video.mp4?pickcode=xxx&account_id=0&s=signature
+    URL 格式（旧）: /api/115/url/video.mp4?pickcode=xxx&account_id=0&t=token
     路径中的文件名（含扩展名）供 Emby 识别视频类型，pickcode 才是真正的文件标识。
-    t 参数为 STRM 播放 Token，用于安全验证（防止未授权 URL 被外部直接调用）。
+    s 参数为 HMAC-SHA256 路径签名（新格式），t 参数为明文 Token（旧格式，向后兼容）。
     """
     from fastapi.responses import RedirectResponse
 
-    # Token 安全验证
-    from app.services.strm_token import verify_token
-    if not verify_token(t):
-        raise HTTPException(status_code=403, detail="Token 验证失败，请重新生成 STRM 文件")
+    # 安全验证：优先路径签名（s），回退 token（t），向后兼容
+    from app.services.strm_token import verify_request
+    if not verify_request(pickcode, token=t, signature=s):
+        raise HTTPException(status_code=403, detail="安全验证失败，请重新生成 STRM 文件")
 
     # account_id=0 时自动取第一个有效账号
     if account_id:
