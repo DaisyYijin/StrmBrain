@@ -1903,6 +1903,9 @@
         .auth-box input:focus { outline: none; border-color: #409eff; }
         .auth-box .auth-error { color: #f56c6c; font-size: 13px; margin-bottom: 10px; min-height: 18px; }
         .auth-box .btn { width: 100%; }
+        .auth-box .auth-switch { text-align: center; margin-top: 14px; font-size: 13px; color: #909399; }
+        .auth-box .auth-switch-link { color: #409eff; cursor: pointer; }
+        .auth-box .auth-switch-link:hover { text-decoration: underline; }
 
         /* ===== 初始化加载遮罩 ===== */
         .init-loading {
@@ -2065,13 +2068,26 @@
         <div v-if="authRequired && !authToken" class="auth-overlay">
             <div class="auth-box">
                 <h3>STRMhub</h3>
-                <div class="auth-sub">请登录后使用</div>
-                <input type="text" v-model="loginForm.username" placeholder="用户名" @keyup.enter="doLogin">
-                <input type="password" v-model="loginForm.password" placeholder="密码" @keyup.enter="doLogin">
+                <div class="auth-sub" v-if="loginForm.mode === 'register'">首次使用，请注册管理账号</div>
+                <div class="auth-sub" v-else>请登录后使用</div>
+                <input type="text" v-model="loginForm.username" placeholder="用户名" @keyup.enter="submitAuth">
+                <template v-if="loginForm.mode === 'register'">
+                    <input type="password" v-model="loginForm.password" placeholder="密码（至少 6 位）" @keyup.enter="submitAuth">
+                    <input type="password" v-model="loginForm.confirmPassword" placeholder="确认密码" @keyup.enter="submitAuth">
+                </template>
+                <template v-else>
+                    <input type="password" v-model="loginForm.password" placeholder="密码" @keyup.enter="submitAuth">
+                </template>
                 <div class="auth-error">{{ loginForm.error }}</div>
-                <button class="btn btn-primary" @click="doLogin" :disabled="loginForm.loading">
-                    {{ loginForm.loading ? '登录中...' : '登录' }}
+                <button class="btn btn-primary" @click="submitAuth" :disabled="loginForm.loading">
+                    {{ loginForm.loading ? (loginForm.mode === 'register' ? '注册中...' : '登录中...') : (loginForm.mode === 'register' ? '注册并进入' : '登录') }}
                 </button>
+                <div class="auth-switch" v-if="loginForm.mode === 'register'" @click="switchAuthMode">
+                    已有账号？<span class="auth-switch-link">直接登录</span>
+                </div>
+                <div class="auth-switch" v-else @click="switchAuthMode">
+                    没有账号？<span class="auth-switch-link">立即注册</span>
+                </div>
             </div>
         </div>
 
@@ -4523,7 +4539,14 @@
                 const initLoadingText = ref('正在加载...');
                 const authRequired = ref(false);
                 const authToken = ref(localStorage.getItem('strmhub_token') || '');
-                const loginForm = reactive({ username: '', password: '', error: '', loading: false });
+                const loginForm = reactive({
+                    username: '',
+                    password: '',
+                    confirmPassword: '',
+                    error: '',
+                    loading: false,
+                    mode: 'login',   // login / register
+                });
                 const online = ref(navigator.onLine);
                 const wsStatus = ref('disconnected'); // connected / connecting / disconnected
 
@@ -4620,7 +4643,58 @@
                     return res;
                 };
 
-                // ===== 登录 =====
+                // ===== 登录 / 注册 =====
+                const switchAuthMode = () => {
+                    loginForm.mode = loginForm.mode === 'register' ? 'login' : 'register';
+                    loginForm.error = '';
+                    loginForm.password = '';
+                    loginForm.confirmPassword = '';
+                };
+
+                const submitAuth = async () => {
+                    if (loginForm.mode === 'register') {
+                        await doRegister();
+                    } else {
+                        await doLogin();
+                    }
+                };
+
+                const doRegister = async () => {
+                    const username = loginForm.username.trim();
+                    if (!username) { loginForm.error = '请输入用户名'; return; }
+                    if (username.length < 2 || username.length > 32) { loginForm.error = '用户名长度需在 2-32 个字符之间'; return; }
+                    if (!loginForm.password) { loginForm.error = '请输入密码'; return; }
+                    if (loginForm.password.length < 6) { loginForm.error = '密码长度至少 6 位'; return; }
+                    if (loginForm.password !== loginForm.confirmPassword) { loginForm.error = '两次输入的密码不一致'; return; }
+                    loginForm.loading = true;
+                    loginForm.error = '';
+                    try {
+                        const res = await api('/api/register', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: username, password: loginForm.password })
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data?.token) {
+                            authToken.value = data.data.token;
+                            localStorage.setItem('strmhub_token', data.data.token);
+                            authRequired.value = false;
+                            loginForm.password = '';
+                            loginForm.confirmPassword = '';
+                            loginForm.error = '';
+                            showToast('注册成功，欢迎使用');
+                            // 登录后重新初始化
+                            initApp();
+                        } else {
+                            loginForm.error = data.message || '注册失败';
+                        }
+                    } catch (e) {
+                        loginForm.error = e._network ? e.message : '注册失败，请重试';
+                    } finally {
+                        loginForm.loading = false;
+                    }
+                };
+
                 const doLogin = async () => {
                     if (!loginForm.username || !loginForm.password) {
                         loginForm.error = '请输入用户名和密码';
@@ -4646,6 +4720,12 @@
                             initApp();
                         } else {
                             loginForm.error = data.message || '登录失败';
+                            // 服务器提示需要注册 → 自动切换到注册页
+                            if (data.data && data.data.need_register) {
+                                loginForm.mode = 'register';
+                                loginForm.password = '';
+                                loginForm.confirmPassword = '';
+                            }
                         }
                     } catch (e) {
                         loginForm.error = e._network ? e.message : '登录失败，请重试';
@@ -7596,6 +7676,10 @@ av:
                         const res = await api('/api/version');
                         const data = await res.json();
                         authRequired.value = data.data?.auth_enabled === true;
+                        // 未注册管理账号 → 登录页显示注册模式（首次部署引导）
+                        if (authRequired.value && data.data?.registered === false) {
+                            loginForm.mode = 'register';
+                        }
                     } catch (e) {
                         initLoadingText.value = '无法连接服务器';
                         initLoading.value = false;
@@ -8618,7 +8702,7 @@ av:
                     formatTimestamp, formatBytes,
                     // 认证 & 网络 & 加载状态
                     initLoading, initLoadingText,
-                    authRequired, authToken, loginForm, doLogin, doLogout,
+                    authRequired, authToken, loginForm, doLogin, doRegister, switchAuthMode, submitAuth, doLogout,
                     online, wsStatus, wsStatusClass, wsStatusText,
                     versionInfo, checkVersionUpdate,
                     // 转存下载

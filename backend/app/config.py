@@ -60,9 +60,11 @@ SECRET_KEY = _get_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7天
 
-# 管理员账号
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+# 管理员账号 — 已废弃（改为首次部署注册，账号存于 local_account.json）
+# 环境变量 ADMIN_USERNAME / ADMIN_PASSWORD 不再用于登录认证
+# 保留定义仅为避免历史引用报错，实际认证逻辑在 app/core/auth.py
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 
 # 是否启用登录验证（默认开启）
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"

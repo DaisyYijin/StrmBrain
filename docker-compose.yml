@@ -48,8 +48,8 @@ services:
       - HOST=0.0.0.0            # 监听地址,0.0.0.0 表示允许所有网卡访问
       - PORT=6060               # 监听端口,需与上方 ports 右侧一致
       - AUTH_ENABLED=true       # 登录验证开关,true 开启 / false 关闭
-      - ADMIN_USERNAME=admin    # 管理员账号(建议修改)
-      - ADMIN_PASSWORD=admin123 # 管理员密码(首次登录后请立即修改!)
+      # 管理账号已改为首次部署时在登录页注册(存于 config/local_account.json),
+      # 不再使用环境变量设置账号密码。升级后无需重新注册,直接用已注册账号登录。
       - SECRET_KEY=             # JWT 签名密钥,留空则首次启动自动生成并保存
       - CORS_ORIGINS=           # 允许跨域来源(逗号分隔),同源部署留空即可
       # Emby 反代端口(302 播放),默认 6086,需与上方 ports 映射一致

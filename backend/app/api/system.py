@@ -11,7 +11,7 @@ import bcrypt
 from app.core.json_storage import read_local_account, save_local_account
 from app.core.auth import (
     create_access_token, authenticate_user, require_auth, is_auth_enabled,
-    verify_password,
+    verify_password, has_local_account,
 )
 from app.schemas import ApiResponse
 from app.config import VERSION
@@ -61,6 +61,11 @@ class LoginIn(BaseModel):
     password: str
 
 
+class RegisterIn(BaseModel):
+    username: str
+    password: str
+
+
 @router.get("/version", response_model=ApiResponse)
 async def get_version():
     """获取版本号及更新检查信息"""
@@ -69,6 +74,8 @@ async def get_version():
     return ApiResponse(data={
         "version": VERSION,
         "auth_enabled": is_auth_enabled(),
+        # 是否已注册本地管理账号（未注册时前端显示注册页）
+        "registered": has_local_account(),
         "latest_version": info.get("latest_version"),
         "has_update": info.get("has_update", False),
         "release_url": info.get("release_url"),
@@ -98,6 +105,11 @@ async def check_version():
 async def login(payload: LoginIn, request: Request):
     """登录认证，返回 JWT token"""
     client_ip = request.client.host if request.client else "unknown"
+
+    # 未注册本地账号时，提示用户先注册（前端会切换到注册页）
+    if not has_local_account():
+        return ApiResponse(code=400, message="尚未注册管理账号，请先注册", data={"need_register": True})
+
     allowed, msg = _check_login_rate_limit(client_ip)
     if not allowed:
         return ApiResponse(code=429, message=msg)
@@ -109,6 +121,40 @@ async def login(payload: LoginIn, request: Request):
     token = create_access_token(user)
     logger.info(f"登录成功: username={payload.username}, ip={client_ip}")
     return ApiResponse(data={"token": token, "username": user["sub"]})
+
+
+@router.post("/register", response_model=ApiResponse)
+async def register(payload: RegisterIn, request: Request):
+    """首次部署注册管理账号。
+    仅当本地账号不存在时可用；已注册后返回 409 拒绝再次注册。
+    账号密码存储在 local_account.json（持久化，升级/重启不丢失）。
+    """
+    client_ip = request.client.host if request.client else "unknown"
+
+    # 已存在本地账号 → 拒绝重复注册
+    if has_local_account():
+        return ApiResponse(code=409, message="管理账号已注册，请直接登录")
+
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    if not username:
+        return ApiResponse(code=400, message="用户名不能为空")
+    if len(username) < 2 or len(username) > 32:
+        return ApiResponse(code=400, message="用户名长度需在 2-32 个字符之间")
+    if len(password) < 6:
+        return ApiResponse(code=400, message="密码长度至少 6 位")
+    if len(password) > 72:
+        return ApiResponse(code=400, message="密码长度不能超过 72 位")
+
+    # 生成 bcrypt 哈希并保存
+    pwd_bytes = password.encode("utf-8")[:72]
+    pwd_hash = bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("utf-8")
+    save_local_account(username, pwd_hash)
+
+    logger.info(f"管理账号注册成功: username={username}, ip={client_ip}")
+    # 注册成功直接发放 token，无需再次登录
+    token = create_access_token({"sub": username})
+    return ApiResponse(data={"token": token, "username": username}, message="注册成功")
 
 
 @router.get("/auth/check", response_model=ApiResponse)

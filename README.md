@@ -58,7 +58,8 @@ volumes:
 docker compose up -d
 ```
 
-访问 `http://服务器IP:6060`，默认账号 `admin` / `admin123`。
+访问 `http://服务器IP:6060`，首次部署时页面会引导**注册管理账号**（用户名 + 密码），
+账号密码保存在 `config/local_account.json`，升级/重启后无需重新注册，直接登录即可。
 
 ### 使用流程
 

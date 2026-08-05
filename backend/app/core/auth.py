@@ -64,26 +64,25 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
+def has_local_account() -> bool:
+    """判断是否已注册本地管理账号（local_account.json 中是否有完整账号信息）"""
+    local = read_local_account()
+    return bool(local and local.get("username") and local.get("password_hash"))
+
+
 def authenticate_user(username: str, password: str) -> Optional[dict]:
     """
     验证本地账号密码。
-    如果没有设置本地账号，回退到环境变量中的管理员账号。
+    账号密码存储在 local_account.json（首次部署时通过注册页创建）。
     返回 {"sub": username} 或 None。
     """
-    from app.config import ADMIN_USERNAME, ADMIN_PASSWORD
-
-    # 优先检查本地账号
     local = read_local_account()
     if local and local.get("username") and local.get("password_hash"):
         if username == local["username"] and verify_password(password, local["password_hash"]):
             return {"sub": username}
-        # 本地账号已设置但不匹配 — 不回退到环境变量
         return None
 
-    # 回退到环境变量管理员账号
-    if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-        return {"sub": username}
-
+    # 未注册本地账号：任何登录都失败（前端会引导用户先注册）
     return None
 
 
