@@ -48,15 +48,11 @@ def rotate_token() -> str:
 
 def is_enabled() -> bool:
     """
-    检查 Token 验证是否启用。
-    配置项 strm_security 完全不存在时（首次升级到带 Token 的版本），
-    默认返回 False，保持旧 STRM 文件（无 token 参数）可正常播放的向后兼容。
-    一旦用户保存过配置，则按配置执行。
+    Token 验证是否启用。
+    产品决策：STRM 播放安全默认强制开启（无开关），防止未授权的 STRM URL 被外部直接调用。
+    历史配置中的 enabled 字段不再生效，始终返回 True。
     """
-    data = read_setting("strm_security")
-    if not data:
-        return False
-    return data.get("enabled", True)
+    return True
 
 
 def set_enabled(enabled: bool) -> bool:

@@ -1,0 +1,87 @@
+# ============================================================
+# STRMhub + Emby 一体化 Docker Compose 部署配置(参考版)
+# 用法:docker compose up -d   停止:docker compose down
+# 数据存储:全部使用宿主机相对路径挂载(bind mount)
+# 注意:此版本为"参考模板",包含 strmhub 与 emby 两个服务。
+#       若你的 Emby 已单独部署(如其他 compose 或 Docker 命令),删掉 emby 服务段即可。
+# ============================================================
+
+services:
+  # ============ STRMhub 主服务 ============
+  strmhub:
+    image: ghcr.io/daisyyijin/strmhub:latest
+    container_name: strmhub
+    restart: unless-stopped
+
+    # 端口映射:
+    #   6060 = STRMhub Web 管理界面 + API
+    #   6086 = Emby 反代端口(302 播放),与设置中的反代端口一致
+    ports:
+      - "6060:6060"
+      - "6086:6086"
+
+    volumes:
+      # 运行数据(115 账号、Cookie、同步清单、备份等)
+      - strmhub/data:/app/data
+      # 核心配置(settings.json、local_account.json、sync_schedule.json 等)
+      - strmhub/config:/app/config
+      # 运行日志(直接打开宿主机文件夹即可查看)
+      - strmhub/log:/app/log
+      # STRM 文件输出目录(供 Emby/Jellyfin 等媒体服务器读取)
+      # 若 Emby 也在容器中,需让 Emby 容器挂载同一宿主机目录
+      - strmhub/media:/media
+
+    environment:
+      - HOST=0.0.0.0            # 监听地址
+      - PORT=6060               # 监听端口,需与上方 ports 右侧一致
+      - AUTH_ENABLED=true       # 登录验证开关
+      - ADMIN_USERNAME=admin    # 管理员账号(建议修改)
+      - ADMIN_PASSWORD=admin123 # 管理员密码(首次登录后请立即修改!)
+      - SECRET_KEY=             # JWT 签名密钥,留空则首次启动自动生成并保存
+      - CORS_ORIGINS=           # 允许跨域来源(逗号分隔),同源部署留空即可
+      # Emby 反代端口(302 播放),默认 6086,需与上方 ports 映射一致
+      # 反代端口部署时在此直接指定即可,无需在 Web 页面配置
+      - PROXY_PORT=6086
+      - TZ=Asia/Shanghai
+
+  # ============ Emby 媒体服务器 ============
+  # 若 Emby 已单独部署,删除本段
+  emby:
+    # Emby 官方镜像(根据架构选择;也可用 emby/embyserver:latest)
+    image: emby/embyserver:latest
+    container_name: emby
+    restart: unless-stopped
+
+    ports:
+      # Emby Web 管理界面(反代 6086 会代理到此端口)
+      - "18096:8096"
+      # HTTPS(可选,不需要可删除)
+      # - "18920:8920"
+
+    # 关键:与 strmhub 共用同一宿主机媒体目录
+    # 宿主机目录结构建议:
+    #   ./strmhub/media/ -> STRMhub 生成 STRM 文件
+    #   ./strmhub/emby/config/ -> Emby 配置
+    #   ./strmhub/emby/data/ -> Emby 媒体库数据
+    volumes:
+      - strmhub/media:/media
+      - emby/config:/config
+      - emby/data:/data
+
+    environment:
+      - TZ=Asia/Shanghai
+      # 设备 ID,首次启动后可在 Emby 控制台查看,建议固定避免重新激活
+      # - EMBY_DEVICE_ID=
+
+# ============ 共享命名卷 ============
+# 使用命名卷管理数据(相比 bind mount 更简洁,但备份时需 docker run 导出)
+# 若希望数据直接落在宿主机目录(便于拷贝),改用 bind mount 形式:
+#   volumes: - ./strmhub/data:/app/data (strmhub)
+#            - ./strmhub/media:/media (strmhub 与 emby 共用)
+volumes:
+  strmhub_data:
+  strmhub_config:
+  strmhub_log:
+  strmhub_media:
+  emby_config:
+  emby_data:

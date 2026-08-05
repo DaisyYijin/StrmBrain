@@ -68,10 +68,18 @@ def _get_config() -> dict:
     # 自动补全缺失的 http:// 协议前缀（用户可能只填 IP:端口）
     if emby_host and not emby_host.lower().startswith(("http://", "https://")):
         emby_host = "http://" + emby_host
+    # 反代端口优先级：环境变量 PROXY_PORT > 配置文件 > 默认 6086
+    # Docker 部署时可通过环境变量直接指定，无需在页面配置
+    import os as _os
+    _env_port = (_os.getenv("PROXY_PORT", "") or "").strip()
+    try:
+        port = int(_env_port) if _env_port else int(data.get("port", 6086) or 6086)
+    except (TypeError, ValueError):
+        port = 6086
     return {
         # 反代为内置功能，始终启用（历史配置即使存了 false 也强制为 True）
         "enabled": True,
-        "port": int(data.get("port", 6086) or 6086),
+        "port": port,
         "emby_host": emby_host.rstrip("/"),
         "emby_api_key": (emby_data.get("api_key", "") or "").strip(),
     }
