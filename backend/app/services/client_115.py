@@ -969,11 +969,17 @@ def _call_write_with_405_fallback(client, primary_method_name: str, app_method_n
 
 
 def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) -> dict:
-    """带限流重试的 fs_files 调用，405 时依次降级: fs_files → fs_files_app → fs_files_aps"""
+    """带限流重试的 fs_files 调用，405 时依次降级: fs_files → fs_files_app → fs_files_aps。
+
+    注意：web 版（fs_files）与 app 版（fs_files_app/fs_files_aps）返回字段名不同：
+    - web:  n / fid / cid / pid / s / sha
+    - app:  file_name / file_id / category_id / parent_id / file_size / file_sha1
+    降级返回后统一做字段标准化（_normalize_fs_resp），保证下游解析一致。
+    """
     cooldown = _get_retry_cooldown()  # 冷却时间跟随用户配置
     for attempt in range(max_retries):
         try:
-            return client.fs_files(params)
+            return _normalize_fs_resp(client.fs_files(params))
         except Exception as e:
             # Q1: 记录认证失败（限流不计入认证失败；网络类错误不计数；无法识别账号时传 0）
             _rate_limited = _is_rate_limited(e)
@@ -983,12 +989,12 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
             if _is_method_not_allowed(e):
                 logger.info(f"[115] fs_files 返回 405，降级到 fs_files_app")
                 try:
-                    return client.fs_files_app(params)
+                    return _normalize_fs_resp(client.fs_files_app(params))
                 except Exception as e2:
                     if _is_method_not_allowed(e2):
                         logger.info(f"[115] fs_files_app 返回 405，降级到 fs_files_aps")
                         try:
-                            return client.fs_files_aps(params)
+                            return _normalize_fs_resp(client.fs_files_aps(params))
                         except Exception as e3:
                             if _is_rate_limited(e3) and attempt < max_retries - 1:
                                 logger.warning(f"[115] fs_files_aps 访问频率过高，等待 {cooldown}s 后重试 (attempt {attempt+1}/{max_retries})")
@@ -1006,6 +1012,60 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
                 continue
             raise
     return {}
+
+
+def _normalize_fs_item(it: dict) -> dict:
+    """将 115 文件列表条目标准化为 web 短字段格式（n/fid/cid/pid/s/sha）。
+
+    兼容 proapi（fs_files_app/fs_files_aps）返回的完整字段：
+    file_name/category_name、file_id、category_id、parent_id、file_size、file_sha1。
+    已是 web 短字段（含 "n"）的条目原样返回。
+    """
+    if not isinstance(it, dict):
+        return it
+    # 已是 web 短字段格式（n/fn），直接返回
+    if "n" in it or "fn" in it:
+        return it
+    if "file_name" not in it and "category_name" not in it:
+        return it  # 无法识别的格式，原样返回
+    out = dict(it)
+    # 判断目录/文件
+    is_dir = False
+    if "file_category" in it:
+        is_dir = int(it.get("file_category") or 0) == 0
+    elif "category_id" in it and "file_id" not in it:
+        is_dir = True
+    elif it.get("file_sha1") in (None, "") and it.get("sha1") in (None, ""):
+        is_dir = True
+    # 名称
+    out["n"] = it.get("category_name") or it.get("file_name") or ""
+    if is_dir:
+        # 目录：cid=category_id，无 fid
+        out["cid"] = it.get("category_id") or it.get("cid") or ""
+        out.pop("fid", None)
+        if it.get("parent_id"):
+            out["pid"] = it.get("parent_id")
+    else:
+        # 文件：fid=file_id，cid=parent_id（与 web 版一致：文件的 cid 即父目录）
+        out["fid"] = it.get("file_id") or it.get("fid") or ""
+        out["cid"] = it.get("parent_id") or it.get("cid") or ""
+        out["pid"] = it.get("parent_id") or it.get("pid") or ""
+    # 大小与哈希
+    if "file_size" in it and "s" not in it:
+        out["s"] = it.get("file_size") or 0
+    if "file_sha1" in it and "sha" not in it:
+        out["sha"] = it.get("file_sha1") or ""
+    return out
+
+
+def _normalize_fs_resp(resp: dict) -> dict:
+    """对 fs_files 系列响应 data 列表逐项标准化（兼容 proapi 完整字段）。"""
+    if not isinstance(resp, dict):
+        return resp
+    data = resp.get("data")
+    if isinstance(data, list):
+        resp["data"] = [_normalize_fs_item(it) for it in data]
+    return resp
 
 
 def _extract_download_url(result) -> str:
