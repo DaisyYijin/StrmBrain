@@ -271,16 +271,21 @@ class LifeEventMonitor:
 
         # 事件条目中可能不含完整文件信息，尝试获取详情
         file_name = ev.get("file_name") or ev.get("name") or ""
-        file_id = ev.get("file_id") or ""
-        parent_id = ev.get("parent_id") or ""
+        file_id = ev.get("file_id") or ev.get("fid") or ""
+        parent_id = ev.get("parent_id") or ev.get("pid") or ""
+
+        # 缺少文件名和文件ID的事件无法处理，跳过
+        if not file_name and not file_id:
+            return False
+
         ext = ("." + file_name.rsplit(".", 1)[-1]).lower() if "." in file_name else ""
-        is_dir = ev.get("file_category") == 0 or (ev.get("fid") is None and file_name)
+        is_dir = ev.get("file_category") == 0 or (ev.get("fid") is None and file_name and not ext)
 
         # 只处理视频与元数据文件（目录事件除外，目录内文件会单独有事件）
         if not is_dir and ext and ext not in _VIDEO_EXTS and ext not in _DATA_EXTS:
             return False
 
-        logger.info(
+        logger.debug(
             f"[life-event] 事件: {behavior_type}({action}) '{file_name}' "
             f"file_id={file_id} parent_id={parent_id}"
         )
