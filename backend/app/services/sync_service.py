@@ -401,8 +401,16 @@ class SyncService:
         # 扫描源目录
         # S2: 优先尝试 115 导出目录树快速扫描（export_dir），失败/不支持则回退递归扫描
         all_files = []
+        # 期望的同步根目录名（source_path 最后一段，用于剥离 export_dir 多余层级）
+        _expected_root = ""
         try:
-            tree = Client115Service.export_dir_tree(cookies, source_cid)
+            _cfg = cls.load_schedule()
+            if _cfg and _cfg.get("source_path"):
+                _expected_root = str(_cfg["source_path"]).rstrip("/").rsplit("/", 1)[-1]
+        except Exception:
+            pass
+        try:
+            tree = Client115Service.export_dir_tree(cookies, source_cid, expected_root=_expected_root)
         except Exception as e:
             tree = {}
             logger.warning(f"[sync] export_dir 树快速扫描异常，回退递归扫描: {e}")

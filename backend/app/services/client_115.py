@@ -2543,7 +2543,8 @@ class Client115Service:
     _EXPORT_DIR_TIMEOUT = 600  # 导出任务等待超时（秒）
 
     @classmethod
-    def export_dir_tree(cls, cookies: str, cid: str, timeout: float = 600.0) -> dict:
+    def export_dir_tree(cls, cookies: str, cid: str, timeout: float = 600.0,
+                        expected_root: str = "") -> dict:
         """使用 115 导出目录树功能快速获取目录结构（含元数据补全）。
 
         返回: {
@@ -2553,6 +2554,9 @@ class Client115Service:
         - path 为相对同步根目录（cid）的完整路径，如 "电影/2025/某片/xxx.mkv"
         - 115 导出树仅含路径名，size/pickcode 等元数据由 _fill_tree_meta 逐目录补全
         - 返回 {} 表示不支持 / 导出失败（调用方回退递归扫描）
+        - expected_root: 期望的同步根目录名（配置的 source_path 最后一段）。
+          当导出树的根高于实际源目录（如导出的是"影视测试"而源是"影视测试/俱乐部"）
+          时，剥离第一层后路径仍带多余层级，此时用 expected_root 做二次剥离。
         """
         client = cls.create_client_from_cookies(cookies)
         try:
@@ -2607,6 +2611,19 @@ class Client115Service:
                 rel_paths.append(p[len(root) + 1:])
             else:
                 rel_paths.append(p)
+
+        # 4.1 二次剥离：当导出树的根高于实际源目录时（例如导出的是"影视测试"，
+        #     而同步源配置为"影视测试/俱乐部"），剥离第一层后路径仍带多余层级。
+        #     用配置的 source_path 最后一段（expected_root）做锚点：
+        #     若所有路径的第一层目录恰好等于 expected_root，说明这一层是多余层级，剥掉。
+        if expected_root and rel_paths:
+            first_parts = {p.split("/", 1)[0] for p in rel_paths if p}
+            if first_parts == {expected_root}:
+                rel_paths = [
+                    p[len(expected_root) + 1:] if p.startswith(expected_root + "/") else p
+                    for p in rel_paths
+                ]
+                logger.info(f"[115] export_dir 树存在多余层级 '{expected_root}'，已二次剥离")
         dir_set: set[str] = set()
         for p in rel_paths:
             parts = p.split("/")
