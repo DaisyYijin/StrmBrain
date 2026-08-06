@@ -3351,8 +3351,8 @@
                             <div class="card-title">自动更新<span class="help-tip">?<span class="tip-text">定期检查新版本，可选自动安装。更新命令按当前系统平台自动生成。</span></span></div>
                             <div style="font-size:13px; color:#303133; margin-bottom:10px;">
                                 当前版本：<strong style="color:#409eff;">v{{ versionInfo.current || '-' }}</strong>
-                                <template v-if="updaterCfg.status && updaterCfg.status.latest">
-                                    <span style="margin-left:12px;">最新版本：<strong style="color:#67c23a;">v{{ updaterCfg.status.latest }}</strong></span>
+                                <template v-if="updaterCfg.status && updaterCfg.status.latest_version">
+                                    <span style="margin-left:12px;">最新版本：<strong style="color:#67c23a;">v{{ updaterCfg.status.latest_version }}</strong></span>
                                     <span v-if="updaterCfg.status.has_update" style="margin-left:8px; color:#e6a23c;">（有新版本可更新）</span>
                                 </template>
                                 <span v-else-if="versionInfo.hasUpdate" style="margin-left:12px; color:#e6a23c;">发现新版本 v{{ versionInfo.latest }}</span>
@@ -3381,10 +3381,10 @@
                                 <button class="btn btn-default btn-small" @click="checkUpdateNow" :disabled="updaterCfg.saving">检查更新</button>
                                 <button class="btn btn-primary btn-small" @click="saveUpdaterConfig" :disabled="updaterCfg.saving">{{ updaterCfg.saving ? '保存中...' : '保存' }}</button>
                             </div>
-                            <div v-if="updaterCfg.status && updaterCfg.status.message" style="margin-top:10px; font-size:13px;" :style="{ color: (updaterCfg.status.message || '').includes('失败') ? '#f56c6c' : '#67c23a' }">{{ updaterCfg.status.message }}</div>
-                            <div v-if="updaterCfg.status && updaterCfg.status.update_commands && updaterCfg.status.update_commands.length > 0" style="margin-top:10px;">
+                            <div v-if="updaterCfg.status && updaterCfg.status.error" style="margin-top:10px; font-size:13px; color:#f56c6c;">{{ updaterCfg.status.error }}</div>
+                            <div v-if="updaterCfg.status && updaterCfg.status.update_commands" style="margin-top:10px;">
                                 <div style="font-size:13px; font-weight:600; color:#303133; margin-bottom:6px;">更新命令指引</div>
-                                <pre style="margin:0; padding:10px; background:#f5f7fa; border:1px solid #ebeef5; border-radius:6px; font-size:12px; overflow-x:auto; line-height:1.7;">{{ updaterCfg.status.update_commands.join('\n') }}</pre>
+                                <pre style="margin:0; padding:10px; background:#f5f7fa; border:1px solid #ebeef5; border-radius:6px; font-size:12px; overflow-x:auto; line-height:1.7; white-space:pre-wrap;">{{ updaterCfg.status.update_commands }}</pre>
                             </div>
                         </div>
 
