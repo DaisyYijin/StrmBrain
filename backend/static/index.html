@@ -3375,236 +3375,254 @@
                 <div v-show="tab === 'notification'">
                     <div class="page-header">
                         <h2>通知配置</h2>
-                        <p>配置任务完成、错误等事件的通知渠道，支持企业微信、Telegram、QQ 机器人。</p>
+                        <p>配置任务完成、错误等事件的通知渠道，支持多渠道管理与事件规则分发。</p>
                     </div>
 
-                    <!-- ===== 新版通知中心（多渠道 + 规则引擎） ===== -->
-                    <div class="card" style="margin-bottom:16px; border:1px solid #409eff; box-shadow:0 1px 4px rgba(64,158,255,0.15);">
-                        <div style="display:flex; align-items:center; justify-content:space-between;">
-                            <div class="card-title">新版通知中心<span style="display:inline-block; background:#409eff; color:#fff; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; vertical-align:2px; margin-left:6px;">新</span><span class="help-tip">?<span class="tip-text">支持 Telegram / Bark / Server酱 / 喵提醒 / Webhook / 企业微信 六种渠道，通过规则引擎按事件类型（同步完成、刮削整理完成、系统告警、错误）自动分发通知。与下方旧版企业微信 / Telegram / QQ 三件套相互独立，可同时使用。</span></span></div>
-                            <button class="btn btn-default btn-small" @click="loadNotifyCenter" :disabled="notifyCenter.loading">{{ notifyCenter.loading ? '加载中...' : '刷新' }}</button>
-                        </div>
+                    <!-- 二级 Tab -->
+                    <div class="config-tabs">
+                        <div class="config-tab" :class="{ active: notifyTab === 'channels' }" @click="notifyTab = 'channels'">渠道管理</div>
+                        <div class="config-tab" :class="{ active: notifyTab === 'rules' }" @click="notifyTab = 'rules'">事件规则</div>
+                        <div class="config-tab" :class="{ active: notifyTab === 'wechat' }" @click="notifyTab = 'wechat'">企业微信</div>
+                        <div class="config-tab" :class="{ active: notifyTab === 'telegram' }" @click="notifyTab = 'telegram'">Telegram</div>
+                        <div class="config-tab" :class="{ active: notifyTab === 'qq' }" @click="notifyTab = 'qq'">QQ 机器人</div>
+                    </div>
 
-                        <!-- 渠道管理 -->
-                        <div style="font-size:14px; font-weight:600; color:#303133; margin:10px 0 8px;">通知渠道</div>
-                        <div class="info-box" style="margin-bottom:10px; padding:8px 12px;">
-                            渠道是通知的接收目标。添加后可在下方「事件分发规则」中勾选使用，同一事件可同时分发到多个渠道。
-                        </div>
+                    <!-- ===== 渠道管理 ===== -->
+                    <div v-show="notifyTab === 'channels'">
+                        <div class="card">
+                            <div style="display:flex; align-items:center; justify-content:space-between;">
+                                <div class="card-title">通知渠道<span style="display:inline-block; background:#409eff; color:#fff; font-size:11px; line-height:16px; padding:0 6px; border-radius:8px; vertical-align:2px; margin-left:6px;">新</span><span class="help-tip">?<span class="tip-text">支持 Telegram / Bark / Server酱 / 喵提醒 / Webhook / 企业微信 六种渠道。渠道是通知的接收目标，添加后可在「事件规则」Tab 中绑定到对应事件。</span></span></div>
+                                <button class="btn btn-default btn-small" @click="loadNotifyCenter" :disabled="notifyCenter.loading">{{ notifyCenter.loading ? '加载中...' : '刷新' }}</button>
+                            </div>
+                            <div class="info-box" style="margin:10px 0; padding:8px 12px;">
+                                渠道是通知的接收目标。添加后可在「事件规则」Tab 中勾选使用，同一事件可同时分发到多个渠道。
+                            </div>
 
-                        <!-- 添加渠道表单 -->
-                        <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin-bottom:12px;">
-                            <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加渠道</div>
-                            <div style="display:flex; gap:12px; flex-wrap:wrap;">
-                                <div class="form-group" style="flex:1; min-width:200px;">
-                                    <label>渠道类型</label>
-                                    <select v-model="notifyCenter.newChannel.type" @change="resetChannelConfig">
-                                        <option v-for="(label, type) in NOTIFY_CHANNEL_TYPE_MAP" :key="type" :value="type">{{ label }}</option>
+                            <!-- 添加渠道表单 -->
+                            <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin-bottom:12px;">
+                                <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加渠道</div>
+                                <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                                    <div class="form-group" style="flex:1; min-width:200px;">
+                                        <label>渠道类型</label>
+                                        <select v-model="notifyCenter.newChannel.type" @change="resetChannelConfig">
+                                            <option v-for="(label, type) in NOTIFY_CHANNEL_TYPE_MAP" :key="type" :value="type">{{ label }}</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" style="flex:1; min-width:200px;">
+                                        <label>渠道名称</label>
+                                        <input type="text" v-model="notifyCenter.newChannel.name" placeholder="如：我的 Telegram">
+                                    </div>
+                                </div>
+                                <div v-for="f in NOTIFY_CHANNEL_FIELDS[notifyCenter.newChannel.type] || []" :key="f.key" class="form-group" style="margin-bottom:8px;">
+                                    <label>{{ f.label }}{{ f.required ? '' : '（可选）' }}</label>
+                                    <select v-if="f.type === 'select'" v-model="notifyCenter.newChannel.config[f.key]">
+                                        <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
+                                    </select>
+                                    <textarea v-else-if="f.type === 'textarea'" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder" rows="2" style="resize:vertical;"></textarea>
+                                    <input v-else type="text" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder">
+                                </div>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <button class="btn btn-primary btn-small" @click="addChannel" :disabled="notifyCenter.savingChannel">{{ notifyCenter.savingChannel ? '提交中...' : '添加渠道' }}</button>
+                                    <span style="font-size:12px; color:#909399;">添加后默认启用</span>
+                                </div>
+                            </div>
+
+                            <!-- 渠道列表 -->
+                            <div v-if="notifyCenter.loading" style="padding:12px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                            <div v-else-if="!notifyCenter.channels.length" style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无通知渠道，请先在上方添加。</div>
+                            <div v-else>
+                                <div v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: ch.is_enabled ? '1' : '0.6' }">
+                                    <div style="flex:1; min-width:0;">
+                                        <div style="display:flex; align-items:center; gap:8px;">
+                                            <span style="font-weight:600; color:#303133; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ch.name }}</span>
+                                            <span style="background:#eef4ff; color:#409eff; font-size:11px; padding:1px 8px; border-radius:8px; white-space:nowrap; flex-shrink:0;">{{ channelTypeLabel(ch.type) }}</span>
+                                        </div>
+                                        <div style="font-size:12px; color:#909399; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ channelConfigSummary(ch) }}</div>
+                                    </div>
+                                    <button class="btn btn-default btn-small" @click="testChannel(ch.id)" :disabled="notifyCenter.testingId === ch.id">{{ notifyCenter.testingId === ch.id ? '测试中...' : '测试' }}</button>
+                                    <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                                        <span style="font-size:12px;" :style="{ color: ch.is_enabled ? '#67c23a' : '#909399' }">{{ ch.is_enabled ? '已启用' : '未启用' }}</span>
+                                        <div class="tool-toggle" :class="{ 'toggle-on': ch.is_enabled }" @click="ch.is_enabled = !ch.is_enabled; updateChannel(ch)">
+                                            <div class="toggle-knob"></div>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteChannel(ch.id)">删除</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ===== 事件规则 ===== -->
+                    <div v-show="notifyTab === 'rules'">
+                        <div class="card">
+                            <div class="card-title">事件分发规则<span class="help-tip">?<span class="tip-text">通过规则引擎按事件类型（同步完成、刮削整理完成、系统告警、错误）自动分发通知到已选渠道。同一事件可绑定多个渠道。</span></span></div>
+
+                            <!-- 添加规则表单 -->
+                            <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin:12px 0;">
+                                <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加规则</div>
+                                <div class="form-group" style="margin-bottom:8px;">
+                                    <label>事件类型</label>
+                                    <select v-model="notifyCenter.newRule.event_type">
+                                        <option v-for="et in notifyCenter.eventTypes" :key="et.value" :value="et.value">{{ et.label }}</option>
                                     </select>
                                 </div>
-                                <div class="form-group" style="flex:1; min-width:200px;">
-                                    <label>渠道名称</label>
-                                    <input type="text" v-model="notifyCenter.newChannel.name" placeholder="如：我的 Telegram">
-                                </div>
-                            </div>
-                            <div v-for="f in NOTIFY_CHANNEL_FIELDS[notifyCenter.newChannel.type] || []" :key="f.key" class="form-group" style="margin-bottom:8px;">
-                                <label>{{ f.label }}{{ f.required ? '' : '（可选）' }}</label>
-                                <select v-if="f.type === 'select'" v-model="notifyCenter.newChannel.config[f.key]">
-                                    <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
-                                </select>
-                                <textarea v-else-if="f.type === 'textarea'" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder" rows="2" style="resize:vertical;"></textarea>
-                                <input v-else type="text" v-model="notifyCenter.newChannel.config[f.key]" :placeholder="f.placeholder">
-                            </div>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <button class="btn btn-primary btn-small" @click="addChannel" :disabled="notifyCenter.savingChannel">{{ notifyCenter.savingChannel ? '提交中...' : '添加渠道' }}</button>
-                                <span style="font-size:12px; color:#909399;">添加后默认启用</span>
-                            </div>
-                        </div>
-
-                        <!-- 渠道列表 -->
-                        <div v-if="notifyCenter.loading" style="padding:12px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
-                        <div v-else-if="!notifyCenter.channels.length" style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无通知渠道，请先在上方添加。</div>
-                        <div v-else>
-                            <div v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: ch.is_enabled ? '1' : '0.6' }">
-                                <div style="flex:1; min-width:0;">
-                                    <div style="display:flex; align-items:center; gap:8px;">
-                                        <span style="font-weight:600; color:#303133; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ch.name }}</span>
-                                        <span style="background:#eef4ff; color:#409eff; font-size:11px; padding:1px 8px; border-radius:8px; white-space:nowrap; flex-shrink:0;">{{ channelTypeLabel(ch.type) }}</span>
+                                <div class="form-group" style="margin-bottom:8px;">
+                                    <label>通知渠道（可多选）</label>
+                                    <div v-if="!notifyCenter.channels.length" style="font-size:12px; color:#c0c4cc;">暂无渠道，请先在「渠道管理」Tab 添加渠道</div>
+                                    <div v-else style="display:flex; flex-wrap:wrap; gap:4px 14px;">
+                                        <label v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:4px; font-size:13px; cursor:pointer; color:#606266;">
+                                            <input type="checkbox" :value="ch.id" v-model="notifyCenter.newRule.channel_ids">
+                                            {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
+                                        </label>
                                     </div>
-                                    <div style="font-size:12px; color:#909399; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ channelConfigSummary(ch) }}</div>
                                 </div>
-                                <button class="btn btn-default btn-small" @click="testChannel(ch.id)" :disabled="notifyCenter.testingId === ch.id">{{ notifyCenter.testingId === ch.id ? '测试中...' : '测试' }}</button>
-                                <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
-                                    <span style="font-size:12px;" :style="{ color: ch.is_enabled ? '#67c23a' : '#909399' }">{{ ch.is_enabled ? '已启用' : '未启用' }}</span>
-                                    <div class="tool-toggle" :class="{ 'toggle-on': ch.is_enabled }" @click="ch.is_enabled = !ch.is_enabled; updateChannel(ch)">
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <button class="btn btn-primary btn-small" @click="addRule" :disabled="notifyCenter.savingRule">{{ notifyCenter.savingRule ? '提交中...' : '添加规则' }}</button>
+                                </div>
+                            </div>
+
+                            <!-- 规则列表 -->
+                            <div v-if="notifyCenter.rules.length">
+                                <div v-for="rule in notifyCenter.rules" :key="rule.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: rule.is_enabled ? '1' : '0.6' }">
+                                    <div style="flex:1; min-width:0;">
+                                        <span style="font-weight:600; color:#303133; font-size:14px;">{{ eventTypeLabel(rule.event_type) }}</span>
+                                        <span style="font-size:12px; color:#909399; margin-left:8px;">{{ (rule.channel_ids || []).map(channelName).join('、') || '未绑定渠道' }}</span>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+                                        <span style="font-size:12px;" :style="{ color: rule.is_enabled ? '#67c23a' : '#909399' }">{{ rule.is_enabled ? '已启用' : '未启用' }}</span>
+                                        <div class="tool-toggle" :class="{ 'toggle-on': rule.is_enabled }" @click="toggleRule(rule)">
+                                            <div class="toggle-knob"></div>
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteRule(rule.id)">删除</button>
+                                </div>
+                            </div>
+                            <div v-else style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无分发规则，添加后对应事件将自动通知所选渠道。</div>
+                        </div>
+                    </div>
+
+                    <!-- ===== 企业微信 ===== -->
+                    <div v-show="notifyTab === 'wechat'">
+                        <div class="card" :style="{ opacity: notify.wechatEnabled ? '1' : '0.6' }">
+                            <div style="display:flex; align-items:center; justify-content:space-between;">
+                                <div class="card-title">企业微信自建应用<span class="help-tip">?<span class="tip-text">在企业微信管理后台创建自建应用，获取企业ID、Secret、AgentId。配置回调 URL 后，可在企业微信中发送指令与 STRMhub 互动（整理、同步、查状态等）。</span></span></div>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:13px;" :style="{ color: notify.wechatEnabled ? '#67c23a' : '#909399' }">{{ notify.wechatEnabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': notify.wechatEnabled }" @click="notify.wechatEnabled = !notify.wechatEnabled">
                                         <div class="toggle-knob"></div>
                                     </div>
                                 </div>
-                                <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteChannel(ch.id)">删除</button>
                             </div>
-                        </div>
-
-                        <!-- 事件分发规则 -->
-                        <div style="font-size:14px; font-weight:600; color:#303133; margin:16px 0 8px;">事件分发规则</div>
-
-                        <!-- 添加规则表单 -->
-                        <div style="background:#f8fafc; border:1px dashed #dcdfe6; border-radius:8px; padding:12px; margin-bottom:12px;">
-                            <div style="font-size:13px; font-weight:600; color:#606266; margin-bottom:8px;">添加规则</div>
-                            <div class="form-group" style="margin-bottom:8px;">
-                                <label>事件类型</label>
-                                <select v-model="notifyCenter.newRule.event_type">
-                                    <option v-for="et in notifyCenter.eventTypes" :key="et.value" :value="et.value">{{ et.label }}</option>
-                                </select>
-                            </div>
-                            <div class="form-group" style="margin-bottom:8px;">
-                                <label>通知渠道（可多选）</label>
-                                <div v-if="!notifyCenter.channels.length" style="font-size:12px; color:#c0c4cc;">暂无渠道，请先在上方添加渠道</div>
-                                <div v-else style="display:flex; flex-wrap:wrap; gap:4px 14px;">
-                                    <label v-for="ch in notifyCenter.channels" :key="ch.id" style="display:flex; align-items:center; gap:4px; font-size:13px; cursor:pointer; color:#606266;">
-                                        <input type="checkbox" :value="ch.id" v-model="notifyCenter.newRule.channel_ids">
-                                        {{ ch.name }}（{{ channelTypeLabel(ch.type) }}）
-                                    </label>
+                            <div style="display:flex; gap:16px;">
+                                <div class="form-group" style="flex:1;">
+                                    <label>企业 ID</label>
+                                    <input type="text" v-model="notify.wechatCorpId" placeholder="ww4f8b2e6a9c3d71f">
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label>应用 ID (AgentId)</label>
+                                    <input type="text" v-model="notify.wechatAgentId" placeholder="1000084">
                                 </div>
                             </div>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <button class="btn btn-primary btn-small" @click="addRule" :disabled="notifyCenter.savingRule">{{ notifyCenter.savingRule ? '提交中...' : '添加规则' }}</button>
+                            <div class="form-group">
+                                <label>应用 Secret</label>
+                                <input type="text" v-model="notify.wechatAgentSecret" placeholder="Fk9Nw3BmZqR-vTb2Yp5Ls8FcD4aGh6jUe1VrNxCw">
+                            </div>
+                            <div style="display:flex; gap:16px;">
+                                <div class="form-group" style="flex:2;">
+                                    <label>API 代理地址</label>
+                                    <input type="text" v-model="notify.wechatApiBase" placeholder="https://qyapi.weixin.qq.com">
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label>默认接收人</label>
+                                    <input type="text" v-model="notify.wechatDefaultUser" placeholder="@all 或用户ID">
+                                </div>
+                            </div>
+                            <div class="info-box" style="margin-top:4px;">
+                                <strong>回调 URL（填入企业微信后台「接收消息」设置）:</strong><br>
+                                <code>{{ callbackUrl || '保存配置后显示' }}</code>
+                                <button class="btn btn-default btn-small" style="margin-left:8px; padding:2px 10px; font-size:12px;" @click="loadCallbackUrl">获取</button>
+                            </div>
+                            <div style="display:flex; gap:16px; margin-top:12px;">
+                                <div class="form-group" style="flex:1;">
+                                    <label>Token（回调验证）</label>
+                                    <input type="text" v-model="notify.wechatCallbackToken" placeholder="Bk5Xp9Mq3NbV">
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label>EncodingAESKey</label>
+                                    <input type="text" v-model="notify.wechatCallbackAesKey" placeholder="aE3bF9cD2eG5hI7jK8lM1nO4pQ6rS0tU9vW2xY3zA5bC6d">
+                                </div>
+                            </div>
+                            <div class="info-box info-box--warning" style="margin-top:8px; padding:8px 12px;">
+                                提示：回调 URL 需外网可访问。本地部署可使用 frp / ngrok 等内网穿透工具。配置 Token 和 EncodingAESKey 后即可接收用户消息。
+                            </div>
+                            <div style="display:flex; gap:8px; margin-top:12px;">
+                                <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
+                                <button class="btn btn-default btn-small" @click="testNotifyChannel('wechat')" :disabled="notify.testing">测试</button>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- 规则列表 -->
-                        <div v-if="notifyCenter.rules.length">
-                            <div v-for="rule in notifyCenter.rules" :key="rule.id" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:8px; background:#fff;" :style="{ opacity: rule.is_enabled ? '1' : '0.6' }">
-                                <div style="flex:1; min-width:0;">
-                                    <span style="font-weight:600; color:#303133; font-size:14px;">{{ eventTypeLabel(rule.event_type) }}</span>
-                                    <span style="font-size:12px; color:#909399; margin-left:8px;">{{ (rule.channel_ids || []).map(channelName).join('、') || '未绑定渠道' }}</span>
-                                </div>
-                                <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
-                                    <span style="font-size:12px;" :style="{ color: rule.is_enabled ? '#67c23a' : '#909399' }">{{ rule.is_enabled ? '已启用' : '未启用' }}</span>
-                                    <div class="tool-toggle" :class="{ 'toggle-on': rule.is_enabled }" @click="toggleRule(rule)">
+                    <!-- ===== Telegram ===== -->
+                    <div v-show="notifyTab === 'telegram'">
+                        <div class="card" :style="{ opacity: notify.tgEnabled ? '1' : '0.6' }">
+                            <div style="display:flex; align-items:center; justify-content:space-between;">
+                                <div class="card-title">Telegram 机器人<span class="help-tip">?<span class="tip-text">通过 @BotFather (t.me/BotFather) 创建 Bot 获取 Token，然后给自己的 Bot 发消息后访问 api.telegram.org/bot[Token]/getUpdates 获取 Chat ID。</span></span></div>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:13px;" :style="{ color: notify.tgEnabled ? '#67c23a' : '#909399' }">{{ notify.tgEnabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': notify.tgEnabled }" @click="notify.tgEnabled = !notify.tgEnabled">
                                         <div class="toggle-knob"></div>
                                     </div>
                                 </div>
-                                <button class="btn btn-danger btn-small" style="flex-shrink:0;" @click="deleteRule(rule.id)">删除</button>
                             </div>
-                        </div>
-                        <div v-else style="padding:12px; text-align:center; color:#909399; font-size:13px;">暂无分发规则，添加后对应事件将自动通知所选渠道。</div>
-                    </div>
-
-                    <!-- 企业微信自建应用 -->
-                    <div class="card" :style="{ marginBottom: '16px', opacity: notify.wechatEnabled ? '1' : '0.6' }">
-                        <div style="display:flex; align-items:center; justify-content:space-between;">
-                            <div class="card-title">企业微信自建应用<span class="help-tip">?<span class="tip-text">在企业微信管理后台创建自建应用，获取企业ID、Secret、AgentId。配置回调 URL 后，可在企业微信中发送指令与 STRMhub 互动（整理、同步、查状态等）。</span></span></div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:13px;" :style="{ color: notify.wechatEnabled ? '#67c23a' : '#909399' }">{{ notify.wechatEnabled ? '已启用' : '未启用' }}</span>
-                                <div class="tool-toggle" :class="{ 'toggle-on': notify.wechatEnabled }" @click="notify.wechatEnabled = !notify.wechatEnabled">
-                                    <div class="toggle-knob"></div>
-                                </div>
+                            <div class="form-group">
+                                <label>Bot Token</label>
+                                <input type="text" v-model="notify.tgBotToken" placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
                             </div>
-                        </div>
-                        <div style="display:flex; gap:16px;">
-                            <div class="form-group" style="flex:1;">
-                                <label>企业 ID</label>
-                                <input type="text" v-model="notify.wechatCorpId" placeholder="ww4f8b2e6a9c3d71f">
+                            <div class="form-group">
+                                <label>Chat ID</label>
+                                <input type="text" v-model="notify.tgChatId" placeholder="如 123456789 或 @channelname">
                             </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>应用 ID (AgentId)</label>
-                                <input type="text" v-model="notify.wechatAgentId" placeholder="1000084">
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
+                                <button class="btn btn-default btn-small" @click="testNotifyChannel('telegram')" :disabled="notify.testing">测试</button>
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label>应用 Secret</label>
-                            <input type="text" v-model="notify.wechatAgentSecret" placeholder="Fk9Nw3BmZqR-vTb2Yp5Ls8FcD4aGh6jUe1VrNxCw">
-                        </div>
-                        <div style="display:flex; gap:16px;">
-                            <div class="form-group" style="flex:2;">
-                                <label>API 代理地址</label>
-                                <input type="text" v-model="notify.wechatApiBase" placeholder="https://qyapi.weixin.qq.com">
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>默认接收人</label>
-                                <input type="text" v-model="notify.wechatDefaultUser" placeholder="@all 或用户ID">
-                            </div>
-                        </div>
-                        <div class="info-box" style="margin-top:4px;">
-                            <strong>回调 URL（填入企业微信后台「接收消息」设置）:</strong><br>
-                            <code>{{ callbackUrl || '保存配置后显示' }}</code>
-                            <button class="btn btn-default btn-small" style="margin-left:8px; padding:2px 10px; font-size:12px;" @click="loadCallbackUrl">获取</button>
-                        </div>
-                        <div style="display:flex; gap:16px; margin-top:12px;">
-                            <div class="form-group" style="flex:1;">
-                                <label>Token（回调验证）</label>
-                                <input type="text" v-model="notify.wechatCallbackToken" placeholder="Bk5Xp9Mq3NbV">
-                            </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>EncodingAESKey</label>
-                                <input type="text" v-model="notify.wechatCallbackAesKey" placeholder="aE3bF9cD2eG5hI7jK8lM1nO4pQ6rS0tU9vW2xY3zA5bC6d">
-                            </div>
-                        </div>
-                        <div class="info-box info-box--warning" style="margin-top:8px; padding:8px 12px;">
-                            提示：回调 URL 需外网可访问。本地部署可使用 frp / ngrok 等内网穿透工具。配置 Token 和 EncodingAESKey 后即可接收用户消息。
-                        </div>
-                        <div style="display:flex; gap:8px; margin-top:12px;">
-                            <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
-                            <button class="btn btn-default btn-small" @click="testNotifyChannel('wechat')" :disabled="notify.testing">测试</button>
                         </div>
                     </div>
 
-                    <!-- Telegram -->
-                    <div class="card" :style="{ marginBottom: '16px', opacity: notify.tgEnabled ? '1' : '0.6' }">
-                        <div style="display:flex; align-items:center; justify-content:space-between;">
-                            <div class="card-title">Telegram 机器人<span class="help-tip">?<span class="tip-text">通过 @BotFather (t.me/BotFather) 创建 Bot 获取 Token，然后给自己的 Bot 发消息后访问 api.telegram.org/bot[Token]/getUpdates 获取 Chat ID。</span></span></div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:13px;" :style="{ color: notify.tgEnabled ? '#67c23a' : '#909399' }">{{ notify.tgEnabled ? '已启用' : '未启用' }}</span>
-                                <div class="tool-toggle" :class="{ 'toggle-on': notify.tgEnabled }" @click="notify.tgEnabled = !notify.tgEnabled">
-                                    <div class="toggle-knob"></div>
+                    <!-- ===== QQ 机器人 ===== -->
+                    <div v-show="notifyTab === 'qq'">
+                        <div class="card" :style="{ opacity: notify.qqEnabled ? '1' : '0.6' }">
+                            <div style="display:flex; align-items:center; justify-content:space-between;">
+                                <div class="card-title">QQ 机器人<span class="help-tip">?<span class="tip-text">基于 go-cqhttp / NapCat 等 QQ 机器人框架的 HTTP API。需在框架中开启 HTTP 上报服务。</span></span></div>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:13px;" :style="{ color: notify.qqEnabled ? '#67c23a' : '#909399' }">{{ notify.qqEnabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': notify.qqEnabled }" @click="notify.qqEnabled = !notify.qqEnabled">
+                                        <div class="toggle-knob"></div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Bot Token</label>
-                            <input type="text" v-model="notify.tgBotToken" placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
-                        </div>
-                        <div class="form-group">
-                            <label>Chat ID</label>
-                            <input type="text" v-model="notify.tgChatId" placeholder="如 123456789 或 @channelname">
-                        </div>
-                        <div style="display:flex; gap:8px;">
-                            <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
-                            <button class="btn btn-default btn-small" @click="testNotifyChannel('telegram')" :disabled="notify.testing">测试</button>
-                        </div>
-                    </div>
-
-                    <!-- QQ 机器人 -->
-                    <div class="card" :style="{ marginBottom: '16px', opacity: notify.qqEnabled ? '1' : '0.6' }">
-                        <div style="display:flex; align-items:center; justify-content:space-between;">
-                            <div class="card-title">QQ 机器人<span class="help-tip">?<span class="tip-text">基于 go-cqhttp / NapCat 等 QQ 机器人框架的 HTTP API。需在框架中开启 HTTP 上报服务。</span></span></div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:13px;" :style="{ color: notify.qqEnabled ? '#67c23a' : '#909399' }">{{ notify.qqEnabled ? '已启用' : '未启用' }}</span>
-                                <div class="tool-toggle" :class="{ 'toggle-on': notify.qqEnabled }" @click="notify.qqEnabled = !notify.qqEnabled">
-                                    <div class="toggle-knob"></div>
+                            <div class="form-group">
+                                <label>HTTP API 地址</label>
+                                <input type="text" v-model="notify.qqApiUrl" placeholder="http://127.0.0.1:5700">
+                            </div>
+                            <div class="form-group">
+                                <label>Access Token（可选）</label>
+                                <input type="text" v-model="notify.qqAccessToken" placeholder="框架中配置的 access_token">
+                            </div>
+                            <div style="display:flex; gap:16px;">
+                                <div class="form-group" style="flex:1;">
+                                    <label>私信 QQ 号（与群号二选一）</label>
+                                    <input type="text" v-model="notify.qqUserId" placeholder="如 123456789">
+                                </div>
+                                <div class="form-group" style="flex:1;">
+                                    <label>群号</label>
+                                    <input type="text" v-model="notify.qqGroupId" placeholder="如 987654321">
                                 </div>
                             </div>
-                        </div>
-                        <div class="form-group">
-                            <label>HTTP API 地址</label>
-                            <input type="text" v-model="notify.qqApiUrl" placeholder="http://127.0.0.1:5700">
-                        </div>
-                        <div class="form-group">
-                            <label>Access Token（可选）</label>
-                            <input type="text" v-model="notify.qqAccessToken" placeholder="框架中配置的 access_token">
-                        </div>
-                        <div style="display:flex; gap:16px;">
-                            <div class="form-group" style="flex:1;">
-                                <label>私信 QQ 号（与群号二选一）</label>
-                                <input type="text" v-model="notify.qqUserId" placeholder="如 123456789">
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
+                                <button class="btn btn-default btn-small" @click="testNotifyChannel('qq')" :disabled="notify.testing">测试</button>
                             </div>
-                            <div class="form-group" style="flex:1;">
-                                <label>群号</label>
-                                <input type="text" v-model="notify.qqGroupId" placeholder="如 987654321">
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:8px;">
-                            <button class="btn btn-primary btn-small" @click="saveNotify" :disabled="notify.saving">保存</button>
-                            <button class="btn btn-default btn-small" @click="testNotifyChannel('qq')" :disabled="notify.testing">测试</button>
                         </div>
                     </div>
                 </div>
@@ -6822,6 +6840,12 @@
                 const _savedSyncTab = localStorage.getItem('strmhub_sync_tab');
                 const syncTab = ref(_validSyncTabs.includes(_savedSyncTab) ? _savedSyncTab : 'full');
                 Vue.watch(syncTab, (v) => localStorage.setItem('strmhub_sync_tab', v));
+
+                // 通知配置二级 Tab
+                const _validNotifyTabs = ['channels', 'rules', 'wechat', 'telegram', 'qq'];
+                const _savedNotifyTab = localStorage.getItem('strmhub_notify_tab');
+                const notifyTab = ref(_validNotifyTabs.includes(_savedNotifyTab) ? _savedNotifyTab : 'channels');
+                Vue.watch(notifyTab, (v) => localStorage.setItem('strmhub_notify_tab', v));
 
                 // Cron 预览
                 const cronPreview = ref({ times: [], error: '' });
@@ -12983,7 +13007,7 @@ av:
                     localDirPicker, openLocalDirPicker, loadLocalDirs,
                     localDirPickerEnter, localDirPickerGoUp, confirmLocalDirPicker,
                     // 整理功能
-                    organizeTab, syncTab, yamlEditorRef, blacklistRef,
+                    organizeTab, syncTab, notifyTab, yamlEditorRef, blacklistRef,
                     ruleMovieFolderRef, ruleMovieFileRef, ruleTvFolderRef, ruleSeasonFolderRef, ruleEpisodeFileRef, ruleAvFolderRef, ruleAvFileRef,
                     organize, cronPreview, updateCronPreview, autoSaveStatus, curWash,
                     ffprobeAvailable, checkFfprobeStatus, organizeConfigLoaded,
