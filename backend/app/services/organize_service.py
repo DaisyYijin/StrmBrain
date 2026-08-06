@@ -1681,6 +1681,12 @@ class OrganizeService:
                             item_name = item.get("name", "")
                             if not item_id:
                                 continue
+                            # 名字为空的项无法确认身份，跳过移动并提醒（可能是 115 返回的异常条目）
+                            if not item_name:
+                                logger.warning(
+                                    f"[organize] 残留项名称无法读取（id={item_id}），已跳过移动，请到网盘手动检查"
+                                )
+                                continue
                             try:
                                 ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                 if ok:
@@ -1700,6 +1706,8 @@ class OrganizeService:
                             for item in failed_items:
                                 item_id = item.get("id", "")
                                 item_name = item.get("name", "")
+                                if not item_name:
+                                    continue
                                 try:
                                     ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                     if ok:
@@ -2560,6 +2568,12 @@ class OrganizeService:
                         if item_id in involved_ids:
                             logger.info(f"[organize] 残留清理跳过整理中文件: {item_name}")
                             continue
+                        # 名字为空的项无法确认身份，跳过移动并提醒（可能是 115 返回的异常条目）
+                        if not item_name:
+                            logger.warning(
+                                f"[organize] 残留项名称无法读取（id={item_id}），已跳过移动，请到网盘手动检查"
+                            )
+                            continue
                         try:
                             ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                             if ok:
@@ -2581,6 +2595,8 @@ class OrganizeService:
                             item_name = item.get("name", "")
                             if str(item_id) in involved_ids:
                                 logger.info(f"[organize] 残留重试跳过整理中文件: {item_name}")
+                                continue
+                            if not item_name:
                                 continue
                             try:
                                 ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
