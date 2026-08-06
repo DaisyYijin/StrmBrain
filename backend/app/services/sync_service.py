@@ -51,6 +51,9 @@ MANIFEST_DIR.mkdir(exist_ok=True)
 MANIFEST_DB = MANIFEST_DIR / "manifests.db"
 _manifest_db_lock = threading.Lock()
 
+# 同步并发锁：防止全量/增量同步被并发触发
+_sync_lock = threading.Lock()
+
 
 def _manifest_path(local_root: Path) -> Path:
     """根据本地媒体目录路径生成清单文件路径（按路径哈希命名，避免特殊字符）"""
@@ -172,6 +175,11 @@ class SyncService:
         """
         from app.core.progress import progress_manager
 
+        # 并发保护：同一时刻只允许一个同步任务执行
+        if not _sync_lock.acquire(blocking=False):
+            logger.warning("[sync] 已有同步任务正在运行，跳过本次全量同步")
+            return {"total": 0, "synced": [], "skipped": 0, "errors": [], "skipped_concurrent": True}
+
         image_exts = image_exts or set()
         data_exts = data_exts or set()
         all_exts = video_exts | image_exts | data_exts
@@ -212,6 +220,7 @@ class SyncService:
         result["total"] = len(filtered)
         if not filtered:
             cls._save_manifest(local_root, {})
+            _sync_lock.release()
             return result
 
         # 更新进度总数（start_task 已由调用方在 API 层完成）
@@ -320,6 +329,7 @@ class SyncService:
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "全量", loop)
 
+        _sync_lock.release()
         return result
 
     # ============ 增量同步 ============
@@ -345,6 +355,11 @@ class SyncService:
         loop: 主事件循环，用于从工作线程提交进度上报协程
         """
         from app.core.progress import progress_manager
+
+        # 并发保护：同一时刻只允许一个同步任务执行
+        if not _sync_lock.acquire(blocking=False):
+            logger.warning("[sync] 已有同步任务正在运行，跳过本次增量同步")
+            return {"total": 0, "synced": [], "skipped": 0, "errors": [], "skipped_concurrent": True}
 
         video_exts = video_exts or DEFAULT_VIDEO_EXTS
         image_exts = image_exts or set()
@@ -436,6 +451,7 @@ class SyncService:
             summary = f"远端扫描 0 结果，已跳过清理保护 {len(last_manifest)} 个本地文件"
             logger.info(f"[sync] 增量同步完成（防误删保护触发）: {summary}, 耗时 {time.time() - _start_ts:.1f}s")
             cls._safe_schedule(loop, progress_manager.complete_task(summary))
+            _sync_lock.release()
             return result
 
         # 更新进度总数
@@ -568,6 +584,7 @@ class SyncService:
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "增量", loop)
 
+        _sync_lock.release()
         return result
 
     # ============ 同步计划管理 ============
