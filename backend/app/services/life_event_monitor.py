@@ -21,7 +21,7 @@
 - 变更累计后触发 Emby 媒体库刷新
 
 配置（存于 settings.json 的 life_event 键）：
-- enabled: bool 是否启用（默认 True，自动后台运行）
+- enabled: 始终为 True，功能默认开启，不可在页面中关闭
 - interval: int 轮询间隔秒数（默认 30，最小 10）
 - sync_after_changes: bool 有变更时是否触发增量同步兜底（默认 True，
   防止事件遗漏导致本地与网盘不一致）
@@ -32,7 +32,7 @@ import time
 from typing import Optional
 
 from app.core.logbuffer import get_logger
-from app.core.json_storage import read_setting, save_setting
+from app.core.json_storage import read_setting
 
 logger = get_logger("app.services.life_event_monitor")
 
@@ -105,7 +105,8 @@ class LifeEventMonitor:
         return max(interval, MIN_INTERVAL)
 
     def is_enabled(self) -> bool:
-        return bool(self._get_config().get("enabled", True))
+        """生活事件监控始终启用，默认开启，不可在页面中关闭。"""
+        return True
 
     # ===== 生命周期 =====
 
@@ -113,9 +114,6 @@ class LifeEventMonitor:
         """启动后台轮询任务（幂等）。需在事件循环中调用。"""
         if self._running:
             return True
-        if not self.is_enabled():
-            logger.info("[life-event] 115 生活事件监控未启用（enabled=false），不启动")
-            return False
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -141,24 +139,13 @@ class LifeEventMonitor:
         logger.info("[life-event] 115 生活事件监控已停止")
 
     def get_status(self) -> dict:
-        """获取监控状态（供 API 使用）。"""
-        cfg = self._get_config()
+        """获取监控状态（供内部使用）。"""
         return {
-            "enabled": cfg.get("enabled", True),
             "running": self._running,
             "interval": self._get_interval(),
             "last_data": self._last_data,
             "stats": self._stats,
         }
-
-    def set_enabled(self, enabled: bool, interval: Optional[int] = None) -> dict:
-        """设置开关与轮询间隔（需调用方随后 start/stop 生效，或本方法直接应用）。"""
-        cfg = self._get_config()
-        cfg["enabled"] = bool(enabled)
-        if interval is not None:
-            cfg["interval"] = max(int(interval), MIN_INTERVAL)
-        save_setting(SETTINGS_KEY, cfg)
-        return self.get_status()
 
     # ===== 主循环 =====
 

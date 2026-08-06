@@ -271,41 +271,6 @@ async def get_local_account_api():
     return ApiResponse(data={"username": acct.get("username", "") if acct else ""})
 
 
-# ===== 115 生活事件监控 =====
-
-class LifeEventMonitorIn(BaseModel):
-    enabled: bool = False
-    interval: int = 0  # 轮询间隔（秒），0=保持当前值
-
-
-@router.get("/life-event-monitor", response_model=ApiResponse, dependencies=[Depends(require_auth)])
-async def get_life_event_monitor_api():
-    """获取 115 生活事件监控状态与配置"""
-    from app.services.life_event_monitor import get_life_event_monitor
-    return ApiResponse(data=get_life_event_monitor().get_status())
-
-
-@router.post("/life-event-monitor", response_model=ApiResponse, dependencies=[Depends(require_auth)])
-async def set_life_event_monitor_api(payload: LifeEventMonitorIn):
-    """启用/停用 115 生活事件监控，并实时生效。
-    启用后后台轮询 115 生活事件，感知网盘文件变化并增量同步到本地 STRM。"""
-    from app.services.life_event_monitor import get_life_event_monitor
-    monitor = get_life_event_monitor()
-
-    interval = payload.interval if payload.interval > 0 else None
-    status = monitor.set_enabled(payload.enabled, interval)
-
-    if payload.enabled:
-        ok = monitor.start()
-        if not ok:
-            return ApiResponse(code=500, message="生活事件监控启动失败，请检查日志")
-    else:
-        await monitor.stop()
-
-    state = "已启动" if payload.enabled else "已停止"
-    return ApiResponse(message=f"115 生活事件监控{state}", data=status)
-
-
 @router.post("/local-account", response_model=ApiResponse, dependencies=[Depends(require_auth)])
 async def save_local_account_api(payload: LocalAccountIn):
     """
