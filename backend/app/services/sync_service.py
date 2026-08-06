@@ -228,8 +228,6 @@ class SyncService:
 
         # 生成 STRM / 下载文件
         manifest = {}
-        # 目录去重显示：同一目录（影视）只打印一次，避免每个文件都输出导致刷屏
-        _logged_dirs: set = set()
         # 收集延迟下载任务（数据/图片文件），主循环结束后批量下载
         _pending_downloads: list[dict] = []
         for idx, f in enumerate(filtered):
@@ -238,15 +236,9 @@ class SyncService:
             _cur_name = f.get("name", "")
             _cur_dir = f.get("parent_path", "")
 
-            # 每个目录只输出一条日志，展示正在同步的影视目录名。
-            # 如 "A-爱你 (2025)"、"动画/剧场版"，避免逐集刷屏。
+            # 每个文件都输出处理日志，含目录信息
             _interval = get_api_intervals().get("sync_file_interval", 3.0)
-            if _cur_dir not in _logged_dirs:
-                _logged_dirs.add(_cur_dir)
-                if _interval >= 1.0:
-                    logger.info(f"[sync] 正在处理第 {_cur_no}/{len(filtered)} 个文件，目录: {_cur_dir or '/'}")
-                else:
-                    logger.info(f"[sync] ({_cur_no}/{len(filtered)}) 目录: {_cur_dir or '/'}")
+            logger.info(f"[sync] 正在处理第 {_cur_no}/{len(filtered)} 个文件: {_cur_name}")
 
             synced, entry = cls._sync_single_file(
                 cookies, f, local_root, video_exts, image_exts, data_exts,
@@ -276,6 +268,7 @@ class SyncService:
 
             # 文件间等待（仅对需要 API 调用的操作，STRM 生成无 API 调用可跳过）
             if _interval > 0:
+                logger.info(f"[sync] 115 API 暂停 {_interval:.1f}s...")
                 time.sleep(_interval)
 
         # 批量下载数据/图片文件（串行获取链接 + 并发下载内容）
@@ -469,10 +462,8 @@ class SyncService:
             pickcode = f.get("pickcode", "")
 
             processed += 1
-            # 间隔 >= 1s 时输出当前处理进度（让用户知道正在处理哪个文件）
             _interval = get_api_intervals().get("sync_file_interval", 3.0)
-            if _interval >= 1.0:
-                logger.info(f"[sync] 正在处理第 {processed}/{len(all_files)} 个文件: {name}")
+            logger.info(f"[sync] 正在处理第 {processed}/{len(all_files)} 个文件: {name}")
             if processed % 10 == 0:
                 cls._safe_schedule(loop, progress_manager.update_progress(processed, name))
 
@@ -553,6 +544,7 @@ class SyncService:
 
             # 文件间等待（_interval 已在循环开头定义）
             if _interval > 0:
+                logger.info(f"[sync] 115 API 暂停 {_interval:.1f}s...")
                 time.sleep(_interval)
 
         # 检测已删除的文件
