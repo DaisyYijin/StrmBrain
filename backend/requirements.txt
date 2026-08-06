@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
 p115client>=0.0.5
+p123client>=0.0.1  # N2 123pan 多云驱动（可选，未安装时 123 驱动降级不可用）
 python-multipart==0.0.9
 python-jose[cryptography]==3.3.0
 bcrypt==4.2.0

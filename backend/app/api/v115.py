@@ -75,6 +75,54 @@ async def check_qrcode_status(uid: str, name: str = "默认账号"):
     return ApiResponse(data=result)
 
 
+@router.get("/open/qrcode", response_model=ApiResponse)
+async def get_open_qrcode(app_id: int):
+    """获取 115 开放平台 OAuth 登录二维码（feature #10）。
+
+    app_id: 在 https://open.115.com 申请的应用 ID。
+    """
+    if not app_id:
+        return ApiResponse(code=400, message="请提供开放平台 app_id")
+    try:
+        data = await Client115Service.get_open_qrcode(app_id)
+        return ApiResponse(data=data)
+    except Exception as e:
+        return ApiResponse(code=500, message=f"获取二维码失败: {str(e)}")
+
+
+@router.get("/open/qrcode/status", response_model=ApiResponse)
+async def check_open_qrcode_status(uid: str, name: str = "开放平台账号"):
+    """检查开放平台 OAuth 扫码状态；成功时保存账号（凭证以 OPENAUTH 哨兵串存入 cookies）。"""
+    result = await Client115Service.check_open_qrcode_status(uid)
+
+    if result.get("status") == 2 and result.get("cookies"):
+        user_id = result.get("user_id", "")
+        account_data = {
+            "name": result.get("username") or name,
+            "cookies": result["cookies"],          # OPENAUTH:{json} 哨兵串
+            "user_id": user_id,
+            "username": result.get("username", ""),
+            "app": "open",
+            "auth_type": "open",
+            "avatar_url": result.get("avatar_url", ""),
+            "status": 1,
+        }
+        saved = upsert_account(account_data)
+        result["account_id"] = saved.get("id")
+        result["message"] = "账号已更新" if (saved.get("updated_at", 0) > 0 and find_account_by_user_id(user_id)) else "账号已添加"
+        result.pop("cookies", None)
+
+        # feature #10: 新增 OAuth 账号后立即注册 token 定时刷新任务
+        try:
+            import asyncio
+            from app.core.scheduler import register_open_token_refresh
+            asyncio.create_task(register_open_token_refresh())
+        except Exception:
+            pass
+
+    return ApiResponse(data=result)
+
+
 @router.get("/files", response_model=ApiResponse)
 async def list_files(
     account_id: int,
@@ -97,6 +145,35 @@ async def list_files(
         return ApiResponse(code=500, message=err)
 
     return ApiResponse(data=files)
+
+
+@router.get("/search", response_model=ApiResponse)
+async def search_files(
+    account_id: int,
+    keyword: str,
+    cid: str = "0",
+    offset: int = 0,
+    limit: int = 40,
+):
+    """G8: 115 网盘文件搜索（关键词 + 可选目录范围）。
+
+    keyword: 搜索关键词；cid="0" 为全盘搜索。
+    返回 115 原始响应（data 列表 + count）。
+    """
+    if not (keyword or "").strip():
+        return ApiResponse(code=400, message="搜索关键词不能为空")
+    account = find_account(account_id)
+    if not account:
+        return ApiResponse(code=404, message="账号不存在")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.search_files(cookies, keyword.strip(), cid, offset, limit)
+
+    err = result.get("_error")
+    if err:
+        return ApiResponse(code=500, message=err)
+
+    return ApiResponse(data=result)
 
 
 @router.get("/rate-stats", response_model=ApiResponse)

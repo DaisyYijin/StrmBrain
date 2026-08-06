@@ -23,6 +23,67 @@ class AddTaskRequest(BaseModel):
     save_cid: str = ""  # 保存到的目录 cid（留空=根目录）
 
 
+class ParseLinksRequest(BaseModel):
+    """N1: 从消息文本解析磁力/ed2k/种子链接"""
+    account_id: int = 0
+    text: str = ""
+
+
+class TorrentInfoRequest(BaseModel):
+    """N1: 解析磁力/种子的文件清单（供勾选）"""
+    account_id: int = 0
+    torrent_url: str = ""   # 磁力链接或种子 url
+    torrent_sha1: str = ""  # 或已上传种子的 sha1
+
+
+class AddBtRequest(BaseModel):
+    """N1: 提交 BT 任务，仅下载选中文件"""
+    account_id: int = 0
+    info_hash: str = ""
+    wanted_indexes: List[int] = []  # 空=全部
+    save_cid: str = ""
+    torrent_sha1: str = ""
+
+
+def _parse_offline_links(raw: str) -> List[str]:
+    """N1: 从一段文本按出现顺序提取磁力/ed2k/种子链接（去零宽/RTL、去重）。
+
+    参考 MoviePilot p115strmhelper OfflineLinkResolver。
+    """
+    import re
+    if not raw or not isinstance(raw, str):
+        return []
+    s = raw.replace("\uff5c", "|").strip()
+    if not s:
+        return []
+    _STRIP = dict.fromkeys((0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0xFEFF))
+    ed2k_re = re.compile(
+        r"(ed2k://\|file\|[^|]+\|\d+\|[0-9A-Fa-f]{32}(?:\|(?:h|p)=[^|]+)?\|/)",
+        re.IGNORECASE,
+    )
+    spans = []
+    for m in ed2k_re.finditer(s):
+        spans.append((m.start(), m.end(), m.group(1)))
+    for m in re.finditer(r"(magnet:\?[^\s]+)", s, re.IGNORECASE):
+        spans.append((m.start(), m.end(), m.group(1)))
+    for m in re.finditer(r"(https?://[^\s]+\.torrent(?:\?[^\s]*)?)", s, re.IGNORECASE):
+        spans.append((m.start(), m.end(), m.group(1)))
+    spans.sort(key=lambda x: x[0])
+    seen = set()
+    out: List[str] = []
+    last_end = -1
+    for st, en, txt in spans:
+        if st < last_end:
+            continue
+        c = txt.translate(_STRIP)
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+        last_end = en
+    return out
+
+
 class ListTaskRequest(BaseModel):
     account_id: int = 0
     page: int = 1
@@ -104,6 +165,121 @@ async def add_task(payload: AddTaskRequest):
             from app.core.logbuffer import get_logger
             get_logger().warning(f"[clouddownload] 注册自动整理失败: {e}")
 
+    return ApiResponse(data=result)
+
+
+@router.post("/parse-links", response_model=ApiResponse)
+async def parse_links(payload: ParseLinksRequest):
+    """N1: 从粘贴的文本中提取磁力/ed2k/种子链接（去零宽字符、按序去重）。"""
+    links = _parse_offline_links(payload.text)
+    return ApiResponse(data={"links": links, "count": len(links)})
+
+
+@router.post("/torrent-info", response_model=ApiResponse)
+async def torrent_info(payload: TorrentInfoRequest):
+    """N1: 解析磁力/种子的文件清单，供用户勾选后只下载选中项。"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not (payload.torrent_url or payload.torrent_sha1):
+        return ApiResponse(code=400, message="请提供磁力链接或种子")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.clouddownload_torrent_info(
+        cookies, payload.torrent_url, payload.torrent_sha1
+    )
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"解析失败: {result['error']}")
+    return ApiResponse(data=result)
+
+
+@router.post("/add-bt", response_model=ApiResponse)
+async def add_bt(payload: AddBtRequest):
+    """N1: 提交 BT 离线任务，仅下载勾选的文件；成功后注册自动整理。"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.info_hash:
+        return ApiResponse(code=400, message="缺少 info_hash")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.clouddownload_add_bt(
+        cookies, payload.info_hash, payload.wanted_indexes,
+        payload.save_cid, payload.torrent_sha1,
+    )
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"添加失败: {result['error']}")
+
+    # 成功后注册一次性自动整理（与 add_task 一致）
+    if isinstance(result, dict) and result.get("state"):
+        try:
+            from app.core.scheduler import schedule_auto_organize_after_download
+            save_cid = payload.save_cid or (read_setting("clouddownload_config") or {}).get("save_cid", "")
+            if save_cid:
+                schedule_auto_organize_after_download(cookies, save_cid)
+        except Exception as e:
+            from app.core.logbuffer import get_logger
+            get_logger().warning(f"[clouddownload] BT 注册自动整理失败: {e}")
+
+    return ApiResponse(data=result)
+
+
+class InstantUploadRequest(BaseModel):
+    """N3: 跨云秒传——用远端直链 SHA1 秒传进 115"""
+    account_id: int = 0
+    download_url: str = ""   # 源文件可 Range 访问的直链
+    filename: str = ""
+    file_size: int = 0
+    full_sha1: str = ""      # 整文件 SHA1（源云盘 API 提供）
+    save_cid: str = "0"
+
+
+@router.post("/instant-upload", response_model=ApiResponse)
+async def instant_upload(payload: InstantUploadRequest):
+    """N3: 跨云秒传。用远端直链（如阿里云盘分享直链）的 SHA1 尝试秒传进 115，
+    命中则不下载字节即完成。需调用方提供整文件 SHA1（源云盘通常在文件信息中提供）。
+    """
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not (payload.download_url and payload.filename and payload.full_sha1 and payload.file_size > 0):
+        return ApiResponse(code=400, message="参数不完整（需 download_url/filename/file_size/full_sha1）")
+
+    cookies = account.get("cookies", "")
+    import asyncio
+    from app.services.client_115 import _executor
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        _executor,
+        lambda: Client115Service.instant_upload_from_url(
+            cookies, payload.download_url, payload.filename,
+            payload.file_size, payload.full_sha1, payload.save_cid,
+        ),
+    )
+    if result.get("status") == "error":
+        return ApiResponse(code=500, message=f"秒传失败: {result.get('message', '')}")
+    return ApiResponse(data=result)
+
+
+@router.get("/quota", response_model=ApiResponse)
+async def get_quota(account_id: int = 0):
+    """N1: 获取离线下载配额信息。"""
+    account = _get_account(account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.clouddownload_quota(cookies)
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"获取配额失败: {result['error']}")
     return ApiResponse(data=result)
 
 
@@ -292,6 +468,26 @@ async def share_snap(payload: ShareSnapRequest):
 
     if isinstance(result, dict) and result.get("error"):
         return ApiResponse(code=500, message=f"获取失败: {result['error']}")
+
+    return ApiResponse(data=result)
+
+
+@router.post("/share/dedup-probe", response_model=ApiResponse)
+async def share_dedup_probe(payload: ShareSnapRequest):
+    """O12: 转存前秒传 dry-run 探测——预估分享中有多少文件已在网盘（可秒传/跳过）。"""
+    account = _get_account(payload.account_id)
+    if not account:
+        return ApiResponse(code=404, message="未找到有效账号，请先登录 115")
+    if account.get("status") == 0:
+        return ApiResponse(code=401, message="账号 cookies 已失效，请重新登录")
+    if not payload.share_url:
+        return ApiResponse(code=400, message="请输入分享链接")
+
+    cookies = account.get("cookies", "")
+    result = Client115Service.share_dedup_probe(cookies, payload.share_url)
+
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"探测失败: {result['error']}")
 
     return ApiResponse(data=result)
 

@@ -2,7 +2,7 @@
 API 路由 - 系统设置（Emby / TMDB / STRM / 通知 / API 间隔）
 数据存储在 settings.json，不依赖数据库。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.core.json_storage import read_setting, save_setting
@@ -134,6 +134,40 @@ async def save_route_rules(payload: RouteRulesPayload):
     return ApiResponse(message="路由规则已保存")
 
 
+# ===== N8/N12: Emby 反代特性开关（字幕转换 / 搜索框命令） =====
+
+class ProxyFeaturesPayload(BaseModel):
+    """反代特性开关"""
+    subtitle_srt2ass: bool = False   # N8: SRT→ASS 字幕转换
+    search_commands: bool = False    # N12: 播放器搜索框管理命令
+    enable_hls_vsource: bool = True  # #27: 注入 115 转码虚拟源
+    hls_multi_version: bool = True   # #27: 多清晰度可选（关=仅原画单源）
+
+
+@router.get("/emby-proxy/features", response_model=ApiResponse)
+async def get_proxy_features():
+    """获取反代特性开关（字幕 SRT→ASS、搜索框命令、转码多版本源）"""
+    data = read_setting("emby_proxy")
+    return ApiResponse(data={
+        "subtitle_srt2ass": bool(data.get("subtitle_srt2ass", False)),
+        "search_commands": bool(data.get("search_commands", False)),
+        "enable_hls_vsource": bool(data.get("enable_hls_vsource", True)),
+        "hls_multi_version": bool(data.get("hls_multi_version", True)),
+    })
+
+
+@router.post("/emby-proxy/features", response_model=ApiResponse)
+async def save_proxy_features(payload: ProxyFeaturesPayload):
+    """保存反代特性开关（合并到 emby_proxy 配置，不覆盖端口/路由规则）"""
+    data = read_setting("emby_proxy")
+    data["subtitle_srt2ass"] = payload.subtitle_srt2ass
+    data["search_commands"] = payload.search_commands
+    data["enable_hls_vsource"] = payload.enable_hls_vsource
+    data["hls_multi_version"] = payload.hls_multi_version
+    save_setting("emby_proxy", data)
+    return ApiResponse(message="已保存")
+
+
 @router.get("/tmdb", response_model=ApiResponse)
 async def get_tmdb_settings():
     """获取 TMDB 设置"""
@@ -192,6 +226,9 @@ class StrmSettings(BaseModel):
     server_url: str = ""
     server_port: str = "6060"
     overwrite_mode: str = "skip"
+    # O1 增量同步防误删阈值（%）：本次拟删除文件数占上次清单比例超过该值时中止清理，
+    # 疑似 115 API 返回部分结果导致的误删。0 或 >=100 表示关闭该保护，默认 50。
+    max_delete_ratio: int = 50
 
 
 @router.get("/strm", response_model=ApiResponse)
@@ -202,6 +239,7 @@ async def get_strm_settings():
         "server_url": data.get("server_url", ""),
         "server_port": data.get("server_port", "6060"),
         "overwrite_mode": data.get("overwrite_mode", "skip"),
+        "max_delete_ratio": data.get("max_delete_ratio", 50),
     })
 
 
@@ -210,6 +248,134 @@ async def save_strm_settings(payload: StrmSettings):
     """保存 STRM 配置"""
     save_setting("strm", payload.model_dump())
     return ApiResponse(message="已保存")
+
+
+# ===== WebDAV 只读访问配置（G5）=====
+
+class WebdavSettings(BaseModel):
+    """WebDAV 只读访问配置"""
+    enabled: bool = False   # 是否启用 WebDAV 只读服务（默认关闭）
+    root: str = ""          # 暴露的根目录，留空取同步计划的 local_media_dir
+
+
+@router.get("/webdav", response_model=ApiResponse)
+async def get_webdav_settings(request: Request):
+    """获取 WebDAV 配置与访问地址"""
+    data = read_setting("webdav") or {}
+    base = str(request.base_url).rstrip("/")
+    # 探测实际生效的根目录（便于前端提示）
+    effective_root = ""
+    try:
+        from app.services.webdav_service import get_root
+        r = get_root()
+        effective_root = str(r) if r else ""
+    except Exception:
+        pass
+    return ApiResponse(data={
+        "enabled": bool(data.get("enabled", False)),
+        "root": data.get("root", ""),
+        "dav_url": f"{base}/dav",
+        "effective_root": effective_root,
+    })
+
+
+@router.post("/webdav", response_model=ApiResponse)
+async def save_webdav_settings(payload: WebdavSettings):
+    """保存 WebDAV 配置"""
+    save_setting("webdav", payload.model_dump())
+    return ApiResponse(message="已保存")
+
+
+# ===== 123pan 驱动凭证（N2 多云）=====
+
+class Driver123Settings(BaseModel):
+    """123pan 账号凭证"""
+    passport: str = ""   # 手机号/邮箱
+    password: str = ""   # 密码
+
+
+@router.get("/driver-123", response_model=ApiResponse)
+async def get_driver_123_settings():
+    """获取 123pan 驱动配置与可用性（密码不回传明文，仅返回是否已设置）"""
+    data = read_setting("driver_123") or {}
+    available = False
+    dep_installed = False
+    try:
+        from app.services.driver_123 import _P123_AVAILABLE, get_driver_123
+        dep_installed = _P123_AVAILABLE
+        available = get_driver_123().is_available()
+    except Exception:
+        pass
+    return ApiResponse(data={
+        "passport": data.get("passport", ""),
+        "password_set": bool(data.get("password")),
+        "dep_installed": dep_installed,
+        "available": available,
+    })
+
+
+@router.post("/driver-123", response_model=ApiResponse)
+async def save_driver_123_settings(payload: Driver123Settings):
+    """保存 123pan 驱动凭证并刷新驱动实例"""
+    save_setting("driver_123", payload.model_dump())
+    # 刷新驱动实例凭证缓存
+    try:
+        from app.services.driver_123 import get_driver_123
+        get_driver_123().set_credentials(payload.passport, payload.password)
+    except Exception:
+        pass
+    return ApiResponse(message="已保存")
+
+
+# ===== Alist/OpenList 网关配置（feature #5）=====
+
+class DriverAlistSettings(BaseModel):
+    """Alist/OpenList 网关配置"""
+    base_url: str = ""   # Alist 地址，如 http://192.168.1.10:5244
+    token: str = ""      # 可选，Alist 令牌
+    username: str = ""   # 可选，用于自动登录
+    password: str = ""   # 可选，用于自动登录
+
+
+@router.get("/driver-alist", response_model=ApiResponse)
+async def get_driver_alist_settings():
+    """获取 Alist 网关配置与可用性（密码/token 不回传明文）"""
+    data = read_setting("driver_alist") or {}
+    return ApiResponse(data={
+        "base_url": data.get("base_url", ""),
+        "username": data.get("username", ""),
+        "token_set": bool(data.get("token")),
+        "password_set": bool(data.get("password")),
+        "available": bool((data.get("base_url") or "").strip()),
+    })
+
+
+@router.post("/driver-alist", response_model=ApiResponse)
+async def save_driver_alist_settings(payload: DriverAlistSettings):
+    """保存 Alist 网关配置"""
+    save_setting("driver_alist", payload.model_dump())
+    return ApiResponse(message="已保存")
+
+
+@router.post("/driver-alist/test", response_model=ApiResponse)
+async def test_driver_alist():
+    """测试 Alist 网关连通性"""
+    data = read_setting("driver_alist") or {}
+    base_url = (data.get("base_url") or "").strip()
+    if not base_url:
+        return ApiResponse(code=400, message="请先配置 Alist 地址")
+    import asyncio
+    from app.services.driver_alist import AlistClient
+    client = AlistClient(base_url, data.get("token", ""), data.get("username", ""), data.get("password", ""))
+    ok = await asyncio.to_thread(client.ping)
+    if not ok:
+        return ApiResponse(code=500, message="无法连接到 Alist，请检查地址")
+    # 进一步测登录（若配了账号）
+    if data.get("username") and data.get("password"):
+        tok = await asyncio.to_thread(client._get_token)
+        if not tok:
+            return ApiResponse(code=500, message="连接成功但登录失败，请检查账号密码")
+    return ApiResponse(message="Alist 连接正常")
 
 
 # ===== STRM 播放安全配置 =====
@@ -278,6 +444,9 @@ class EmbyNotifySettings(BaseModel):
     notify_on_error: bool = True       # 任务异常时发送通知
     notify_on_emby_add: bool = True    # Emby 入库时发送通知（通过 Webhook 触发）
     webhook_token: str = ""            # Emby Webhook 认证 token
+    # O7: 新入库 STRM 触发 Emby 原生媒体信息提取（SyncMediaInfo），
+    # 使编码/分辨率徽章立即显示。默认关闭以避免频繁探测触发网盘风控。
+    sync_media_info: bool = False
 
 
 @router.get("/emby-notify", response_model=ApiResponse)
@@ -290,6 +459,7 @@ async def get_emby_notify_settings():
         "notify_on_error": data.get("notify_on_error", True),
         "notify_on_emby_add": data.get("notify_on_emby_add", True),
         "webhook_token": data.get("webhook_token", ""),
+        "sync_media_info": data.get("sync_media_info", False),
     })
 
 

@@ -96,10 +96,15 @@ _response_cache_lock = threading.Lock()
 # 声明式缓存规则：路径正则 -> TTL（秒）
 # 匹配到的请求缓存响应体，未匹配的不缓存
 _CACHE_RULES: list[tuple[re.Pattern, float]] = [
-    # 字幕请求缓存 30 天（2592000 秒）
-    (re.compile(r"(?i)/Videos/[^/]+/[^/]*sub"), 2592000),
-    # 图片请求缓存 1 天（86400 秒）— Images/Items/{id}/...
-    (re.compile(r"(?i)/Items/[^/]+/Images/"), 86400),
+    # O9 字幕请求缓存 30 天（2592000 秒）
+    # 修复：原规则 /Videos/[^/]+/[^/]*sub 无法匹配 Emby 真实字幕 URL
+    # （/Videos/{id}/{msid}/Subtitles/... 形式，"sub" 不紧跟 item id），
+    # 导致字幕缓存实际从未命中、每次播放都回源重新提取内封字幕。
+    # 改用与 _REG_SUBTITLES 检测一致的 subtitles 关键词匹配。
+    (re.compile(r"(?i)/Videos/.*subtitles"), 2592000),
+    # N10: 图片请求缓存 30 天（2592000 秒）— 海报/背景图很少变，长缓存大幅减少回源
+    # 覆盖 /Items/{id}/Images/... 与 /Items/{id}/RemoteImages 等
+    (re.compile(r"(?i)/Items/[^/]+/(Images|RemoteImages)"), 2592000),
     # 302 重定向结果缓存 10 分钟（600 秒）— stream/universal 请求
     # 注意：仅在 Range 代理和 302 回退都失败时才考虑缓存
 ]
@@ -308,14 +313,48 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
             proxy_cfg = {}
         # 配置开关 enable_hls_vsource（默认 True）
         if proxy_cfg.get("enable_hls_vsource", True):
+            # #27: 多版本源模式——按 115 实际可用清晰度注入多个可选 MediaSource。
+            # multi_version 开启时（默认开）为每个清晰度生成一个虚拟源，用户可在
+            # 播放器中手动选择码率；关闭时退化为单个"原画"虚拟源（懒解析）。
+            multi_version = proxy_cfg.get("hls_multi_version", True)
             new_sources: list = []
             for src in sources:
                 new_sources.append(src)
                 src_id = src.get("Id", "")
                 pickcode = strm_pickcodes.get(src_id, "")
-                if pickcode:
-                    # 虚拟转码源：插入到原源之后（原源在第一位，虚拟源在第二位）
-                    virtual_src = {
+                if not pickcode:
+                    continue
+                defs = []
+                acct_id = 0
+                if multi_version:
+                    try:
+                        from app.services.client_115 import Client115Service
+                        acct_id = _extract_account_id(src.get("DirectStreamUrl", "")) or 0
+                        cookies = _get_cookies_for_account(acct_id)
+                        if cookies:
+                            defs = Client115Service.get_video_definitions(cookies, pickcode)
+                    except Exception as e:
+                        logger.debug(f"[proxy] 获取多清晰度失败: {e}")
+                if defs:
+                    # 为每个清晰度注入一个虚拟源（走 115m3u8 端点按 definition 解析）
+                    for d in defs:
+                        label = d["name"]
+                        res = f"{d['height']}p" if d.get("height") else ""
+                        vsrc = {
+                            "Id": f"virtual-transcoded_{src_id}_{d['definition']}",
+                            "Name": f"115 转码 - {label}" + (f" ({res})" if res else ""),
+                            "Container": "hls",
+                            "Protocol": "Hls",
+                            "SupportsDirectPlay": False,
+                            "SupportsDirectStream": True,
+                            "SupportsTranscoding": False,
+                            "DirectStreamUrl": f"/api/playback/115m3u8?pickcode={pickcode}&definition={d['definition']}&account_id={acct_id}",
+                            "Path": "",
+                        }
+                        new_sources.append(vsrc)
+                else:
+                    # 回退：单个原画虚拟源，播放时懒解析（definition=0 取最高可用）
+                    new_sources.append({
                         "Id": f"virtual-transcoded_{src_id}",
                         "Name": "115 转码直链 - 原画",
                         "Container": "hls",
@@ -323,10 +362,9 @@ def _rewrite_playback_data(data: dict, item_id: str, api_key: str, media_source_
                         "SupportsDirectPlay": False,
                         "SupportsDirectStream": True,
                         "SupportsTranscoding": False,
-                        "DirectStreamUrl": f"/api/playback/m3u8?url={_b64url_encode(f'115://{pickcode}')}",
+                        "DirectStreamUrl": f"/api/playback/115m3u8?pickcode={pickcode}&definition=0",
                         "Path": "",
-                    }
-                    new_sources.append(virtual_src)
+                    })
             sources = new_sources
 
     data["MediaSources"] = sources
@@ -593,6 +631,8 @@ def _match_route_rule(rules: list, path: str, ua: str, ip: str, filename: str) -
             matched = target == match_value
         elif match_op == "startsWith":
             matched = target.startswith(match_value)
+        elif match_op == "endsWith":
+            matched = target.endswith(match_value)
         elif match_op == "regex":
             try:
                 matched = bool(re.search(match_value, target))
@@ -601,6 +641,10 @@ def _match_route_rule(rules: list, path: str, ua: str, ip: str, filename: str) -
                 continue
         else:
             continue
+
+        # O10: 支持取反（match_negate=true），可表达"非 web 客户端才重定向"等规则
+        if rule.get("match_negate", False):
+            matched = not matched
 
         if matched:
             return mode
@@ -736,6 +780,16 @@ def _extract_account_id(url: str) -> int:
         return int(values[0])
     except (TypeError, ValueError):
         return 0
+
+
+def _get_cookies_for_account(account_id: int) -> str:
+    """#27: 按 account_id 取 cookies；account_id=0 时取第一个有效账号。"""
+    try:
+        from app.core.json_storage import find_account, get_first_valid_account
+        acc = find_account(account_id) if account_id else get_first_valid_account()
+        return (acc or {}).get("cookies", "") or ""
+    except Exception:
+        return ""
 
 
 def _is_self_strm_url(target: str) -> bool:
@@ -1451,6 +1505,47 @@ async def handle_items(request: Request):
     return JSONResponse(content=data)
 
 
+async def _handle_subtitle_srt2ass(request: Request):
+    """N8: 回源取 SRT 字幕内容并转换为 ASS 返回（带响应缓存）。
+
+    仅当内容确为 SRT 时转换；否则原样回源。转换结果按缓存规则（30 天）缓存。
+    """
+    from app.services.subtitle_convert import srt_to_ass, is_srt_content
+
+    cfg = _get_config()
+    ck = _cache_key(request)
+    cache_ttl = _get_cache_ttl(request.url.path)
+    if cache_ttl > 0:
+        cached = _get_cached_response(ck)
+        if cached is not None:
+            return Response(content=cached["content"], status_code=cached["status"],
+                            headers=cached.get("headers", {}))
+
+    # 回源取原始字幕内容（proxy_origin 对字幕返回非流式 Response，body 可读）
+    origin_resp = await proxy_origin(request)
+    # proxy_origin 可能返回 StreamingResponse/Response；尽力取 body
+    body = getattr(origin_resp, "body", None)
+    if body is None:
+        return origin_resp
+    if not is_srt_content(body):
+        return origin_resp
+    try:
+        srt_text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return origin_resp
+    ass_text = srt_to_ass(srt_text)
+    ass_bytes = ass_text.encode("utf-8")
+    headers = {
+        "Content-Type": "text/x-ssa; charset=utf-8",
+        "Content-Length": str(len(ass_bytes)),
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    }
+    if cache_ttl > 0:
+        _set_cached_response(ck, ass_bytes, 200, headers, cache_ttl)
+    logger.info(f"[proxy] SRT→ASS 转换字幕: {request.url.path[:80]}")
+    return Response(content=ass_bytes, status_code=200, headers=headers)
+
+
 async def handle_stream(request: Request):
     """
     拦截 stream/universal/original 请求：
@@ -1458,8 +1553,15 @@ async def handle_stream(request: Request):
     2. 如果是 .strm 文件 → 读取内容 → 307 重定向到直链
     3. 否则回源 Emby 处理
     """
-    # 字幕请求直接回源
+    # 字幕请求：默认直接回源（并由响应缓存层缓存）；
+    # N8: 若开启 subtitle_srt2ass 且请求 .srt，则回源取内容并转为 ASS 返回。
     if _REG_SUBTITLES.search(request.url.path):
+        try:
+            cfg_sub = _get_config()
+            if cfg_sub.get("subtitle_srt2ass") and request.url.path.lower().endswith(".srt"):
+                return await _handle_subtitle_srt2ass(request)
+        except Exception as e:
+            logger.debug(f"[proxy] SRT2ASS 处理异常，回源: {e}")
         return await proxy_origin(request)
 
     cfg = _get_config()
@@ -1610,6 +1712,8 @@ async def handle_stream(request: Request):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
+            # 不泄露 Emby 内部 URL 给 115 CDN
+            response.headers["Referrer-Policy"] = "no-referrer"
             return response
         logger.warning(f"[proxy] STRM 内容为空: {emby_path}")
     else:
@@ -1699,6 +1803,60 @@ async def handle_redirect2external(request: Request):
     return response
 
 
+async def handle_115m3u8_route(request: Request):
+    """
+    #27: /api/playback/115m3u8 — 按 pickcode + definition 解析 115 真实 m3u8 直链，
+    再走 m3u8 代理拉取+重写为本地分段地址返回给播放器。
+    参数: pickcode（必填）、definition（清晰度编码，0=最高可用）、account_id
+    """
+    pickcode = request.query_params.get("pickcode", "")
+    if not pickcode:
+        return JSONResponse(status_code=400, content={"detail": "缺少 pickcode"})
+    try:
+        definition = int(request.query_params.get("definition", "0") or 0)
+    except ValueError:
+        definition = 0
+    try:
+        account_id = int(request.query_params.get("account_id", "0") or 0)
+    except ValueError:
+        account_id = 0
+
+    cookies = _get_cookies_for_account(account_id)
+    if not cookies:
+        return JSONResponse(status_code=503, content={"detail": "无有效 115 账号"})
+
+    import asyncio
+    from app.services.client_115 import _executor, Client115Service
+    loop = asyncio.get_event_loop()
+    defs = await loop.run_in_executor(
+        _executor, lambda: Client115Service.get_video_definitions(cookies, pickcode)
+    )
+    if not defs:
+        return JSONResponse(status_code=502, content={"detail": "115 未返回可用清晰度（可能正在转码，请稍后重试）"})
+
+    # 选择匹配 definition 的直链；definition=0 取最高（列表已按清晰度降序）
+    chosen = None
+    if definition:
+        chosen = next((d for d in defs if d["definition"] == definition), None)
+    if chosen is None:
+        chosen = defs[0]
+    m3u8_url = chosen["url"]
+
+    from app.services.m3u8_proxy import handle_m3u8
+    client_ua = request.headers.get("User-Agent", "") or ""
+    result = await handle_m3u8(m3u8_url, client_ua)
+    if not result:
+        return JSONResponse(status_code=502, content={"detail": "m3u8 拉取或解析失败"})
+    return Response(
+        content=result["text"],
+        status_code=200,
+        headers={
+            "Content-Type": "application/vnd.apple.mpegurl",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        },
+    )
+
+
 async def handle_m3u8_route(request: Request):
     """
     P2: /api/playback/m3u8 — 拉取远端 m3u8 并重写为本地代理地址。
@@ -1747,6 +1905,7 @@ async def handle_proxy_ts_route(request: Request):
 
     response = RedirectResponse(url=seg_url, status_code=302)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -1806,6 +1965,48 @@ async def proxy_websocket(websocket: WebSocket, path: str):
 
 
 @proxy_app.api_route("/{path:path}", methods=["GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS", "PATCH"])
+async def _handle_search_command(request: Request, term: str):
+    """N12: 处理播放器搜索框管理命令（参考 embyExternalUrl emby-search.js）。
+
+    支持命令（在 Emby 搜索框输入）：
+      /strmhub help          查看命令
+      /strmhub clearcache    清空反代响应缓存 + 直链缓存
+      /strmhub cachestat      查看缓存条目数
+    执行后返回空 Items 响应（不影响客户端），结果通过日志 + 通知反馈。
+    """
+    parts = term.split()
+    cmd = parts[1].lower() if len(parts) > 1 else "help"
+    msg = ""
+    if cmd == "clearcache":
+        with _response_cache_lock:
+            n1 = len(_response_cache)
+            _response_cache.clear()
+        try:
+            from app.services.client_115 import Client115Service
+            Client115Service.invalidate_download_url_cache()
+        except Exception:
+            pass
+        msg = f"已清空反代响应缓存（{n1} 条）+ 115 直链缓存"
+    elif cmd == "cachestat":
+        with _response_cache_lock:
+            n1 = len(_response_cache)
+        msg = f"反代响应缓存 {n1} 条"
+    else:
+        msg = "命令: /strmhub clearcache | /strmhub cachestat"
+    logger.info(f"[proxy] 搜索命令 '{term}' → {msg}")
+    # 发一条通知反馈（best-effort）
+    try:
+        from app.services.notification_manager import get_notification_manager
+        import asyncio as _a
+        _a.ensure_future(get_notification_manager().send_notification(
+            "system_alert", "STRMhub 搜索命令", msg
+        ))
+    except Exception:
+        pass
+    # 返回空 Items 响应（保持客户端兼容）
+    return JSONResponse(content={"Items": [], "TotalRecordCount": 0}, status_code=200)
+
+
 async def proxy_catch_all(path: str, request: Request):
     """反代入口：按规则分发请求"""
     full_path = "/" + path if not path.startswith("/") else path
@@ -1831,6 +2032,10 @@ async def proxy_catch_all(path: str, request: Request):
     if full_path == "/api/playback/proxy_ts":
         return await handle_proxy_ts_route(request)
 
+    # #27: 115 多清晰度 m3u8（按 pickcode+definition 解析真实 m3u8 再重写代理）
+    if full_path == "/api/playback/115m3u8":
+        return await handle_115m3u8_route(request)
+
     # STRMhub 302 下载接口 → 转发到主应用（/api/115/url/...）
     # 场景：STRM 内容指向反代端口时，客户端经反代访问 302 接口
     if full_path.startswith("/api/115/url/"):
@@ -1843,6 +2048,17 @@ async def proxy_catch_all(path: str, request: Request):
     # PlaybackInfo -> 改写
     if _REG_PLAYBACK_INFO.match(full_path):
         return await handle_playback_info(request)
+
+    # N12: 搜索框管理命令（SearchTerm 以 /strmhub 开头时拦截执行）
+    if _REG_ITEMS.match(full_path):
+        st = request.query_params.get("SearchTerm", "") or request.query_params.get("searchTerm", "")
+        if st.strip().lower().startswith("/strmhub"):
+            try:
+                cfg_sc = _get_config()
+                if cfg_sc.get("search_commands"):
+                    return await _handle_search_command(request, st.strip())
+            except Exception as e:
+                logger.debug(f"[proxy] 搜索命令处理异常: {e}")
 
     # P3: Items 详情 → 用 PlaybackInfo 缓存覆盖 MediaSources（防转码源丢失）
     if _REG_ITEMS.match(full_path):

@@ -39,6 +39,64 @@ class EmbyClient:
             logger.warning(f"请求失败 {path}: {e}")
             return None
 
+    async def _post(self, path: str, params: Optional[dict] = None,
+                    json_body: Optional[dict] = None, timeout: float = 60.0) -> tuple[int, Optional[dict]]:
+        """发起 POST 请求，返回 (status_code, json_or_None)。
+
+        status_code 为 0 表示请求异常（网络错误等）。
+        """
+        params = params or {}
+        params["api_key"] = self.api_key
+        url = f"{self.host}{path}"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.post(url, params=params, json=json_body)
+                body = None
+                try:
+                    body = r.json()
+                except Exception:
+                    body = None
+                return r.status_code, body
+        except Exception as e:
+            logger.warning(f"POST 请求失败 {path}: {e}")
+            return 0, None
+
+    async def get_item_id_by_path(self, path: str) -> str:
+        """通过媒体文件路径查询 Emby 条目 Id（找不到返回空字符串）。"""
+        if not path:
+            return ""
+        data = await self._get("/Items", params={
+            "Recursive": "true",
+            "Fields": "Path",
+            "Path": path,
+            "Limit": 1,
+        })
+        items = (data or {}).get("Items", []) if isinstance(data, dict) else []
+        if items:
+            return str(items[0].get("Id", "") or "")
+        return ""
+
+    async def sync_media_info_native(self, item_id: str = "", path: str = "") -> bool:
+        """O7: 触发 Emby 原生提取媒体信息并写入其数据库。
+
+        调用 Items/SyncMediaInfo（不带请求体 → Emby 打开 STRM 指向的远端文件
+        探测编码/分辨率/流信息并落库），使 STRM 文件在客户端立即显示编码/分辨率徽章，
+        无需等待 Emby 后续的媒体分析。优先用 item_id，其次用 Path。
+        参考 MoviePilot p115strmhelper SyncMediaInfo 思路。
+        """
+        if item_id:
+            params = {"Id": item_id}
+        elif path:
+            params = {"Path": path}
+        else:
+            return False
+        status, _ = await self._post("/Items/SyncMediaInfo", params=params, json_body=None)
+        if status == 200:
+            logger.info(f"[emby] SyncMediaInfo 已触发媒体信息提取: {item_id or path}")
+            return True
+        logger.warning(f"[emby] SyncMediaInfo 触发失败 status={status}: {item_id or path}")
+        return False
+
     async def system_info(self) -> Optional[dict]:
         """服务器信息"""
         return await self._get("/System/Info")

@@ -49,6 +49,18 @@ async def init_scheduler():
     except Exception as e:
         logger.warning(f"注册缓存预热定时任务失败: {e}")
 
+    # N4: 注册回收站定时清理任务
+    try:
+        await register_recycle_clean()
+    except Exception as e:
+        logger.warning(f"注册回收站定时清理任务失败: {e}")
+
+    # feature #10: 注册开放平台 token 定时刷新
+    try:
+        await register_open_token_refresh()
+    except Exception as e:
+        logger.warning(f"注册开放平台 token 刷新任务失败: {e}")
+
 
 async def shutdown_scheduler():
     """关闭调度器"""
@@ -617,6 +629,139 @@ async def _run_daily_checkin():
             logger.info(f"每日 115 签到：账号 {account_id} 成功")
 
     logger.info(f"每日 115 签到完成: 成功 {ok} 个账号, 失败 {fail} 个账号")
+
+
+# ===== N4: 回收站定时清理（空间管理） =====
+
+RECYCLE_CLEAN_JOB_ID = "recycle_bin_clean"
+RECYCLE_SETTING_KEY = "recycle_clean"
+DEFAULT_RECYCLE_CRON = "30 3 * * *"  # 默认每天 03:30
+
+
+async def register_recycle_clean():
+    """注册回收站定时清理任务（cron 从 settings.json 的 recycle_clean 读取）。
+
+    配置：{"enabled": bool, "cron": str}。enabled=false 或 cron 为空时不注册。
+    默认关闭（清空回收站不可恢复，需用户显式开启）。
+    """
+    global _scheduler
+    if _scheduler is None:
+        return
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_setting
+    logger = get_logger()
+    try:
+        _scheduler.remove_job(RECYCLE_CLEAN_JOB_ID)
+    except Exception:
+        pass
+    try:
+        cfg = read_setting(RECYCLE_SETTING_KEY) or {}
+        enabled = cfg.get("enabled", False)
+        cron_str = str(cfg.get("cron") or DEFAULT_RECYCLE_CRON).strip()
+        if not enabled or not cron_str:
+            logger.info("回收站定时清理未启用，跳过注册")
+            return
+        trigger = CronTrigger.from_crontab(cron_str)
+        _scheduler.add_job(
+            _run_recycle_clean,
+            trigger=trigger,
+            id=RECYCLE_CLEAN_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(f"已注册回收站定时清理 (id={RECYCLE_CLEAN_JOB_ID}, cron='{cron_str}')")
+    except Exception as e:
+        logger.warning(f"注册回收站定时清理失败: {e}")
+
+
+async def _run_open_token_refresh():
+    """开放平台 OAuth token 定时刷新：遍历 OPENAUTH 账号，刷新 access_token 并写回。
+
+    access_token 有效期通常较短（数小时），故每小时刷新一次，防止过期导致播放/同步失败。
+    """
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_accounts, upsert_account
+    from app.services.client_115 import Client115Service
+
+    logger = get_logger()
+    accounts = read_accounts()
+    refreshed = 0
+    for acc in accounts:
+        cookies = acc.get("cookies", "") or ""
+        if not cookies.startswith("OPENAUTH:"):
+            continue
+        try:
+            new_cookies = await asyncio.to_thread(Client115Service.refresh_open_token, cookies)
+            if new_cookies:
+                acc["cookies"] = new_cookies
+                upsert_account(acc)
+                refreshed += 1
+        except Exception as e:
+            logger.warning(f"[open-token] 账号 {acc.get('id')} 刷新失败: {e}")
+    if refreshed:
+        logger.info(f"[open-token] 开放平台 token 刷新完成: {refreshed} 个账号")
+
+
+OPEN_TOKEN_REFRESH_JOB_ID = "open_token_refresh"
+
+
+async def register_open_token_refresh():
+    """注册开放平台 token 定时刷新（每小时），仅当存在 OPENAUTH 账号时。"""
+    global _scheduler
+    if _scheduler is None:
+        return
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_accounts
+    logger = get_logger()
+    try:
+        _scheduler.remove_job(OPEN_TOKEN_REFRESH_JOB_ID)
+    except Exception:
+        pass
+    try:
+        has_open = any((a.get("cookies", "") or "").startswith("OPENAUTH:") for a in read_accounts())
+        if not has_open:
+            return
+        _scheduler.add_job(
+            _run_open_token_refresh,
+            trigger=CronTrigger.from_crontab("0 * * * *"),  # 每小时整点
+            id=OPEN_TOKEN_REFRESH_JOB_ID,
+            replace_existing=True,
+        )
+        logger.info(f"已注册开放平台 token 定时刷新 (id={OPEN_TOKEN_REFRESH_JOB_ID})")
+    except Exception as e:
+        logger.warning(f"注册开放平台 token 刷新失败: {e}")
+
+
+async def _run_recycle_clean():
+    """回收站清理执行体：遍历有效账号逐个清空回收站。"""
+    from app.core.logbuffer import get_logger
+    from app.core.json_storage import read_accounts
+    from app.services.client_115 import Client115Service
+
+    logger = get_logger()
+    accounts = read_accounts()
+    valid = [acc for acc in accounts if acc.get("status") == 1]
+    if not valid:
+        logger.info("回收站清理：无有效账号，跳过")
+        return
+    ok = 0
+    for acc in valid:
+        account_id = acc.get("id", 0)
+        cookies = acc.get("cookies", "")
+        if not cookies:
+            continue
+        try:
+            # 先读占用信息记录日志，再清空
+            info = await asyncio.to_thread(Client115Service.recycle_bin_info, cookies)
+            result = await asyncio.to_thread(Client115Service.clean_recycle_bin, cookies)
+            if isinstance(result, dict) and result.get("error"):
+                logger.warning(f"回收站清理：账号 {account_id} 失败: {result['error']}")
+                continue
+            freed = info.get("size_str", "?") if isinstance(info, dict) else "?"
+            logger.info(f"回收站清理：账号 {account_id} 已清空（释放约 {freed}）")
+            ok += 1
+        except Exception as e:
+            logger.warning(f"回收站清理：账号 {account_id} 异常: {e}")
+    logger.info(f"回收站清理完成: 成功 {ok} 个账号")
 
 
 # ===== G7: 自动化规则 cron 触发器 =====

@@ -185,6 +185,13 @@ class MCPServer:
             },
         }
 
+    def get_tools_meta(self) -> list[dict]:
+        """返回已注册工具的元信息（name + description），供前端展示。"""
+        return [
+            {"name": name, "description": tool.get("description", "")}
+            for name, tool in self._tools.items()
+        ]
+
     # ===== JSON-RPC 消息处理 =====
 
     async def handle_message(self, message: dict) -> dict:

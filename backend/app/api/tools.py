@@ -1302,6 +1302,88 @@ async def run_checkin_now():
         return ApiResponse(code=500, message=f"签到执行异常: {str(e)}")
 
 
+# ============ N4：回收站清理（空间管理） ============
+
+class RecycleCleanSettingsRequest(BaseModel):
+    """回收站定时清理配置"""
+    enabled: bool = False
+    cron: str = "30 3 * * *"
+
+
+@router.get("/recycle/info", response_model=ApiResponse)
+async def recycle_info(account_id: int = 0):
+    """获取回收站占用信息（文件数/占用空间）。"""
+    account = _resolve_strmscrape_account(account_id)
+    if not account:
+        return ApiResponse(code=400, message="未找到有效 115 账号")
+    import asyncio
+    from app.services.client_115 import _executor
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        _executor, lambda: Client115Service.recycle_bin_info(account.get("cookies", ""))
+    )
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"获取失败: {result['error']}")
+    return ApiResponse(data=result)
+
+
+@router.post("/recycle/clean", response_model=ApiResponse)
+async def recycle_clean(account_id: int = 0):
+    """立即清空回收站（不可恢复）。"""
+    account = _resolve_strmscrape_account(account_id)
+    if not account:
+        return ApiResponse(code=400, message="未找到有效 115 账号")
+    import asyncio
+    from app.services.client_115 import _executor
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        _executor, lambda: Client115Service.clean_recycle_bin(account.get("cookies", ""))
+    )
+    if isinstance(result, dict) and result.get("error"):
+        return ApiResponse(code=500, message=f"清空失败: {result['error']}")
+    return ApiResponse(message="回收站已清空", data=result)
+
+
+@router.get("/recycle/settings", response_model=ApiResponse)
+async def get_recycle_settings():
+    """获取回收站定时清理配置。"""
+    from app.core.scheduler import RECYCLE_SETTING_KEY, DEFAULT_RECYCLE_CRON, RECYCLE_CLEAN_JOB_ID, get_scheduler
+    cfg = read_setting(RECYCLE_SETTING_KEY) or {}
+    enabled = bool(cfg.get("enabled", False))
+    cron = str(cfg.get("cron") or DEFAULT_RECYCLE_CRON).strip()
+    next_run = ""
+    try:
+        sched = get_scheduler()
+        if sched is not None:
+            job = sched.get_job(RECYCLE_CLEAN_JOB_ID)
+            if job and job.next_run_time:
+                next_run = job.next_run_time.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+    return ApiResponse(data={"enabled": enabled, "cron": cron, "next_run": next_run})
+
+
+@router.post("/recycle/settings", response_model=ApiResponse)
+async def save_recycle_settings(payload: RecycleCleanSettingsRequest):
+    """保存回收站定时清理配置并重注册定时任务。"""
+    from app.core.json_storage import save_setting
+    from app.core.scheduler import RECYCLE_SETTING_KEY, register_recycle_clean
+    import asyncio
+
+    cron = (payload.cron or "").strip()
+    try:
+        save_setting(RECYCLE_SETTING_KEY, {"enabled": payload.enabled, "cron": cron})
+        try:
+            asyncio.create_task(register_recycle_clean())
+        except RuntimeError:
+            pass
+        if payload.enabled and cron:
+            return ApiResponse(message=f"回收站定时清理已启用，cron={cron}")
+        return ApiResponse(message="回收站定时清理已关闭")
+    except Exception as e:
+        return ApiResponse(code=500, message=f"保存失败: {str(e)}")
+
+
 # ============ 工具11：分享审核队列（#27） ============
 
 class ShareReviewAddRequest(BaseModel):
@@ -1443,17 +1525,49 @@ async def list_supported_players():
 
 # ============ 工具13：多网盘驱动注册（#31） ============
 
+def _ensure_drivers_registered():
+    """确保所有驱动模块已导入并注册（115 随 driver_base 注册，123/alist 需显式导入）。"""
+    from app.services import driver_base  # noqa: F401  触发 115 注册
+    try:
+        from app.services import driver_123  # noqa: F401  触发 123 注册
+    except Exception:
+        pass
+    try:
+        from app.services import driver_alist  # noqa: F401  触发 alist 注册
+    except Exception:
+        pass
+
+
 @router.get("/drivers", response_model=ApiResponse)
 async def list_drivers():
     """列出所有已注册的网盘驱动"""
+    _ensure_drivers_registered()
     from app.services.driver_base import get_driver_registry
     registry = get_driver_registry()
-    return ApiResponse(data=registry.get_driver_info())
+    info = registry.get_driver_info()
+    # 补充 123pan 可用性（依赖 + 凭证）
+    for d in info:
+        if d.get("name") == "123":
+            try:
+                from app.services.driver_123 import get_driver_123
+                d["available"] = get_driver_123().is_available()
+            except Exception:
+                d["available"] = False
+        elif d.get("name") == "alist":
+            try:
+                from app.services.driver_alist import get_driver_alist
+                d["available"] = get_driver_alist().is_available()
+            except Exception:
+                d["available"] = False
+        else:
+            d["available"] = True
+    return ApiResponse(data=info)
 
 
 @router.get("/drivers/{name}", response_model=ApiResponse)
 async def get_driver_detail(name: str):
     """获取指定驱动的信息"""
+    _ensure_drivers_registered()
     from app.services.driver_base import get_driver_registry
     registry = get_driver_registry()
     driver = registry.get(name)

@@ -678,6 +678,10 @@ class NotificationManager:
         self._rules: list[dict[str, Any]] = []
         self._handlers: dict[int, BaseChannelHandler] = {}
         self._loaded: bool = False
+        # O11 去抖动汇总通知：按 (event_type, group_key) 累积计数，
+        # 静默窗口内不断有新事件则重置计时器，平息后只发一条汇总通知。
+        self._debounce_buckets: dict[str, dict[str, Any]] = {}
+        self._debounce_lock: asyncio.Lock = asyncio.Lock()
         self.load_channels()
 
     # ===== 加载 =====
@@ -1197,6 +1201,75 @@ class NotificationManager:
             "total": len(results),
             "results": results,
         }
+
+    async def send_notification_debounced(
+        self,
+        event_type: str,
+        title: str,
+        count: int = 1,
+        counters: Optional[dict[str, int]] = None,
+        delay: float = 60.0,
+        group_key: str = "",
+    ) -> None:
+        """O11: 去抖动汇总通知。
+
+        批量场景（如生活事件驱动的增量同步、批量刮削）下逐条通知会刷屏。
+        此方法累积计数，静默窗口 delay 秒内每来一次新事件就重置计时器，
+        活动平息后只发一条汇总通知，例如"生成 N 个 STRM，下载 M 个文件"。
+
+        Args:
+            event_type: 事件类型（sync_complete / scrape_complete 等）。
+            title: 通知标题。
+            count: 本次事件的主计数增量（当 counters 为空时使用）。
+            counters: 命名计数字典（如 {"strm": 3, "media": 1}），会逐项累加。
+            delay: 静默窗口秒数，窗口内无新事件才真正发送。
+            group_key: 分组键，区分不同任务/目录的累积桶（默认按 event_type 分组）。
+
+        触发方可在工作线程中通过 event loop 的 run_coroutine_threadsafe 调用，
+        或在异步上下文中直接 await（仅登记，不阻塞）。
+        """
+        bucket_key = f"{event_type}|{group_key}"
+        async with self._debounce_lock:
+            bucket = self._debounce_buckets.get(bucket_key)
+            if bucket is None:
+                bucket = {"title": title, "count": 0, "counters": {}, "task": None}
+                self._debounce_buckets[bucket_key] = bucket
+            # 累积计数
+            bucket["title"] = title or bucket["title"]
+            if counters:
+                for k, v in counters.items():
+                    bucket["counters"][k] = bucket["counters"].get(k, 0) + int(v or 0)
+            else:
+                bucket["count"] += int(count or 0)
+            # 重置计时器：取消旧的延时任务，重新排一个
+            old_task = bucket.get("task")
+            if old_task and not old_task.done():
+                old_task.cancel()
+            bucket["task"] = asyncio.ensure_future(
+                self._debounce_flush(bucket_key, event_type, delay)
+            )
+
+    async def _debounce_flush(self, bucket_key: str, event_type: str, delay: float) -> None:
+        """等待静默窗口，窗口内无新事件则发送累积的汇总通知。"""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return  # 有新事件重置了计时器，本次放弃
+        async with self._debounce_lock:
+            bucket = self._debounce_buckets.pop(bucket_key, None)
+        if not bucket:
+            return
+        # 组装汇总内容
+        counters = bucket.get("counters") or {}
+        if counters:
+            parts = [f"{k}: {v}" for k, v in counters.items() if v]
+            content = "，".join(parts) if parts else "无变更"
+        else:
+            content = f"共处理 {bucket.get('count', 0)} 项"
+        try:
+            await self.send_notification(event_type, bucket.get("title", "汇总通知"), content)
+        except Exception as e:
+            logger.warning(f"[O11] 去抖动汇总通知发送失败: {e}")
 
 
 # ===== 全局单例 =====

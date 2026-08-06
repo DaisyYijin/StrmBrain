@@ -138,11 +138,7 @@ def get_driver_registry() -> DriverRegistry:
 
 
 # ===== 115 驱动适配器 =====
-# TODO: 实际 115 驱动实现需要适配现有 Client115Service，
-#       将其同步方法包装为 async 方法（通过 run_in_executor）。
-#       当前仅注册占位信息，供前端展示可用驱动列表。
-#       完整实现时，创建 Driver115(BaseDriver) 类，
-#       在各方法中调用 Client115Service 对应的 classmethod。
+# 将 Client115Service 的同步方法包装为 async 接口（通过 run_in_executor 线程池执行）。
 
 class Driver115(BaseDriver):
     """115 网盘驱动适配器

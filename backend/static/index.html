@@ -2088,6 +2088,44 @@
             <div class="init-text">{{ initLoadingText }}</div>
         </div>
 
+        <!-- #82 首启配置向导 -->
+        <div v-if="setupWizard.show" class="modal-mask" @click.self="dismissWizard" style="z-index:9998;">
+            <div class="modal-box" style="max-width:520px;">
+                <div class="modal-header">
+                    <span class="modal-title">欢迎使用 STRMhub · 快速配置</span>
+                    <button class="modal-close" @click="dismissWizard">×</button>
+                </div>
+                <div style="font-size:13px; color:#909399; margin-bottom:14px; line-height:1.6;">
+                    按下面步骤完成初始配置即可开始使用。点击任意步骤直接跳转到对应设置页。
+                </div>
+                <div>
+                    <div v-for="(s, i) in setupWizard.steps" :key="s.key"
+                         @click="wizardGoto(s.key)"
+                         style="display:flex; align-items:center; gap:12px; padding:12px 14px; border:1px solid #ebeef5; border-radius:8px; margin-bottom:10px; cursor:pointer; transition:all .15s;"
+                         :style="{ background: s.done ? 'rgba(103,194,58,0.06)' : '#fff' }">
+                        <span style="width:26px; height:26px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px;"
+                              :style="{ background: s.done ? '#67c23a' : 'rgba(64,158,255,0.12)', color: s.done ? '#fff' : '#409eff' }">
+                            {{ s.done ? '✓' : (i + 1) }}
+                        </span>
+                        <div style="flex:1;">
+                            <div style="font-size:14px; color:#303133; font-weight:500;">
+                                {{ s.name }}
+                                <span v-if="!s.required" style="font-size:11px; color:#909399; margin-left:4px;">可选</span>
+                            </div>
+                            <div style="font-size:12px; margin-top:2px;" :style="{ color: s.done ? '#67c23a' : '#e6a23c' }">
+                                {{ s.done ? '已完成' : '待配置' }}
+                            </div>
+                        </div>
+                        <svg viewBox="0 0 24 24" style="width:18px; height:18px; color:#c0c4cc;"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="currentColor"/></svg>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                    <span style="font-size:12px; color:#909399;">{{ setupWizard.completed ? '必填项已完成 🎉' : '完成必填项后即可使用' }}</span>
+                    <button class="btn btn-default btn-small" @click="dismissWizard">不再提示</button>
+                </div>
+            </div>
+        </div>
+
         <!-- 登录遮罩 -->
         <div v-if="authRequired && !authToken" class="auth-overlay">
             <div class="auth-box">
@@ -2683,22 +2721,27 @@
 
                     <!-- 账号登录 -->
                     <div v-show="configTab === 'login'">
-                    <div class="login-btn-area">
-                        <button class="btn" :class="hasValidAccount ? 'btn-default btn-small' : 'btn-primary'" @click="openLoginModal">
+                    <div class="login-btn-area" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                        <button class="btn" :class="hasValidAccount ? 'btn-default btn-small' : 'btn-primary'" @click="openLoginModal('cookie')">
                             {{ hasValidAccount ? '重新扫码' : '扫码登录 115' }}
                         </button>
+                        <button class="btn btn-default btn-small" @click="openLoginModal('open')">
+                            开放平台登录
+                        </button>
+                        <span class="help-tip">?<span class="tip-text">开放平台登录使用 115 OpenAPI（access_token + refresh_token），需在 open.115.com 申请 App ID。相比 Cookie 更稳定、token 自动续期，适合长期同步。</span></span>
                     </div>
 
                     <!-- 扫码登录弹窗 -->
                     <div v-if="qr.show" class="modal-mask" @click.self="closeLoginModal">
                         <div class="modal-box">
                             <div class="modal-header">
-                                <span class="modal-title">扫码登录 115</span>
+                                <span class="modal-title">{{ qr.mode === 'open' ? '开放平台登录 115' : '扫码登录 115' }}</span>
                                 <button class="modal-close" @click="closeLoginModal">×</button>
                             </div>
                             <div class="qrcode-box">
                                 <div v-if="!qr.image">
-                                    <div class="form-group" style="margin-bottom: 16px;">
+                                    <!-- Cookie 模式：选择设备类型 -->
+                                    <div class="form-group" style="margin-bottom: 16px;" v-if="qr.mode !== 'open'">
                                         <label>cookie 对应设备类型</label>
                                         <div class="v-select" :class="{ open: appSelectOpen }">
                                             <div class="v-select-trigger" @click.stop="appSelectOpen = !appSelectOpen">
@@ -2715,13 +2758,18 @@
                                             </div>
                                         </div>
                                     </div>
+                                    <!-- 开放平台模式：输入 App ID -->
+                                    <div class="form-group" style="margin-bottom: 16px;" v-else>
+                                        <label>开放平台 App ID<span class="help-tip">?<span class="tip-text">在 open.115.com 申请的应用 ID（纯数字）。同一 App ID 最多同时 3 个登录。</span></span></label>
+                                        <input type="text" v-model="qr.appId" placeholder="如 100195125" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                    </div>
                                     <button class="btn btn-primary" @click="getQRCode" :disabled="qr.loading">
                                         {{ qr.loading ? '加载中...' : '获取二维码' }}
                                     </button>
                                 </div>
                                 <div v-else>
                                     <img :src="qr.image" alt="扫码登录">
-                                    <div class="qrcode-tip">请使用 115 App 扫描二维码</div>
+                                    <div class="qrcode-tip">{{ qr.mode === 'open' ? '请使用 115 App 扫码并在手机上确认授权' : '请使用 115 App 扫描二维码' }}</div>
                                     <div class="qrcode-status" :class="qrStatusClass">{{ qr.message }}</div>
                                     <div style="margin-top: 12px;" v-if="qr.status < 0">
                                         <button class="btn btn-primary" @click="getQRCode">刷新二维码</button>
@@ -3130,12 +3178,52 @@
                                     <span style="font-size:13px;" :style="{ color: embyNotifyConfig.notify_on_error ? '#67c23a' : '#909399' }">{{ embyNotifyConfig.notify_on_error ? '已启用' : '未启用' }}</span>
                                 </div>
                             </div>
+
+                            <!-- O7: STRM 媒体信息注入 -->
+                            <div class="form-group">
+                                <label>STRM 媒体信息注入<span class="help-tip">?<span class="tip-text">新入库 STRM 触发 Emby 原生提取媒体信息（SyncMediaInfo），使编码/分辨率徽章立即显示，无需等待 Emby 后续分析。需配置 Emby Webhook。注意：会让 Emby 打开网盘文件探测，可能增加网盘请求，谨慎开启。</span></span></label>
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div class="tool-toggle" :class="{ 'toggle-on': embyNotifyConfig.sync_media_info }" @click="embyNotifyConfig.sync_media_info = !embyNotifyConfig.sync_media_info">
+                                        <div class="toggle-knob"></div>
+                                    </div>
+                                    <span style="font-size:13px;" :style="{ color: embyNotifyConfig.sync_media_info ? '#67c23a' : '#909399' }">{{ embyNotifyConfig.sync_media_info ? '已启用' : '未启用' }}</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <!-- /EMBY 入库通知 -->
 
                     <!-- ===== 高级功能（P1）===== -->
                     <div v-show="configTab === 'advanced'">
+                        <!-- N8/N12: 反代特性开关 -->
+                        <div class="card">
+                            <div class="card-title">反代增强特性<span class="help-tip">?<span class="tip-text">SRT→ASS：将纯文本 SRT 字幕转为带样式的 ASS，支持 ASS 的播放器排版更好。搜索框命令：在 Emby 搜索框输入 /strmhub clearcache 等指令执行管理操作（清缓存等）。</span></span></div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                                <label style="margin:0;">字幕 SRT→ASS 转换</label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': advFeatures.subtitleSrt2ass }" @click="advFeatures.subtitleSrt2ass = !advFeatures.subtitleSrt2ass; saveProxyFeatures()">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                            </div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                                <label style="margin:0;">播放器搜索框管理命令<span style="font-size:12px; color:#909399; margin-left:6px;">（在 Emby 搜索框输入 /strmhub clearcache）</span></label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': advFeatures.searchCommands }" @click="advFeatures.searchCommands = !advFeatures.searchCommands; saveProxyFeatures()">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                            </div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                                <label style="margin:0;">115 转码虚拟源<span class="help-tip">?<span class="tip-text">为 STRM 注入 115 云转码 HLS 播放源，弱网/不兼容原格式时可切换到转码源播放。</span></span></label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': advFeatures.enableHlsVsource }" @click="advFeatures.enableHlsVsource = !advFeatures.enableHlsVsource; saveProxyFeatures()">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                            </div>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0;" v-if="advFeatures.enableHlsVsource">
+                                <label style="margin:0;">多清晰度可选<span style="font-size:12px; color:#909399; margin-left:6px;">（关=仅原画单源）</span><span class="help-tip">?<span class="tip-text">开启后按 115 实际可用清晰度（4K/1080P/超清…）注入多个可选源，可在播放器手动选码率。会在打开详情时多一次 115 请求。</span></span></label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': advFeatures.hlsMultiVersion }" @click="advFeatures.hlsMultiVersion = !advFeatures.hlsMultiVersion; saveProxyFeatures()">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- 路由规则 -->
                         <div class="card">
                             <div class="card-title">播放路由规则<span class="help-tip">?<span class="tip-text">声明式路由规则引擎：按文件路径/客户端UA/IP/文件名匹配，控制每个请求的处理模式。proxy=强制Range代理，redirect=强制302跳转，block=禁止播放。无匹配规则时使用默认策略。</span></span></div>
@@ -4916,6 +5004,156 @@
                             </div>
                         </div>
 
+                        <!-- 工具18：MCP Server（AI 助手控制） -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.mcp.enabled, 'tool-disabled': !toolsState.mcp.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.mcp.enabled"></span>
+                                    MCP Server
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.mcp.enabled, 'dot-off': !toolsState.mcp.enabled }"></span>
+                                    <span :style="{ color: toolsState.mcp.enabled ? '#67c23a' : '#909399' }">{{ toolsState.mcp.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.mcp.enabled }" @click="toggleTool('mcp')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                通过 MCP 协议让 AI 助手（Claude Desktop 等）直接操控 STRMhub：同步、整理、签到、转存等。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('mcp')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    连接信息
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('mcp')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具19：115 文件搜索 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.file_search.enabled, 'tool-disabled': !toolsState.file_search.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.file_search.enabled"></span>
+                                    115 文件搜索
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.file_search.enabled, 'dot-off': !toolsState.file_search.enabled }"></span>
+                                    <span :style="{ color: toolsState.file_search.enabled ? '#67c23a' : '#909399' }">{{ toolsState.file_search.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.file_search.enabled }" @click="toggleTool('file_search')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                关键词全盘搜索 115 网盘文件和目录，大网盘不再靠手动翻目录找文件。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('file_search')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" fill="currentColor"/></svg>
+                                    搜索
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('file_search')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具20：STRM 刮削（NFO/海报墙） -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.strmscrape.enabled, 'tool-disabled': !toolsState.strmscrape.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.strmscrape.enabled"></span>
+                                    STRM 刮削
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.strmscrape.enabled, 'dot-off': !toolsState.strmscrape.enabled }"></span>
+                                    <span :style="{ color: toolsState.strmscrape.enabled ? '#67c23a' : '#909399' }">{{ toolsState.strmscrape.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.strmscrape.enabled }" @click="toggleTool('strmscrape')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                扫描网盘目录，TMDB 刮削生成 NFO + 海报，构建本地海报墙索引，形成刮削闭环。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('strmscrape')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z" fill="currentColor"/></svg>
+                                    刮削面板
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('strmscrape')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具21：WebDAV 只读访问 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.webdav.enabled, 'tool-disabled': !toolsState.webdav.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.webdav.enabled"></span>
+                                    WebDAV 访问
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.webdav.enabled, 'dot-off': !toolsState.webdav.enabled }"></span>
+                                    <span :style="{ color: toolsState.webdav.enabled ? '#67c23a' : '#909399' }">{{ toolsState.webdav.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.webdav.enabled }" @click="toggleTool('webdav')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                将 STRM 输出目录以只读 WebDAV 暴露，Kodi/nPlayer/Infuse 等可直接挂载浏览（需 Basic 认证）。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('webdav')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    配置
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('webdav')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具22：回收站清理 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.recycle.enabled, 'tool-disabled': !toolsState.recycle.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.recycle.enabled"></span>
+                                    回收站清理
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.recycle.enabled, 'dot-off': !toolsState.recycle.enabled }"></span>
+                                    <span :style="{ color: toolsState.recycle.enabled ? '#67c23a' : '#909399' }">{{ toolsState.recycle.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.recycle.enabled }" @click="toggleTool('recycle')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                定时清空 115 回收站释放空间（回收站会静默占用配额）。支持查看占用、立即清空、Cron 定时。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('recycle')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    清理设置
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('recycle')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -5734,8 +5972,254 @@
                             </div>
                         </div>
 
+                        <!-- N2: 123pan 凭证配置 -->
+                        <div style="margin-top:16px; padding-top:14px; border-top:1px solid #ebeef5;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                <span style="font-size:14px; font-weight:600; color:#303133;">123pan 驱动凭证</span>
+                                <span style="font-size:12px; padding:2px 8px; border-radius:10px;"
+                                      :style="{ background: driversState.p123Available ? 'rgba(103,194,58,0.12)' : 'rgba(144,147,153,0.12)', color: driversState.p123Available ? '#67c23a' : '#909399' }">
+                                    {{ driversState.p123Available ? '已就绪' : (driversState.p123DepInstalled ? '未配置' : '未安装依赖') }}
+                                </span>
+                            </div>
+                            <div v-if="!driversState.p123DepInstalled" style="font-size:12px; color:#e6a23c; margin-bottom:8px;">
+                                需安装依赖：<code>pip install p123client</code>（未安装时 123 驱动不可用）
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <input type="text" v-model="driversState.p123Passport" placeholder="123pan 手机号/邮箱" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <input type="password" v-model="driversState.p123Password" :placeholder="driversState.p123PasswordSet ? '密码已设置（留空不修改）' : '123pan 密码'" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                            </div>
+                            <button class="btn btn-primary btn-small" @click="saveDriver123" :disabled="driversState.p123Saving">{{ driversState.p123Saving ? '保存中...' : '保存 123pan 凭证' }}</button>
+                        </div>
+
+                        <!-- #5: Alist/OpenList 网关配置 -->
+                        <div style="margin-top:16px; padding-top:14px; border-top:1px solid #ebeef5;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                <span style="font-size:14px; font-weight:600; color:#303133;">Alist / OpenList 网关</span>
+                                <span style="font-size:12px; padding:2px 8px; border-radius:10px;"
+                                      :style="{ background: driversState.alistAvailable ? 'rgba(103,194,58,0.12)' : 'rgba(144,147,153,0.12)', color: driversState.alistAvailable ? '#67c23a' : '#909399' }">
+                                    {{ driversState.alistAvailable ? '已配置' : '未配置' }}
+                                </span>
+                            </div>
+                            <div style="font-size:12px; color:#909399; margin-bottom:8px; line-height:1.6;">
+                                一个 Alist 背后可挂载 115/阿里/百度/OneDrive 等多种存储，间接支持更多云盘。
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <input type="text" v-model="driversState.alistBaseUrl" placeholder="Alist 地址，如 http://192.168.1.10:5244" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px; display:flex; gap:8px;">
+                                <input type="text" v-model="driversState.alistUsername" placeholder="用户名（可选）" style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                <input type="password" v-model="driversState.alistPassword" :placeholder="driversState.alistPasswordSet ? '密码已设置' : '密码（可选）'" style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom:8px;">
+                                <input type="password" v-model="driversState.alistToken" :placeholder="driversState.alistTokenSet ? 'Token 已设置（留空不改）' : 'Token（可选，有则免登录）'" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-small" @click="saveDriverAlist" :disabled="driversState.alistSaving">{{ driversState.alistSaving ? '保存中...' : '保存' }}</button>
+                                <button class="btn btn-default btn-small" @click="testDriverAlist" :disabled="driversState.alistTesting">{{ driversState.alistTesting ? '测试中...' : '测试连接' }}</button>
+                            </div>
+                        </div>
+
                         <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
-                            说明：驱动列表由后端插件机制注册，当前以 115 驱动为主，未来可扩展其他网盘。
+                            说明：驱动列表由后端插件机制注册。115 为主力驱动；123pan / Alist 为多云扩展。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MCP Server 配置弹窗 -->
+                <div v-if="toolConfig.show === 'mcp'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:560px;">
+                        <div class="modal-header">
+                            <span class="modal-title">MCP Server（AI 助手控制）</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div v-if="mcpTool.loading" style="padding:20px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                                <label style="margin:0;">启用 MCP Server</label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': mcpTool.enabled }" @click="toggleMcpEnabled">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                            </div>
+                            <div style="font-size:12px; color:#909399; margin-bottom:12px; line-height:1.6;">
+                                启用后 AI 助手可通过 SSE 端点连接并调用工具。未启用时 SSE/消息端点返回 403。
+                            </div>
+
+                            <div class="form-group">
+                                <label>SSE 连接地址</label>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="text" :value="mcpTool.sseUrl" readonly style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-family:monospace; font-size:12px; background:#f5f7fa;">
+                                    <button class="btn btn-default btn-small" @click="copyMcpUrl">复制</button>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>可用工具（{{ mcpTool.toolCount }} 个）</label>
+                                <div style="max-height:240px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                    <div v-for="t in mcpTool.tools" :key="t.name" style="padding:8px 12px; border-bottom:1px solid #f0f2f5;">
+                                        <div style="font-size:13px; font-weight:600; color:#303133; font-family:monospace;">{{ t.name }}</div>
+                                        <div style="font-size:12px; color:#909399; margin-top:2px;">{{ t.description }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 115 文件搜索弹窗 -->
+                <div v-if="toolConfig.show === 'file_search'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:640px;">
+                        <div class="modal-header">
+                            <span class="modal-title">115 文件搜索</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div class="form-group">
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="text" v-model="fileSearch.keyword" @keyup.enter="runFileSearch" placeholder="输入文件/目录关键词，回车搜索" style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                <button class="btn btn-primary btn-small" @click="runFileSearch" :disabled="fileSearch.searching">{{ fileSearch.searching ? '搜索中...' : '搜索' }}</button>
+                            </div>
+                        </div>
+
+                        <div v-if="fileSearch.searched" style="font-size:12px; color:#909399; margin-bottom:6px;">共匹配 {{ fileSearch.count }} 项（最多显示 40 条）</div>
+                        <div v-if="fileSearch.items.length" style="max-height:52vh; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                            <div v-for="(f, idx) in fileSearch.items" :key="idx" style="display:flex; align-items:center; padding:8px 12px; border-bottom:1px solid #f0f2f5;">
+                                <span class="file-icon" style="margin-right:8px; flex-shrink:0;" :style="{ color: f.isDir ? '#e6a23c' : '#909399' }">
+                                    <svg viewBox="0 0 24 24" style="width:16px; height:16px;"><path v-if="f.isDir" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" fill="currentColor"/><path v-else d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" fill="currentColor"/></svg>
+                                </span>
+                                <span style="flex:1; font-size:13px; color:#303133; word-break:break-all;">{{ f.name }}</span>
+                                <span v-if="!f.isDir" style="font-size:12px; color:#909399; flex-shrink:0; margin-left:8px;">{{ formatSize(f.size) }}</span>
+                            </div>
+                        </div>
+                        <div v-else-if="fileSearch.searched && !fileSearch.searching" style="padding:20px; text-align:center; color:#909399; font-size:13px;">未找到匹配的文件</div>
+                    </div>
+                </div>
+
+                <!-- STRM 刮削弹窗 -->
+                <div v-if="toolConfig.show === 'strmscrape'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:720px;">
+                        <div class="modal-header">
+                            <span class="modal-title">STRM 刮削（NFO / 海报墙）</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div class="form-group">
+                            <label>源目录（115 网盘）</label>
+                            <div class="dir-picker" @click="openStrmScrapeDirPicker">
+                                <svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                                <span>{{ strmScrape.sourcePath || '点击选择要刮削的网盘目录' }}</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>本地媒体目录（写 NFO/海报 + 建索引，留空取同步配置）</label>
+                            <input type="text" v-model="strmScrape.localDir" placeholder="/media 例如 STRM 输出目录" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                        </div>
+
+                        <div style="display:flex; gap:8px; margin:10px 0;">
+                            <button class="btn btn-default btn-small" @click="strmScrapeScan" :disabled="strmScrape.scanning">{{ strmScrape.scanning ? '扫描中...' : '1. 扫描分组' }}</button>
+                            <button class="btn btn-primary btn-small" @click="strmScrapeRun" :disabled="strmScrape.scraping || strmScrape.groups.length === 0">{{ strmScrape.scraping ? '刮削中...' : '2. 刮削所选' }}</button>
+                            <button class="btn btn-default btn-small" @click="strmScrapeBuildIndex" :disabled="strmScrape.indexing">{{ strmScrape.indexing ? '索引中...' : '3. 构建海报墙索引' }}</button>
+                        </div>
+
+                        <div v-if="strmScrape.groups.length" style="margin-top:8px;">
+                            <label style="font-size:13px; color:#606266; display:block; margin-bottom:6px;">扫描到 {{ strmScrape.groups.length }} 个分组</label>
+                            <div style="max-height:200px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                <div v-for="(g, idx) in strmScrape.groups" :key="idx" style="display:flex; align-items:center; padding:7px 12px; border-bottom:1px solid #f0f2f5;">
+                                    <input type="checkbox" v-model="g.checked" style="margin-right:8px;">
+                                    <span style="flex:1; font-size:13px; color:#303133; word-break:break-all;">{{ g.group }} <span style="color:#909399;">({{ g.count }} 个文件)</span></span>
+                                    <span style="font-size:12px; flex-shrink:0; margin-left:8px;" :style="{ color: (g.status || '').startsWith('✓') ? '#67c23a' : ((g.status || '').startsWith('✗') ? '#f56c6c' : '#909399') }">{{ g.status }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="strmScrape.posterWall.length" style="margin-top:14px;">
+                            <label style="font-size:13px; color:#606266; display:block; margin-bottom:6px;">海报墙索引（{{ strmScrape.posterWall.length }} 条）</label>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px; max-height:260px; overflow-y:auto;">
+                                <div v-for="(it, idx) in strmScrape.posterWall" :key="idx" style="text-align:center;">
+                                    <img v-if="it.posterUrl" :src="it.posterUrl" loading="lazy" style="width:100%; aspect-ratio:2/3; object-fit:cover; border-radius:4px; background:#f0f2f5;">
+                                    <div v-else style="width:100%; aspect-ratio:2/3; border-radius:4px; background:#f0f2f5; display:flex; align-items:center; justify-content:center; color:#c0c4cc; font-size:11px;">无图</div>
+                                    <div style="font-size:11px; color:#606266; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ it.title }}{{ it.year ? ' (' + it.year + ')' : '' }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WebDAV 只读访问配置弹窗 -->
+                <div v-if="toolConfig.show === 'webdav'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:560px;">
+                        <div class="modal-header">
+                            <span class="modal-title">WebDAV 只读访问</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div v-if="webdavTool.loading" style="padding:20px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else>
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                                <label style="margin:0;">启用 WebDAV</label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': webdavTool.enabled }" @click="toggleWebdavEnabled">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                            </div>
+                            <div style="font-size:12px; color:#909399; margin-bottom:12px; line-height:1.6;">
+                                只读挂载 STRM 输出目录，使用本地管理账号做 HTTP Basic 认证。未启用时 /dav 返回 404。
+                            </div>
+
+                            <div class="form-group">
+                                <label>暴露根目录（留空取同步计划的本地媒体目录）</label>
+                                <input type="text" v-model="webdavTool.root" @blur="saveWebdavSettings" placeholder="/media" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                <div v-if="webdavTool.effectiveRoot" style="font-size:12px; color:#909399; margin-top:4px;">实际生效目录：<code>{{ webdavTool.effectiveRoot }}</code></div>
+                                <div v-else style="font-size:12px; color:#e6a23c; margin-top:4px;">未检测到有效目录，请填写或先配置同步计划</div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>WebDAV 挂载地址</label>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <input type="text" :value="webdavTool.davUrl" readonly style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-family:monospace; font-size:12px; background:#f5f7fa;">
+                                    <button class="btn btn-default btn-small" @click="copyWebdavUrl">复制</button>
+                                </div>
+                                <div style="font-size:12px; color:#909399; margin-top:4px;">用户名/密码为本地管理账号。只读，不支持写入。</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 回收站清理配置弹窗 -->
+                <div v-if="toolConfig.show === 'recycle'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:520px;">
+                        <div class="modal-header">
+                            <span class="modal-title">回收站清理</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div v-if="recycleTool.loading" style="padding:20px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else>
+                            <div v-if="recycleTool.info" style="margin-bottom:12px; padding:10px 12px; border-radius:6px; background:rgba(64,158,255,0.08); border:1px solid rgba(64,158,255,0.2); font-size:13px; color:#606266;">
+                                回收站当前占用：<b>{{ recycleTool.info.size_str }}</b>（{{ recycleTool.info.count }} 个文件）
+                            </div>
+
+                            <div class="form-group" style="display:flex; align-items:center; justify-content:space-between;">
+                                <label style="margin:0;">启用定时清理</label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': recycleTool.enabled }" @click="recycleTool.enabled = !recycleTool.enabled">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Cron 表达式（默认每天 03:30）</label>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" v-model="recycleTool.cron" placeholder="30 3 * * *" style="flex:1; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-family:monospace; font-size:13px;">
+                                    <button class="btn btn-primary btn-small" @click="saveRecycleSettings" :disabled="recycleTool.saving">{{ recycleTool.saving ? '保存中...' : '保存' }}</button>
+                                </div>
+                            </div>
+                            <div v-if="recycleTool.enabled && recycleTool.nextRun" style="font-size:12px; color:#909399; margin-bottom:12px;">下次清理：{{ recycleTool.nextRun }}</div>
+
+                            <div style="border-top:1px solid #ebeef5; padding-top:12px;">
+                                <button class="tool-btn tool-btn-run" @click="runRecycleClean" :disabled="recycleTool.cleaning" style="width:100%;">
+                                    {{ recycleTool.cleaning ? '清空中...' : '立即清空回收站（不可恢复）' }}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -5772,10 +6256,18 @@
                             <span style="font-weight:600; color:#303133;">分享文件（共 {{ clouddownload.shareFiles.length }} 项）</span>
                             <div style="display:flex; gap:8px;">
                                 <button class="btn btn-default btn-sm" @click="toggleAllShareFiles" style="padding:2px 10px;">{{ clouddownload.shareSelectedAll ? '取消全选' : '全选' }}</button>
+                                <button class="btn btn-default btn-sm" @click="probeShareDedup" :disabled="clouddownload.probing" style="padding:2px 10px;" title="转存前探测有多少文件已在网盘（可秒传/跳过）">
+                                    {{ clouddownload.probing ? '探测中...' : '秒传探测' }}
+                                </button>
                                 <button class="btn btn-primary btn-sm" @click="receiveShare" :disabled="clouddownload.receiving" style="padding:2px 10px;">
                                     {{ clouddownload.receiving ? '转存中...' : '转存选中' }}
                                 </button>
                             </div>
+                        </div>
+                        <div v-if="clouddownload.dedupResult" style="margin-bottom:12px; padding:8px 12px; border-radius:6px; background:rgba(64,158,255,0.08); border:1px solid rgba(64,158,255,0.25); font-size:13px; color:#606266;">
+                            秒传探测：共 {{ clouddownload.dedupResult.total }} 个文件，
+                            <span style="color:#67c23a; font-weight:600;">{{ clouddownload.dedupResult.existing }} 个已在网盘（可秒传）</span>，
+                            <span style="color:#e6a23c; font-weight:600;">{{ clouddownload.dedupResult.missing }} 个需实际转存</span>。
                         </div>
                         <div style="overflow-x:auto;">
                             <table style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -5802,6 +6294,26 @@
                         </div>
                     </div>
                     <div v-if="clouddownload.shareError" class="card" style="text-align:center; color:#f56c6c; padding:20px;">{{ clouddownload.shareError }}</div>
+
+                    <!-- N1: 磁力/种子文件选择 -->
+                    <div class="card" v-if="clouddownload.torrentInfo">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                            <span style="font-weight:600; color:#303133;">种子文件（{{ clouddownload.torrentInfo.torrent_name || '磁力任务' }} · 共 {{ clouddownload.torrentInfo.files.length }} 项）</span>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-default btn-sm" @click="toggleAllTorrentFiles" style="padding:2px 10px;">全选/取消</button>
+                                <button class="btn btn-primary btn-sm" @click="submitTorrent" :disabled="clouddownload.torrentAdding" style="padding:2px 10px;">
+                                    {{ clouddownload.torrentAdding ? '添加中...' : '下载选中' }}
+                                </button>
+                            </div>
+                        </div>
+                        <div style="max-height:340px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                            <div v-for="f in clouddownload.torrentInfo.files" :key="f.index" style="display:flex; align-items:center; padding:7px 12px; border-bottom:1px solid #f0f2f5; cursor:pointer;" @click="f.checked = !f.checked">
+                                <input type="checkbox" v-model="f.checked" @click.stop style="margin-right:8px;">
+                                <span style="flex:1; font-size:13px; color:#303133; word-break:break-all;">{{ f.name }}</span>
+                                <span style="font-size:12px; color:#909399; flex-shrink:0; margin-left:8px;">{{ formatDownloadSize(f.size) }}</span>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- 下载完成检测中提示 -->
                     <div v-if="clouddownload.pollingDownload" class="card" style="text-align:center; padding:20px; color:#e6a23c;">
@@ -6470,6 +6982,7 @@
                     notify_on_emby_add: true,
                     webhook_token: '',
                     webhookUrl: '',
+                    sync_media_info: false,
                 });
 
                 // 通知配置
@@ -7969,6 +8482,11 @@ av:
                     share_review:{ enabled: localStorage.getItem('strmhub_tool_share_review') === '1' },
                     player_script:{ enabled: localStorage.getItem('strmhub_tool_player_script') === '1' },
                     drivers:      { enabled: localStorage.getItem('strmhub_tool_drivers') === '1' },
+                    mcp:          { enabled: localStorage.getItem('strmhub_tool_mcp') === '1' },
+                    file_search:  { enabled: localStorage.getItem('strmhub_tool_file_search') === '1' },
+                    strmscrape:   { enabled: localStorage.getItem('strmhub_tool_strmscrape') === '1' },
+                    webdav:       { enabled: localStorage.getItem('strmhub_tool_webdav') === '1' },
+                    recycle:      { enabled: localStorage.getItem('strmhub_tool_recycle') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -8076,6 +8594,13 @@ av:
                     routeRules: [],
                     loadingRoute: false,
                     savingRoute: false,
+                    // N8/N12: 反代特性开关
+                    subtitleSrt2ass: false,
+                    searchCommands: false,
+                    // #27: 转码多版本源
+                    enableHlsVsource: true,
+                    hlsMultiVersion: true,
+                    savingFeatures: false,
                 });
                 const cacheWarmer = reactive({
                     enabled: false, cron: '0 3 * * *', maxFiles: 100,
@@ -8168,6 +8693,61 @@ av:
                     resultMessage: '',
                 });
 
+                // 工具：MCP Server（AI 助手控制，G6）
+                const mcpTool = reactive({
+                    loading: false,
+                    saving: false,
+                    enabled: false,
+                    sseUrl: '',
+                    messagesUrl: '',
+                    tools: [],
+                    toolCount: 0,
+                });
+
+                // 工具：115 文件搜索（G8）
+                const fileSearch = reactive({
+                    keyword: '',
+                    searching: false,
+                    items: [],
+                    count: 0,
+                    searched: false,
+                });
+
+                // 工具：回收站清理（N4）
+                const recycleTool = reactive({
+                    loading: false,
+                    saving: false,
+                    cleaning: false,
+                    enabled: false,
+                    cron: '30 3 * * *',
+                    nextRun: '',
+                    info: null,   // {count, size, size_str}
+                });
+
+                // 工具：WebDAV 只读访问（G5）
+                const webdavTool = reactive({
+                    loading: false,
+                    saving: false,
+                    enabled: false,
+                    root: '',
+                    davUrl: '',
+                    effectiveRoot: '',
+                });
+
+                // 工具：STRM 刮削（I2，NFO/海报墙闭环）
+                const strmScrape = reactive({
+                    sourceCid: '',
+                    sourcePath: '',
+                    localDir: '',
+                    scanning: false,
+                    scraping: false,
+                    indexing: false,
+                    groups: [],
+                    results: [],       // 已刮削命中项（title/year/poster）
+                    posterWall: [],    // 海报墙索引查询结果
+                    scrapedCount: 0,
+                });
+
                 // 分享审核队列（P3 特色工具）
                 const shareReview = reactive({
                     loading: false,
@@ -8198,6 +8778,23 @@ av:
                 const driversState = reactive({
                     loading: false,
                     drivers: [],
+                    // N2: 123pan 凭证
+                    p123Passport: '',
+                    p123Password: '',
+                    p123PasswordSet: false,
+                    p123DepInstalled: false,
+                    p123Available: false,
+                    p123Saving: false,
+                    // #5: Alist/OpenList 网关
+                    alistBaseUrl: '',
+                    alistToken: '',
+                    alistUsername: '',
+                    alistPassword: '',
+                    alistTokenSet: false,
+                    alistPasswordSet: false,
+                    alistAvailable: false,
+                    alistSaving: false,
+                    alistTesting: false,
                 });
 
                 // 二维码弹窗状态
@@ -8210,7 +8807,9 @@ av:
                     message: '',
                     loading: false,
                     timer: null,      // 轮询定时器句柄
-                    session: 0        // 轮询会话编号，旧循环自动作废
+                    session: 0,       // 轮询会话编号，旧循环自动作废
+                    mode: 'cookie',   // feature #10: 'cookie'=扫码登录 | 'open'=开放平台 OAuth
+                    appId: localStorage.getItem('strmhub_open_appid') || ''  // 开放平台 app_id（记忆上次输入）
                 });
 
                 // 是否已有正常账号（有则登录按钮弱化）
@@ -8294,8 +8893,10 @@ av:
                 };
 
                 // 打开扫码弹窗（先选择设备类型，再手动获取二维码）
-                const openLoginModal = () => {
+                // mode: 'cookie'=普通扫码 | 'open'=开放平台 OAuth
+                const openLoginModal = (mode = 'cookie') => {
                     stopPolling();
+                    qr.mode = mode === 'open' ? 'open' : 'cookie';
                     qr.show = true;
                     qr.image = '';
                     qr.uid = '';
@@ -8324,7 +8925,16 @@ av:
                     qr.message = '';
 
                     try {
-                        const res = await api(`/api/115/qrcode?app=${qr.app}`);
+                        let url;
+                        if (qr.mode === 'open') {
+                            const appId = (qr.appId || '').trim();
+                            if (!appId) { showToast('请输入开放平台 App ID'); qr.loading = false; return; }
+                            localStorage.setItem('strmhub_open_appid', appId);
+                            url = `/api/115/open/qrcode?app_id=${encodeURIComponent(appId)}`;
+                        } else {
+                            url = `/api/115/qrcode?app=${qr.app}`;
+                        }
+                        const res = await api(url);
                         const data = await res.json();
 
                         if (session !== qr.session) return; // 弹窗已关闭
@@ -8351,7 +8961,10 @@ av:
                     if (session !== qr.session || !qr.uid) return;
 
                     try {
-                        const res = await api(`/api/115/qrcode/status?uid=${qr.uid}`);
+                        const statusUrl = qr.mode === 'open'
+                            ? `/api/115/open/qrcode/status?uid=${qr.uid}`
+                            : `/api/115/qrcode/status?uid=${qr.uid}`;
+                        const res = await api(statusUrl);
                         const data = await res.json();
 
                         if (session !== qr.session) return; // 双重检查
@@ -8463,7 +9076,35 @@ av:
                             advFeatures.routeRules = data.data.route_rules || [];
                         }
                     } catch (e) { console.warn('加载路由规则失败:', e); }
+                    // N8/N12: 加载反代特性开关
+                    try {
+                        const rf = await api('/api/settings/emby-proxy/features');
+                        const df = await rf.json();
+                        if (df.code === 0 && df.data) {
+                            advFeatures.subtitleSrt2ass = !!df.data.subtitle_srt2ass;
+                            advFeatures.searchCommands = !!df.data.search_commands;
+                            advFeatures.enableHlsVsource = df.data.enable_hls_vsource !== false;
+                            advFeatures.hlsMultiVersion = df.data.hls_multi_version !== false;
+                        }
+                    } catch (e) { /* 忽略 */ }
                     advFeatures.loadingRoute = false;
+                };
+                const saveProxyFeatures = async () => {
+                    advFeatures.savingFeatures = true;
+                    try {
+                        const res = await api('/api/settings/emby-proxy/features', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                subtitle_srt2ass: advFeatures.subtitleSrt2ass,
+                                search_commands: advFeatures.searchCommands,
+                                enable_hls_vsource: advFeatures.enableHlsVsource,
+                                hls_multi_version: advFeatures.hlsMultiVersion,
+                            }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已保存' : (data.message || '保存失败'), 3000);
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    advFeatures.savingFeatures = false;
                 };
                 const addRouteRule = () => {
                     advFeatures.routeRules.push({ mode: 'proxy', match_field: 'ua', match_op: 'contains', match_value: '' });
@@ -8832,6 +9473,11 @@ av:
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ save_cid: clouddownload.saveCid, save_path: clouddownload.savePath }),
                         }).catch(() => {});
+                    } else if (dirPicker.target === 'strmscrape_source') {
+                        strmScrape.sourceCid = dirPicker.cid;
+                        strmScrape.sourcePath = dirPicker.pathStack.length
+                            ? dirPicker.pathStack.map(p => p.name).join('/')
+                            : '根目录';
                     }
                     dirPicker.show = false;
                 };
@@ -9216,6 +9862,7 @@ av:
                             embyNotifyConfig.notify_on_error = data.data.notify_on_error !== false;
                             embyNotifyConfig.notify_on_emby_add = data.data.notify_on_emby_add !== false;
                             embyNotifyConfig.webhook_token = data.data.webhook_token || '';
+                            embyNotifyConfig.sync_media_info = data.data.sync_media_info === true;
                             _loadingConfig = false;
                             // 加载 Webhook URL
                             loadEmbyWebhookUrl();
@@ -9246,6 +9893,7 @@ av:
                                 notify_on_error: embyNotifyConfig.notify_on_error,
                                 notify_on_emby_add: embyNotifyConfig.notify_on_emby_add,
                                 webhook_token: embyNotifyConfig.webhook_token,
+                                sync_media_info: embyNotifyConfig.sync_media_info,
                             })
                         });
                         const data = await res.json();
@@ -9266,6 +9914,7 @@ av:
                         embyNotifyConfig.notify_on_error,
                         embyNotifyConfig.notify_on_emby_add,
                         embyNotifyConfig.webhook_token,
+                        embyNotifyConfig.sync_media_info,
                     ],
                     () => _debouncedSave('emby_notify', saveEmbyNotifySettings)
                 );
@@ -10188,6 +10837,41 @@ av:
                 };
 
                 // ===== 应用初始化（含认证检查） =====
+                // ============ #82 首启配置向导 ============
+                const setupWizard = reactive({
+                    show: false,
+                    steps: [],
+                    completed: false,
+                });
+                const loadSetupStatus = async () => {
+                    try {
+                        const res = await api('/api/setup/status');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            setupWizard.steps = data.data.steps || [];
+                            setupWizard.completed = !!data.data.completed;
+                            setupWizard.show = !!data.data.show_wizard;
+                        }
+                    } catch (e) { /* 忽略 */ }
+                };
+                const dismissWizard = async () => {
+                    setupWizard.show = false;
+                    try {
+                        await api('/api/setup/dismiss', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ dismissed: true }),
+                        });
+                    } catch (e) { /* 忽略 */ }
+                };
+                // 点击某步 → 跳转到对应配置页并关闭向导浮层（不永久 dismiss）
+                const wizardGoto = (key) => {
+                    setupWizard.show = false;
+                    if (key === 'account') { tab.value = 'accounts'; configTab.value = 'login'; }
+                    else if (key === 'strm') { tab.value = 'accounts'; configTab.value = 'strm'; }
+                    else if (key === 'emby') { tab.value = 'accounts'; configTab.value = 'emby'; }
+                    else if (key === 'tmdb') { tab.value = 'accounts'; configTab.value = 'tmdb'; }
+                };
+
                 const initApp = async () => {
                     initLoading.value = true;
                     initLoadingText.value = '正在验证身份...';
@@ -10263,6 +10947,8 @@ av:
                         loadRouteRules(); loadCacheWarmer(); loadTgBot(); loadPathMapping();
                         // P3 配置加载
                         loadUpdaterConfig(); loadAlistSign();
+                        // #82 首启向导状态（未完成必填项且未跳过时自动弹出）
+                        loadSetupStatus();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
                     } catch (e) {
@@ -11429,6 +12115,285 @@ av:
                     checkinTool.running = false;
                 };
 
+                // ============ 工具：MCP Server（G6） ============
+                const loadMcpSettings = async () => {
+                    mcpTool.loading = true;
+                    try {
+                        const res = await api('/api/mcp/settings');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            mcpTool.enabled = !!data.data.enabled;
+                            mcpTool.sseUrl = data.data.sse_url || '';
+                            mcpTool.messagesUrl = data.data.messages_url || '';
+                            mcpTool.tools = data.data.tools || [];
+                            mcpTool.toolCount = data.data.tool_count || 0;
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载 MCP 配置失败:', e);
+                    }
+                    mcpTool.loading = false;
+                };
+                const saveMcpSettings = async () => {
+                    mcpTool.saving = true;
+                    try {
+                        const res = await api('/api/mcp/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: mcpTool.enabled }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || '已保存') : (data.message || '保存失败'), 3000);
+                    } catch (e) {
+                        showToast('保存失败：网络错误', 3000);
+                    }
+                    mcpTool.saving = false;
+                };
+                const toggleMcpEnabled = async () => {
+                    mcpTool.enabled = !mcpTool.enabled;
+                    await saveMcpSettings();
+                };
+                const copyMcpUrl = async () => {
+                    try {
+                        await navigator.clipboard.writeText(mcpTool.sseUrl);
+                        showToast('SSE 地址已复制', 2000);
+                    } catch (e) {
+                        showToast('复制失败，请手动复制', 2000);
+                    }
+                };
+
+                // ============ 工具：115 文件搜索（G8） ============
+                const runFileSearch = async () => {
+                    const kw = fileSearch.keyword.trim();
+                    if (!kw) { showToast('请输入搜索关键词'); return; }
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('无可用账号，请先在核心配置中添加 115 账号'); return; }
+                    fileSearch.searching = true;
+                    fileSearch.searched = false;
+                    try {
+                        const res = await api(`/api/115/search?account_id=${accId}&keyword=${encodeURIComponent(kw)}&limit=40`);
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const rawList = data.data.data || [];
+                            fileSearch.items = rawList.map(f => ({
+                                name: f.n || f.name || '',
+                                size: f.s || f.size || 0,
+                                isDir: !f.fid,
+                                pickcode: f.pc || f.pick_code || '',
+                                cid: f.cid || '',
+                                fid: f.fid || '',
+                            }));
+                            fileSearch.count = Number(data.data.count || fileSearch.items.length) || fileSearch.items.length;
+                        } else {
+                            fileSearch.items = [];
+                            fileSearch.count = 0;
+                            showToast(data.message || '搜索失败', 3000);
+                        }
+                    } catch (e) {
+                        fileSearch.items = [];
+                        showToast('搜索失败：网络错误', 3000);
+                    }
+                    fileSearch.searched = true;
+                    fileSearch.searching = false;
+                };
+
+                // ============ 工具：STRM 刮削（I2） ============
+                const strmScrapeScan = async () => {
+                    if (!strmScrape.sourceCid) { showToast('请先选择源目录'); return; }
+                    const accId = getDefaultAccountId();
+                    if (!accId) { showToast('无可用账号'); return; }
+                    strmScrape.scanning = true;
+                    strmScrape.groups = [];
+                    try {
+                        const res = await api('/api/tools/strmscrape/scan', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ account_id: accId, source_cid: strmScrape.sourceCid }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmScrape.groups = (data.data.groups || []).map(g => ({ ...g, checked: true, status: '' }));
+                            showToast(`扫描到 ${data.data.count || 0} 个分组`, 2500);
+                        } else {
+                            showToast(data.message || '扫描失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('扫描失败：网络错误', 3000);
+                    }
+                    strmScrape.scanning = false;
+                };
+                const strmScrapeRun = async () => {
+                    const selected = strmScrape.groups.filter(g => g.checked);
+                    if (selected.length === 0) { showToast('请至少勾选一个分组'); return; }
+                    const accId = getDefaultAccountId();
+                    strmScrape.scraping = true;
+                    strmScrape.results = [];
+                    let hit = 0;
+                    for (const g of selected) {
+                        g.status = '刮削中…';
+                        try {
+                            const res = await api('/api/tools/strmscrape/run', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    account_id: accId,
+                                    group: g.group,
+                                    files: g.files || [],
+                                    local_dir: strmScrape.localDir || '',
+                                }),
+                            });
+                            const data = await res.json();
+                            if (data.code === 0 && data.data && data.data.scraped && data.data.scraped.status !== 'miss') {
+                                const s = data.data.scraped;
+                                g.status = `✓ ${s.title || ''} ${s.year || ''}`;
+                                hit++;
+                                strmScrape.results.push({
+                                    title: s.title || '', year: s.year || '', tmdb_id: s.tmdb_id || '',
+                                    poster: s.poster_path ? `https://image.tmdb.org/t/p/w200${s.poster_path}` : '',
+                                });
+                            } else {
+                                g.status = '✗ 未命中';
+                            }
+                        } catch (e) {
+                            g.status = '✗ 失败';
+                        }
+                    }
+                    strmScrape.scrapedCount = hit;
+                    strmScrape.scraping = false;
+                    showToast(`刮削完成：命中 ${hit}/${selected.length}`, 3000);
+                };
+                const strmScrapeBuildIndex = async () => {
+                    const dir = strmScrape.localDir.trim();
+                    if (!dir) { showToast('请填写本地媒体目录'); return; }
+                    strmScrape.indexing = true;
+                    try {
+                        const res = await api('/api/tools/strmscrape/index', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ local_media_dir: dir }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(`索引完成：${data.data.indexed || 0} 条`, 3000);
+                            await strmScrapeQuery();
+                        } else {
+                            showToast(data.message || '索引失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('索引失败：网络错误', 3000);
+                    }
+                    strmScrape.indexing = false;
+                };
+                const strmScrapeQuery = async () => {
+                    try {
+                        const res = await api('/api/tools/strmscrape/query');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            strmScrape.posterWall = (data.data.items || []).map(it => ({
+                                ...it,
+                                posterUrl: it.poster && it.poster.startsWith('http') ? it.poster
+                                    : (it.poster ? `https://image.tmdb.org/t/p/w200${it.poster}` : ''),
+                            }));
+                        }
+                    } catch (e) {
+                        console.warn('[app] 海报墙查询失败:', e);
+                    }
+                };
+                const openStrmScrapeDirPicker = () => {
+                    openDirPicker('strmscrape_source');
+                };
+
+                // ============ 工具：WebDAV 只读访问（G5） ============
+                const loadWebdavSettings = async () => {
+                    webdavTool.loading = true;
+                    try {
+                        const res = await api('/api/settings/webdav');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            webdavTool.enabled = !!data.data.enabled;
+                            webdavTool.root = data.data.root || '';
+                            webdavTool.davUrl = data.data.dav_url || '';
+                            webdavTool.effectiveRoot = data.data.effective_root || '';
+                        }
+                    } catch (e) {
+                        console.warn('[app] 加载 WebDAV 配置失败:', e);
+                    }
+                    webdavTool.loading = false;
+                };
+                const saveWebdavSettings = async () => {
+                    webdavTool.saving = true;
+                    try {
+                        const res = await api('/api/settings/webdav', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: webdavTool.enabled, root: webdavTool.root.trim() }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || '已保存') : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) await loadWebdavSettings();
+                    } catch (e) {
+                        showToast('保存失败：网络错误', 3000);
+                    }
+                    webdavTool.saving = false;
+                };
+                const toggleWebdavEnabled = async () => {
+                    webdavTool.enabled = !webdavTool.enabled;
+                    await saveWebdavSettings();
+                };
+                const copyWebdavUrl = async () => {
+                    try {
+                        await navigator.clipboard.writeText(webdavTool.davUrl);
+                        showToast('WebDAV 地址已复制', 2000);
+                    } catch (e) {
+                        showToast('复制失败，请手动复制', 2000);
+                    }
+                };
+
+                // ============ 工具：回收站清理（N4） ============
+                const loadRecycleSettings = async () => {
+                    recycleTool.loading = true;
+                    try {
+                        const res = await api('/api/tools/recycle/settings');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            recycleTool.enabled = !!data.data.enabled;
+                            recycleTool.cron = data.data.cron || '30 3 * * *';
+                            recycleTool.nextRun = data.data.next_run || '';
+                        }
+                    } catch (e) { console.warn('[app] 加载回收站配置失败:', e); }
+                    // 顺带拉取占用信息
+                    try {
+                        const r2 = await api('/api/tools/recycle/info');
+                        const d2 = await r2.json();
+                        if (d2.code === 0 && d2.data) recycleTool.info = d2.data;
+                    } catch (e) { /* 忽略 */ }
+                    recycleTool.loading = false;
+                };
+                const saveRecycleSettings = async () => {
+                    recycleTool.saving = true;
+                    try {
+                        const res = await api('/api/tools/recycle/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enabled: recycleTool.enabled, cron: recycleTool.cron.trim() || '30 3 * * *' }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || '已保存') : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) await loadRecycleSettings();
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    recycleTool.saving = false;
+                };
+                const runRecycleClean = async () => {
+                    if (!confirm('确定立即清空 115 回收站？此操作不可恢复。')) return;
+                    recycleTool.cleaning = true;
+                    try {
+                        const res = await api('/api/tools/recycle/clean', { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '回收站已清空' : (data.message || '清空失败'), 3000);
+                        if (data.code === 0) { recycleTool.info = { count: 0, size: 0, size_str: '0 B' }; }
+                    } catch (e) { showToast('清空失败：网络错误', 3000); }
+                    recycleTool.cleaning = false;
+                };
+
                 // ============ P3 特色工具 - 数据 API ============
 
                 // 加载分享审核队列（列表 + 待审核数 + 自动审核开关）
@@ -11650,7 +12615,75 @@ av:
                             showToast(data.message || '加载驱动失败', 3000);
                         }
                     } catch (e) { showToast('加载驱动失败：网络错误', 3000); }
+                    // N2: 加载 123pan 凭证状态
+                    try {
+                        const r2 = await api('/api/settings/driver-123');
+                        const d2 = await r2.json();
+                        if (d2.code === 0 && d2.data) {
+                            driversState.p123Passport = d2.data.passport || '';
+                            driversState.p123PasswordSet = !!d2.data.password_set;
+                            driversState.p123DepInstalled = !!d2.data.dep_installed;
+                            driversState.p123Available = !!d2.data.available;
+                        }
+                    } catch (e) { /* 忽略 */ }
+                    // #5: 加载 Alist 网关状态
+                    try {
+                        const r3 = await api('/api/settings/driver-alist');
+                        const d3 = await r3.json();
+                        if (d3.code === 0 && d3.data) {
+                            driversState.alistBaseUrl = d3.data.base_url || '';
+                            driversState.alistUsername = d3.data.username || '';
+                            driversState.alistTokenSet = !!d3.data.token_set;
+                            driversState.alistPasswordSet = !!d3.data.password_set;
+                            driversState.alistAvailable = !!d3.data.available;
+                        }
+                    } catch (e) { /* 忽略 */ }
                     driversState.loading = false;
+                };
+                const saveDriverAlist = async () => {
+                    driversState.alistSaving = true;
+                    try {
+                        const res = await api('/api/settings/driver-alist', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                base_url: driversState.alistBaseUrl.trim(),
+                                token: driversState.alistToken,
+                                username: driversState.alistUsername.trim(),
+                                password: driversState.alistPassword,
+                            }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已保存' : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) { driversState.alistToken=''; driversState.alistPassword=''; await loadDrivers(); }
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    driversState.alistSaving = false;
+                };
+                const testDriverAlist = async () => {
+                    driversState.alistTesting = true;
+                    try {
+                        const res = await api('/api/settings/driver-alist/test', { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? (data.message || 'Alist 连接正常') : (data.message || '连接失败'), 3500);
+                    } catch (e) { showToast('测试失败：网络错误', 3000); }
+                    driversState.alistTesting = false;
+                };
+                const saveDriver123 = async () => {
+                    driversState.p123Saving = true;
+                    try {
+                        const res = await api('/api/settings/driver-123', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                passport: driversState.p123Passport.trim(),
+                                password: driversState.p123Password,
+                            }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已保存' : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) { driversState.p123Password = ''; await loadDrivers(); }
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    driversState.p123Saving = false;
                 };
 
                 // ============ 特色工具 - 卡片操作方法 ============
@@ -11676,6 +12709,10 @@ av:
                     else if (key === 'share_review') loadShareReview();
                     else if (key === 'player_script') loadPlayerScriptPlayers();
                     else if (key === 'drivers') loadDrivers();
+                    else if (key === 'mcp') loadMcpSettings();
+                    else if (key === 'strmscrape') strmScrapeQuery();
+                    else if (key === 'webdav') loadWebdavSettings();
+                    else if (key === 'recycle') loadRecycleSettings();
                 };
 
                 // 立即运行工具（打开对应配置弹窗）
@@ -11809,7 +12846,15 @@ av:
                     shareSelectedAll: false,
                     snapping: false,
                     receiving: false,
+                    probing: false,
+                    dedupResult: null,
                     shareError: '',
+                    // N1: 种子/磁力文件选择
+                    torrentInfo: null,        // {info_hash, torrent_name, file_count, files:[{index,name,size,checked}]}
+                    torrentUrl: '',           // 当前解析的磁力/种子链接
+                    torrentParsing: false,
+                    torrentAdding: false,
+                    quota: null,              // 离线配额信息
                     autoOrganizing: false,  // 自动整理进行中
                     // 离线下载/转存 等待检测
                     pollingDownload: false,  // 正在等待检测
@@ -11898,7 +12943,21 @@ av:
                     }
 
                     const shareLinks = lines.filter(u => isShareLink(u));
-                    const downloadUrls = lines.filter(u => !isShareLink(u));
+                    const nonShare = lines.filter(u => !isShareLink(u));
+                    // N1: 磁力/种子链接单独走"文件选择"流程（仅当只有一个时提供勾选；多个则直接批量加）
+                    const isTorrentLink = (u) => /^magnet:\?/i.test(u) || /\.torrent(\?|$)/i.test(u);
+                    const torrentLinks = nonShare.filter(isTorrentLink);
+                    const downloadUrls = nonShare.filter(u => !isTorrentLink(u));
+
+                    // 单个磁力/种子 → 弹出文件选择（可只下选中项）
+                    if (torrentLinks.length === 1 && downloadUrls.length === 0 && shareLinks.length === 0) {
+                        await parseTorrent(torrentLinks[0]);
+                        return;
+                    }
+                    // 多个磁力/种子 → 直接批量加入离线（无文件级选择）
+                    if (torrentLinks.length > 0) {
+                        downloadUrls.push(...torrentLinks);
+                    }
 
                     // 处理离线下载链接
                     if (downloadUrls.length > 0) {
@@ -12008,6 +13067,98 @@ av:
                         clouddownload.shareSelectedIds.push(id);
                     }
                     clouddownload.shareSelectedAll = clouddownload.shareSelectedIds.length === clouddownload.shareFiles.length;
+                };
+
+                // N1: 解析磁力/种子文件清单（供勾选后只下选中）
+                const parseTorrent = async (link) => {
+                    const url = (link || '').trim();
+                    if (!url) { showToast('请输入磁力链接或种子 URL'); return; }
+                    clouddownload.torrentUrl = url;
+                    clouddownload.torrentParsing = true;
+                    clouddownload.torrentInfo = null;
+                    try {
+                        const res = await api('/api/clouddownload/torrent-info', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ torrent_url: url }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const info = data.data;
+                            info.files = (info.files || []).map(f => ({ ...f, checked: f.wanted !== 0 }));
+                            clouddownload.torrentInfo = info;
+                        } else {
+                            showToast(data.message || '解析失败', 3500);
+                        }
+                    } catch (e) {
+                        showToast('解析失败：网络错误', 3500);
+                    }
+                    clouddownload.torrentParsing = false;
+                };
+                const toggleAllTorrentFiles = () => {
+                    if (!clouddownload.torrentInfo) return;
+                    const allChecked = clouddownload.torrentInfo.files.every(f => f.checked);
+                    clouddownload.torrentInfo.files.forEach(f => { f.checked = !allChecked; });
+                };
+                const submitTorrent = async () => {
+                    const info = clouddownload.torrentInfo;
+                    if (!info) return;
+                    const wanted = info.files.filter(f => f.checked).map(f => f.index);
+                    if (wanted.length === 0) { showToast('请至少勾选一个文件'); return; }
+                    clouddownload.torrentAdding = true;
+                    try {
+                        const res = await api('/api/clouddownload/add-bt', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                info_hash: info.info_hash,
+                                wanted_indexes: wanted.length === info.files.length ? [] : wanted,
+                                save_cid: clouddownload.saveCid || '',
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(`已添加 BT 任务（${wanted.length} 个文件），完成后自动整理`, 3500);
+                            clouddownload.torrentInfo = null;
+                            clouddownload.torrentUrl = '';
+                            if (clouddownload.saveCid) startTransferWait();
+                        } else {
+                            showToast(data.message || '添加失败', 3500);
+                        }
+                    } catch (e) {
+                        showToast('添加失败：网络错误', 3500);
+                    }
+                    clouddownload.torrentAdding = false;
+                };
+                const loadQuota = async () => {
+                    try {
+                        const res = await api('/api/clouddownload/quota');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) clouddownload.quota = data.data;
+                    } catch (e) { /* 忽略 */ }
+                };
+
+                // O12: 转存前秒传 dry-run 探测
+                const probeShareDedup = async () => {
+                    if (!clouddownload.shareUrl.trim()) { showToast('无分享链接'); return; }
+                    clouddownload.probing = true;
+                    clouddownload.dedupResult = null;
+                    try {
+                        const res = await api('/api/clouddownload/share/dedup-probe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ share_url: clouddownload.shareUrl.trim() }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            clouddownload.dedupResult = data.data;
+                        } else {
+                            showToast(data.message || '探测失败', 3000);
+                        }
+                    } catch (e) {
+                        showToast('探测失败：网络错误', 3000);
+                    }
+                    clouddownload.probing = false;
                 };
 
                 const receiveShare = async () => {
@@ -12524,10 +13675,16 @@ av:
                     syncDelState, loadSyncDel, toggleSyncDel, clearSyncDelHistory,
                     autoRule, actionLabel, loadAutoRules, autoRuleAdd, autoRuleRun, autoRuleToggle, autoRuleDel,
                     checkinTool, loadCheckinSettings, saveCheckinSettings, runCheckinNow,
+                    mcpTool, loadMcpSettings, saveMcpSettings, toggleMcpEnabled, copyMcpUrl,
+                    fileSearch, runFileSearch,
+                    strmScrape, strmScrapeScan, strmScrapeRun, strmScrapeBuildIndex, strmScrapeQuery, openStrmScrapeDirPicker,
+                    webdavTool, loadWebdavSettings, saveWebdavSettings, toggleWebdavEnabled, copyWebdavUrl,
+                    recycleTool, loadRecycleSettings, saveRecycleSettings, runRecycleClean,
                     // P3 特色工具
                     shareReview, loadShareReview, addShareReviewItem, approveShareItem, rejectShareItem, deleteShareItem, clearShareReviewed, toggleShareAutoApprove,
                     playerScript, loadPlayerScriptPlayers, generatePlayerScript, generateBatchPlayerScripts, copyScriptContent,
-                    driversState, loadDrivers,
+                    driversState, loadDrivers, saveDriver123, saveDriverAlist, testDriverAlist,
+                    setupWizard, loadSetupStatus, dismissWizard, wizardGoto,
                     coverGen, coverGenPreviewFirst, coverGenGenerateAll,
                     clearFolder, clearFolderScan, clearFolderRun,
                     clearRecycle, clearRecycleRun,
@@ -12542,7 +13699,7 @@ av:
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
                     rateStats, loadRateStats,
-                    advFeatures, loadRouteRules, addRouteRule, saveRouteRules,
+                    advFeatures, loadRouteRules, addRouteRule, saveRouteRules, saveProxyFeatures,
                     cacheWarmer, loadCacheWarmer, saveCacheWarmer, runCacheWarmer,
                     tgBot, loadTgBot, saveTgBot, testTgBot,
                     pathMapping, loadPathMapping, savePathMapping,
@@ -12561,7 +13718,8 @@ av:
                     // 转存下载
                     clouddownload, addTask,
                     formatDownloadSize,
-                    toggleAllShareFiles, toggleShareSelect, receiveShare,
+                    toggleAllShareFiles, toggleShareSelect, receiveShare, probeShareDedup,
+                    parseTorrent, toggleAllTorrentFiles, submitTorrent, loadQuota,
                     triggerAutoOrganize, loadClouddownloadConfig,
                     startDownloadPolling, stopDownloadPolling, startTransferWait,
                     // 转存下载 - G3 任务明细

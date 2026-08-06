@@ -10,9 +10,45 @@ from collections import deque, OrderedDict
 import asyncio
 
 import httpx
+import json as _json
 from p115client import P115Client
+try:
+    from p115client import P115OpenClient
+    _HAS_OPEN_CLIENT = True
+except Exception:
+    P115OpenClient = None  # type: ignore
+    _HAS_OPEN_CLIENT = False
 
 from app.config import COOKIES_DIR
+
+# ===== 115 开放平台 OAuth（feature #10） =====
+# 账号可以是 cookie 认证或 OAuth 认证。为了不改动数百处 create_client_from_cookies
+# 调用点，OAuth 账号把凭证以哨兵字符串存进 cookies 字段：
+#   OPENAUTH:{json}  其中 json = {"access_token","refresh_token","app_id"}
+# create_client_from_cookies 检测到该前缀时构造 P115OpenClient（接口与 P115Client 同名）。
+_OPENAUTH_PREFIX = "OPENAUTH:"
+
+
+def _is_openauth(cookies: str) -> bool:
+    """判断凭证串是否为开放平台 OAuth 哨兵格式。"""
+    return isinstance(cookies, str) and cookies.startswith(_OPENAUTH_PREFIX)
+
+
+def _parse_openauth(cookies: str) -> dict:
+    """解析 OAuth 哨兵串为 {access_token, refresh_token, app_id}。"""
+    try:
+        return _json.loads(cookies[len(_OPENAUTH_PREFIX):])
+    except Exception:
+        return {}
+
+
+def _build_openauth_cookies(access_token: str, refresh_token: str, app_id: int) -> str:
+    """把 OAuth 凭证打包为哨兵串存入 cookies 字段。"""
+    return _OPENAUTH_PREFIX + _json.dumps({
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "app_id": int(app_id or 0),
+    }, ensure_ascii=False)
 from app.core.logbuffer import get_logger
 from app.core.db_helper import get_api_intervals
 
@@ -64,6 +100,19 @@ _PATH_NOT_FOUND_TTL = 300  # 5 分钟
 _dir_write_cooldowns: dict[str, float] = {}
 _dir_write_lock = threading.Lock()
 _DIR_WRITE_COOLDOWN = 3.0  # 秒
+
+
+def _human_size(num: float) -> str:
+    """将字节数格式化为可读字符串（B/KB/MB/GB/TB）。"""
+    try:
+        num = float(num)
+    except (TypeError, ValueError):
+        return "0 B"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(num) < 1024.0:
+            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} B"
+        num /= 1024.0
+    return f"{num:.1f} PB"
 
 
 def _mark_dir_written(parent_id: str) -> None:
@@ -656,13 +705,63 @@ def _auth_reset(account_id: int):
 _RATE_LIMIT_KEYWORDS = ["访问频率", "频率过高", "too many", "REQUEST_MAX_LIMIT", "请求过于频繁"]
 
 
+# ===== N6: 响应式限流管理器（参考 qmediasync throttle_manager.go） =====
+# 与熔断器（连续失败 → 阶梯冷却/暂停）互补：当 115 主动返回"限流"响应时，
+# 立即设置一个全局软冷却窗口（默认 60s），期间所有调用方在入口 _wait_throttle_recovery
+# 处短暂等待而非直接失败，冷却到期自动恢复。这是介于"正常限流"和"熔断"之间的中间态：
+# 让请求排队等待恢复，而不是像熔断那样抛异常拒绝。
+_throttle_until: float = 0.0
+_throttle_lock = threading.Lock()
+_THROTTLE_COOLDOWN = 60.0        # 检测到限流后的全局冷却秒数
+_THROTTLE_MAX_WAIT = 65.0        # 单次等待恢复的最长秒数（防止无限等待）
+
+
+def _mark_throttled(reason: str = "") -> None:
+    """标记进入全局限流冷却窗口（幂等：多次命中只延长到最新窗口）。"""
+    global _throttle_until
+    with _throttle_lock:
+        _throttle_until = _time.time() + _THROTTLE_COOLDOWN
+    logger.warning(f"[115] 检测到限流，进入 {_THROTTLE_COOLDOWN:.0f}s 全局冷却: {reason[:120]}")
+
+
+def _throttle_remaining() -> float:
+    """返回全局限流冷却剩余秒数（<=0 表示未在冷却）。"""
+    with _throttle_lock:
+        return max(0.0, _throttle_until - _time.time())
+
+
+def _wait_throttle_recovery() -> None:
+    """若处于全局限流冷却窗口，则阻塞等待其恢复（最长 _THROTTLE_MAX_WAIT）。
+
+    在 115 API 调用入口调用；等待期间让出线程，冷却到期后继续，避免直接失败。
+    """
+    remaining = _throttle_remaining()
+    if remaining <= 0:
+        return
+    wait = min(remaining, _THROTTLE_MAX_WAIT)
+    logger.info(f"[115] 全局限流冷却中，等待 {wait:.1f}s 后继续")
+    _time.sleep(wait)
+
+
+def get_throttle_status() -> dict:
+    """返回响应式限流状态（供监控/仪表盘展示）。"""
+    remaining = _throttle_remaining()
+    return {
+        "throttled": remaining > 0,
+        "remaining_seconds": round(remaining, 1),
+        "cooldown_seconds": _THROTTLE_COOLDOWN,
+    }
+
+
 def _check_rate_limit_error(exc: Exception) -> bool:
-    """检测异常是否为 115 限流，若是则触发熔断器。
-    返回 True 表示触发了熔断。
+    """检测异常是否为 115 限流，若是则触发熔断器 + 响应式限流冷却。
+    返回 True 表示触发了限流处理。
     """
     msg = str(exc)
     for kw in _RATE_LIMIT_KEYWORDS:
         if kw in msg or kw.lower() in msg.lower():
+            # N6: 先设置全局软冷却（让后续请求排队等待），再交由熔断器状态机计数
+            _mark_throttled(reason=msg[:200])
             _trip_circuit_breaker(reason=msg[:200])
             return True
     return False
@@ -677,6 +776,8 @@ def _apply_rate_limit(operation: str = "", context: str = "") -> bool:
     context: 可选的操作对象（如文件名），用于等待日志展示当前处理进度
     返回: 是否发生了限流等待（供请求统计使用）
     """
+    # N6: 若处于全局限流冷却窗口，先等待恢复（让请求排队而非直接失败）
+    _wait_throttle_recovery()
     intervals = get_api_intervals()
     throttled = False
     # 第一级：QPS 限流（download_url_interval 秒内最多 1 次）
@@ -1179,7 +1280,143 @@ class Client115Service:
         except Exception as e:
             logger.warning(f"[115] 获取用户信息失败: {e}")
             return {"user_id": "", "username": ""}
-    
+
+    # ===== 115 开放平台 OAuth 登录（feature #10） =====
+    # 开放平台扫码会话缓存（与普通扫码分开，避免混淆）
+    _open_qrcode_data: dict = {}
+    _open_completed: dict = {}
+
+    @classmethod
+    async def get_open_qrcode(cls, app_id: int) -> dict:
+        """获取开放平台 OAuth 登录二维码。
+
+        app_id: 115 开放平台应用 ID（在 https://open.115.com 申请）
+        返回 {"qrcode_url", "uid"}；app_id 无效时抛异常。
+        """
+        if not _HAS_OPEN_CLIENT:
+            raise RuntimeError("当前 p115client 版本不支持开放平台 OAuth")
+        result = await _run_in_thread(P115OpenClient.login_qrcode_token_open, int(app_id))
+        if result.get("code"):
+            raise RuntimeError(f"无效 AppID 或获取二维码失败: {result.get('error') or result.get('message')}")
+        data = result.get("data", {})
+        uid = data.get("uid", "")
+        # 保存状态查询所需字段 + app_id
+        cls._open_qrcode_data[uid] = {
+            "token": {"uid": uid, "time": data.get("time"), "sign": data.get("sign")},
+            "app_id": int(app_id),
+        }
+        qrcode_img_url = data.get("qrcode") or f"https://qrcodeapi.115.com/api/1.0/web/1.0/qrcode?uid={uid}"
+        return {"qrcode_url": qrcode_img_url, "uid": uid}
+
+    @classmethod
+    async def check_open_qrcode_status(cls, uid: str) -> dict:
+        """检查开放平台 OAuth 扫码状态；登录成功时换取 access_token/refresh_token。
+
+        返回 {"status", "message", ...}；status=2 且含 openauth 凭证时表示成功。
+        """
+        if uid in cls._open_completed:
+            entry = cls._open_completed[uid]
+            if _time.time() - entry["time"] < 60:
+                return entry["result"]
+            cls._open_completed.pop(uid, None)
+        if uid not in cls._open_qrcode_data:
+            return {"status": -1, "message": "二维码已过期"}
+
+        sess = cls._open_qrcode_data[uid]
+        token = sess["token"]
+        app_id = sess["app_id"]
+        try:
+            status_data = await cls._poll_status(token)
+            if not status_data or "status" not in status_data:
+                return {"status": 0, "message": "等待扫描..."}
+            status_code = status_data.get("status", 0)
+            if status_code == 0:
+                return {"status": 0, "message": "等待扫描..."}
+            if status_code == 1:
+                return {"status": 1, "message": "已扫描，请在手机上确认"}
+            if status_code == 2:
+                return await cls._handle_open_login_success(uid, app_id)
+            cls._open_qrcode_data.pop(uid, None)
+            return {"status": -1, "message": "二维码已过期" if status_code == -1 else "登录失败"}
+        except Exception as e:
+            logger.debug(f"[115] check_open_qrcode_status error: {e}")
+            return {"status": 0, "message": "等待扫描..."}
+
+    @classmethod
+    async def _handle_open_login_success(cls, uid: str, app_id: int) -> dict:
+        """扫码确认后换取 access_token/refresh_token 并组装账号凭证。"""
+        try:
+            token_resp = await _run_in_thread(
+                P115OpenClient.login_qrcode_access_token_open, uid
+            )
+            data = token_resp.get("data", token_resp) if isinstance(token_resp, dict) else {}
+            access_token = data.get("access_token", "")
+            refresh_token = data.get("refresh_token", "")
+            if not access_token:
+                return {"status": -1, "message": "登录成功但未获取到 access_token"}
+
+            openauth_cookies = _build_openauth_cookies(access_token, refresh_token, app_id)
+            # 获取用户信息（用 open client）
+            user_id, username, avatar = "", "", ""
+            try:
+                client = P115OpenClient(access_token, refresh_token, app_id)
+                ui = await _run_in_thread(client.user_info)
+                ui_data = ui.get("data", ui) if isinstance(ui, dict) else {}
+                user_id = str(ui_data.get("user_id", "") or "")
+                username = ui_data.get("user_name", "") or ui_data.get("uname", "") or ""
+                avatar = (ui_data.get("face") or {}).get("face_m", "") if isinstance(ui_data.get("face"), dict) else ""
+            except Exception as e:
+                logger.debug(f"[115] open user_info 获取失败: {e}")
+
+            resp = {
+                "status": 2,
+                "message": "开放平台登录成功",
+                "cookies": openauth_cookies,   # 哨兵串，存入 cookies 字段
+                "user_id": user_id,
+                "username": username,
+                "avatar_url": avatar,
+                "app": "open",
+                "auth_type": "open",
+            }
+            cls._open_qrcode_data.pop(uid, None)
+            cls._open_completed[uid] = {"time": _time.time(), "result": resp}
+            logger.info("[115] 开放平台 OAuth 登录成功")
+            return resp
+        except Exception as e:
+            logger.warning(f"[115] 开放平台登录换取 token 失败: {e}")
+            cls._open_qrcode_data.pop(uid, None)
+            return {"status": -1, "message": f"登录失败: {str(e)}"}
+
+    @classmethod
+    def refresh_open_token(cls, cookies: str) -> Optional[str]:
+        """刷新开放平台 access_token，返回新的 openauth 哨兵串（失败返回 None）。
+
+        用于 token 过期时续期；调用方负责把新串写回账号存储。
+        """
+        if not _is_openauth(cookies) or not _HAS_OPEN_CLIENT:
+            return None
+        info = _parse_openauth(cookies)
+        refresh_token = info.get("refresh_token", "")
+        app_id = info.get("app_id", 0)
+        if not refresh_token:
+            return None
+        try:
+            resp = P115OpenClient.login_refresh_token_open(refresh_token)
+            data = resp.get("data", resp) if isinstance(resp, dict) else {}
+            new_access = data.get("access_token", "")
+            new_refresh = data.get("refresh_token", refresh_token) or refresh_token
+            if not new_access:
+                logger.warning(f"[115] 刷新 token 未返回 access_token: {resp}")
+                return None
+            new_cookies = _build_openauth_cookies(new_access, new_refresh, app_id)
+            # 使旧客户端缓存失效
+            cls.remove_client(cookies=cookies)
+            logger.info("[115] 开放平台 access_token 已刷新")
+            return new_cookies
+        except Exception as e:
+            logger.warning(f"[115] 刷新开放平台 token 失败: {e}")
+            return None
+
     @classmethod
     def create_client_from_cookies(cls, cookies: str, account_id: int = 0, skip_auth_check: bool = False) -> P115Client:
         """创建或复用 P115Client 实例（按 cookies 哈希缓存，减少重复初始化开销）
@@ -1202,7 +1439,18 @@ class Client115Service:
                 # LRU: 移到末尾表示最近使用
                 _clients_cache.move_to_end(cookies_hash)
                 return client
-            client = P115Client(cookies)
+            # OAuth 账号：构造 P115OpenClient（凭证存于 cookies 哨兵串）
+            if _is_openauth(cookies):
+                if not _HAS_OPEN_CLIENT:
+                    raise RuntimeError("[115] 当前 p115client 版本不支持开放平台 OAuth")
+                info = _parse_openauth(cookies)
+                client = P115OpenClient(
+                    info.get("access_token", ""),
+                    info.get("refresh_token", ""),
+                    info.get("app_id", 0),
+                )
+            else:
+                client = P115Client(cookies)
             _clients_cache[cookies_hash] = client
             # 超出上限时淘汰最久未使用的
             while len(_clients_cache) > _CLIENTS_CACHE_MAX:
@@ -1320,6 +1568,46 @@ class Client115Service:
             return result
         except Exception as e:
             # 用 _error 作为异常标识，避免与 115 返回的 error 字段冲突
+            return {"_error": str(e)}
+
+    @classmethod
+    def search_files(cls, cookies: str, keyword: str, cid: str = "0",
+                     offset: int = 0, limit: int = 40) -> dict:
+        """G8: 全盘/指定目录关键词搜索文件和目录。
+
+        调用 115 files/search 接口（fs_search，405 时降级 fs_search_app）。
+        keyword: 搜索关键词（文件/目录名）
+        cid: 限定搜索的目录 id（"0" 为全盘搜索）
+        limit + offset 需 <= 10000（115 接口限制）。
+        返回 115 原始响应（含 data 列表、count），异常时返回 {"_error": str}。
+        """
+        keyword = (keyword or "").strip()
+        if not keyword:
+            return {"_error": "搜索关键词不能为空"}
+        # 115 限制 limit + offset <= 10000
+        if offset + limit > 10000:
+            limit = max(1, 10000 - offset)
+        _apply_rate_limit("search")
+        try:
+            client = cls.create_client_from_cookies(cookies)
+            payload = {
+                "search_value": keyword,
+                "cid": cid,
+                "offset": offset,
+                "limit": limit,
+                "show_dir": 1,
+            }
+            try:
+                result = client.fs_search(payload)
+            except Exception as e:
+                if _is_method_not_allowed(e):
+                    logger.info("[115] fs_search 返回 405，降级到 fs_search_app")
+                    result = client.fs_search_app(payload)
+                else:
+                    raise
+            return result if isinstance(result, dict) else {"_error": "搜索返回格式异常"}
+        except Exception as e:
+            logger.warning(f"[115] 搜索失败 keyword={keyword}: {e}")
             return {"_error": str(e)}
     
     # 统一的 User-Agent，获取直链和下载文件时必须一致
@@ -1490,6 +1778,28 @@ class Client115Service:
                 _request_stats.record_cache_hit(True)
                 return cached_url
         _request_stats.record_cache_hit(False)
+
+        # O4 单飞（singleflight）：同一 pickcode|ua 的并发播放请求（多设备/播放器
+        # seek 分片/直链过期后多个 Range 同时刷新）只向 115 请求一次，其余线程等待
+        # 并复用结果，避免"惊群"打爆 115。合并键使用 cache_key（含 UA），与无 UA
+        # 的 get_download_url 合并键（纯 pickcode）天然隔离，不会互相干扰。
+        with _inflight_lock:
+            inflight = _inflight_download.get(cache_key)
+            if inflight:
+                event = inflight["event"]
+            else:
+                event = threading.Event()
+                _inflight_download[cache_key] = {"event": event, "url": None}
+                inflight = None
+        if inflight is not None:
+            # 已有线程在请求相同 pickcode|ua，等待其完成后复用缓存
+            event.wait(timeout=15)
+            with _cache_lock:
+                cached = _DOWNLOAD_URL_CACHE.get(cache_key)
+                if cached and (_time.time() - cached["ts"]) < _DOWNLOAD_URL_TTL:
+                    return cached["url"]
+            # 等待超时或首个线程失败：降级为自行请求（不再合并）
+
         throttled = _apply_rate_limit("download_url", context)
         _start_ts = _time.time()
         try:
@@ -1517,6 +1827,13 @@ class Client115Service:
             _request_stats.record("download_url", _time.time() - _start_ts, throttled)
             logger.warning(f"[115] get_download_url_with_ua 失败 pickcode={pickcode}: {e}")
             return None
+        finally:
+            # O4: 唤醒等待线程（成功从缓存读取，失败则降级自行请求），并清理合并表
+            with _inflight_lock:
+                entry = _inflight_download.get(cache_key)
+                if entry:
+                    entry["event"].set()
+                    _inflight_download.pop(cache_key, None)
 
     @classmethod
     def invalidate_download_url_cache(cls, pickcode: str = None):
@@ -1563,6 +1880,8 @@ class Client115Service:
             # QPS 级限流统计（自上次读取以来的限流次数和总等待时间）
             "qps_throttle_count": qps_stats.get("count", 0),
             "qps_total_wait": round(qps_stats.get("total_wait", 0.0), 3),
+            # N6: 响应式限流（全局冷却）状态
+            "reactive_throttle": get_throttle_status(),
         }
 
     # ============ P0-3: 多端播放副本 ============
@@ -2119,6 +2438,76 @@ class Client115Service:
                 logger.warning(f"[115] upload_file 异常 {filename}: {type(e).__name__}: {str(e)[:200]}")
             return False
 
+    @classmethod
+    def _sha1_range_of_url(cls, url: str, start: int, length: int) -> str:
+        """N3: 计算远端 URL 指定字节范围的 SHA1（大写），用于 115 秒传 sign_check。
+
+        通过 HTTP Range 请求只读取需要的片段，不下载完整文件。
+        参考 MoviePilot p115strmhelper ali2115 calculate_sha1_range。
+        """
+        import httpx
+        end = start + length - 1
+        headers = {"Range": f"bytes={start}-{end}"}
+        with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=60.0) as r:
+            r.raise_for_status()
+            h = hashlib.sha1()
+            for chunk in r.iter_bytes(chunk_size=8192):
+                h.update(chunk)
+            return h.hexdigest().upper()
+
+    @classmethod
+    def instant_upload_from_url(cls, cookies: str, download_url: str, filename: str,
+                                file_size: int, full_sha1: str, dest_id: str = "0") -> dict:
+        """N3: 跨云秒传——用远端直链的 SHA1 尝试将文件秒传进 115（不下载字节）。
+
+        适用于任意可 Range 访问的云盘直链（阿里云盘分享直链等）。若 115 已存在相同
+        SHA1+size 的文件则秒传成功；否则 115 会通过 sign_check 要求对文件某个字节范围
+        二次 SHA1 校验，此时用 _sha1_range_of_url 对远端直链算该范围 SHA1 应答。
+
+        参数:
+            download_url: 源文件的可 Range 访问直链
+            filename: 目标文件名
+            file_size: 文件大小（字节）
+            full_sha1: 整文件 SHA1（大写十六进制，需调用方预先获得，如源云盘 API 提供）
+            dest_id: 115 目标目录 cid
+        返回:
+            {"status": "instant"|"need_upload"|"error", "message": str, "resp": <115 原始响应>}
+            status=instant 表示秒传成功；need_upload 表示 115 无此文件需实际上传（本方法不做完整上传）。
+        """
+        if not (download_url and filename and full_sha1 and file_size > 0):
+            return {"status": "error", "message": "参数不完整（需 url/filename/size/sha1）"}
+
+        client = cls.create_client_from_cookies(cookies)
+
+        def _sign_check_cb(sign_check: str):
+            # sign_check 形如 "起始-结束"，对该范围算 SHA1 应答
+            start_str, end_str = sign_check.split("-")
+            start, end = int(start_str), int(end_str)
+            return cls._sha1_range_of_url(download_url, start, end - start + 1)
+
+        _apply_rate_limit("upload")
+        try:
+            resp = client.upload_file_init(
+                filename=filename,
+                filesize=int(file_size),
+                filesha1=full_sha1.upper(),
+                pid=dest_id,
+                read_range_bytes_or_hash=_sign_check_cb,
+            )
+        except Exception as e:
+            logger.warning(f"[115] 跨云秒传异常 {filename}: {e}")
+            return {"status": "error", "message": str(e)}
+
+        if not isinstance(resp, dict):
+            return {"status": "error", "message": "115 返回格式异常", "resp": resp}
+        # status==2 表示秒传成功（文件已存在）；status==1 表示需要实际上传
+        status = resp.get("status") or (resp.get("data") or {}).get("status")
+        if status == 2 or resp.get("bak_num") or resp.get("already_exists"):
+            logger.info(f"[115] 跨云秒传成功: {filename}")
+            _mark_dir_written(dest_id)
+            return {"status": "instant", "message": "秒传成功", "resp": resp}
+        return {"status": "need_upload", "message": "115 无此文件，需实际上传（未执行）", "resp": resp}
+
     # ============ STRM 同步专用方法 ============
 
     # ===== S2: 115 导出目录树（export_dir 快速扫描） =====
@@ -2583,6 +2972,28 @@ class Client115Service:
             logger.warning(f"[115] recyclebin_clean 失败: {e}")
             return {"error": str(e)}
 
+    @classmethod
+    def recycle_bin_info(cls, cookies: str) -> dict:
+        """N4: 获取回收站占用信息（文件数/占用空间）。
+
+        返回 {"count": 文件数, "size": 字节数, "size_str": 可读大小}；失败返回 {"error": str}。
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.recyclebin_info()
+        except Exception as e:
+            logger.warning(f"[115] recyclebin_info 失败: {e}")
+            return {"error": str(e)}
+        data = resp.get("data", resp) if isinstance(resp, dict) else {}
+        # 115 rb 信息字段：rb_count / total_count / size 等，做兼容取值
+        count = data.get("count") or data.get("rb_count") or data.get("total_count") or 0
+        size = data.get("size") or data.get("total_size") or 0
+        try:
+            size = int(size)
+        except (TypeError, ValueError):
+            size = 0
+        return {"count": count, "size": size, "size_str": _human_size(size)}
+
     # ===== 离线下载（转存下载） =====
 
     @classmethod
@@ -2645,6 +3056,165 @@ class Client115Service:
         if has_error and success_count == 0:
             return {"error": error_msg, "state": False}
         return {"state": True, "results": results, "success_count": success_count, "total": len(clean_urls), "info_hashes": info_hashes}
+
+    # ===== #27: 视频多清晰度（虚拟多版本源） =====
+    # 清晰度编码映射（115 definition → 展示名），参考 qmediasync definition_list_new
+    _DEFINITION_NAMES = {
+        1: "标清", 2: "高清", 3: "超清", 4: "1080P", 5: "4K", 100: "原画",
+    }
+    # 视频清晰度列表缓存: pickcode -> {"ts": float, "defs": [...]}，TTL 30 分钟
+    _video_def_cache: dict = {}
+    _video_def_lock = threading.Lock()
+    _VIDEO_DEF_TTL = 1800
+
+    @classmethod
+    def get_video_definitions(cls, cookies: str, pickcode: str) -> list[dict]:
+        """#27: 获取视频的多清晰度播放地址列表（用于注入 Emby 多版本源）。
+
+        调用 115 fs_video（webapi.115.com/files/video），返回各清晰度的 m3u8 直链。
+        若视频从未转码，115 会自动推送转码（此时可能只返回部分清晰度）。
+        结果按 pickcode 缓存 30 分钟。
+
+        返回: [{"definition": int, "name": str, "url": str, "width": int, "height": int}]
+        失败或无转码返回空列表。
+        """
+        if not pickcode:
+            return []
+        with cls._video_def_lock:
+            cached = cls._video_def_cache.get(pickcode)
+            if cached and (_time.time() - cached["ts"]) < cls._VIDEO_DEF_TTL:
+                return cached["defs"]
+        _apply_rate_limit("video")
+        try:
+            client = cls.create_client_from_cookies(cookies)
+            resp = client.fs_video({"pickcode": pickcode})
+        except Exception as e:
+            logger.warning(f"[115] 获取视频清晰度失败 pickcode={pickcode}: {e}")
+            return []
+        if not isinstance(resp, dict):
+            return []
+        data = resp.get("data", resp) if isinstance(resp.get("data"), dict) else resp
+        video_url = data.get("video_url") or []
+        defs = []
+        for v in video_url:
+            if not isinstance(v, dict):
+                continue
+            url = v.get("url", "")
+            if not url:
+                continue
+            d = v.get("definition", 0)
+            defs.append({
+                "definition": d,
+                "name": v.get("title") or cls._DEFINITION_NAMES.get(d, f"清晰度{d}"),
+                "url": url,
+                "width": v.get("width", 0) or 0,
+                "height": v.get("height", 0) or 0,
+            })
+        # 按清晰度从高到低排序（原画 100 最高）
+        defs.sort(key=lambda x: x["definition"], reverse=True)
+        with cls._video_def_lock:
+            cls._video_def_cache[pickcode] = {"ts": _time.time(), "defs": defs}
+            # 清理过期
+            if len(cls._video_def_cache) > 200:
+                cutoff = _time.time() - cls._VIDEO_DEF_TTL
+                for k in [k for k, val in cls._video_def_cache.items() if val["ts"] < cutoff]:
+                    cls._video_def_cache.pop(k, None)
+        return defs
+
+    @classmethod
+    def clouddownload_torrent_info(cls, cookies: str, torrent_url: str = "", torrent_sha1: str = "") -> dict:
+        """N1: 解析磁力/种子的文件列表（供用户勾选后只下选中项）。
+
+        参考 LitePan 的 PrepareTorrent 流程：先解析出文件清单，用户选择后再提交。
+        torrent_url: 磁力链接（magnet:）或种子下载 url
+        torrent_sha1: 已上传种子的 sha1（二选一）
+        返回 {"info_hash", "torrent_name", "file_count", "files": [{"index","name","size"}]}；
+        失败返回 {"error": str}。
+        """
+        client = cls.create_client_from_cookies(cookies)
+        payload: dict = {}
+        if torrent_sha1:
+            payload["sha1"] = torrent_sha1
+        elif torrent_url:
+            payload["url"] = torrent_url
+        else:
+            return {"error": "缺少磁力链接或种子"}
+        try:
+            resp = client.clouddownload_torrent(payload)
+        except Exception as e:
+            logger.warning(f"[115] 解析种子文件列表失败: {e}")
+            return {"error": str(e)}
+        if not isinstance(resp, dict):
+            return {"error": "解析返回格式异常"}
+        # 115 返回 {state, info_hash, torrent_name, file_count, torrent_filelist_web:[{wanted,size,path}...]}
+        data = resp.get("data", resp)
+        if isinstance(data, dict) and data.get("state") is False:
+            return {"error": data.get("error_msg") or "解析失败"}
+        raw_files = data.get("torrent_filelist_web") or data.get("files") or []
+        files = []
+        for idx, it in enumerate(raw_files):
+            if not isinstance(it, dict):
+                continue
+            files.append({
+                "index": idx,
+                "name": str(it.get("path") or it.get("name") or ""),
+                "size": it.get("size") or 0,
+                "wanted": it.get("wanted", 1),
+            })
+        return {
+            "info_hash": data.get("info_hash", ""),
+            "torrent_name": data.get("torrent_name", ""),
+            "file_count": data.get("file_count", len(files)),
+            "files": files,
+        }
+
+    @classmethod
+    def clouddownload_add_bt(cls, cookies: str, info_hash: str, wanted_indexes: list[int],
+                             wp_path_id: str = "", torrent_sha1: str = "") -> dict:
+        """N1: 提交 BT 任务，仅下载 wanted_indexes 指定的文件。
+
+        info_hash: clouddownload_torrent_info 返回的 info_hash
+        wanted_indexes: 用户勾选的文件序号列表；空列表表示全部
+        wp_path_id: 保存目录 cid
+        torrent_sha1: 种子 sha1（部分场景需要）
+        返回 115 原始响应；失败返回 {"error": str}。
+        """
+        client = cls.create_client_from_cookies(cookies)
+        payload: dict = {"info_hash": info_hash}
+        if wanted_indexes:
+            # 115 用逗号分隔的 wanted 序号字符串
+            payload["wanted"] = ",".join(str(i) for i in wanted_indexes)
+        if wp_path_id:
+            payload["wp_path_id"] = wp_path_id
+        if torrent_sha1:
+            payload["sha1"] = torrent_sha1
+        try:
+            resp = client.clouddownload_task_add_bt(payload)
+        except Exception as e:
+            logger.warning(f"[115] 添加 BT 任务失败: {e}")
+            return {"error": str(e)}
+        if isinstance(resp, dict):
+            data = resp.get("data", resp)
+            if isinstance(data, dict) and data.get("state") is False:
+                return {"error": data.get("error_msg") or "添加失败"}
+            return {"state": True, "info_hash": data.get("info_hash", info_hash) if isinstance(data, dict) else info_hash}
+        return {"state": True, "info_hash": info_hash}
+
+    @classmethod
+    def clouddownload_quota(cls, cookies: str) -> dict:
+        """N1: 获取离线下载配额信息（剩余额度/总额度）。
+
+        返回 115 原始配额结构；失败返回 {"error": str}。
+        """
+        client = cls.create_client_from_cookies(cookies)
+        try:
+            resp = client.clouddownload_quota_info()
+        except Exception as e:
+            logger.warning(f"[115] 获取离线配额失败: {e}")
+            return {"error": str(e)}
+        if isinstance(resp, dict):
+            return resp.get("data", resp)
+        return {"error": "配额返回格式异常"}
 
     @classmethod
     def clouddownload_check_status(cls, cookies: str, info_hashes: list[str]) -> dict:
@@ -2872,6 +3442,61 @@ class Client115Service:
         except Exception as e:
             logger.warning(f"[115] 获取分享文件列表失败: {e}")
             return {"error": str(e)}
+
+    @classmethod
+    def share_dedup_probe(cls, cookies: str, share_url: str, cid: str = "0") -> dict:
+        """O12: 转存前秒传 dry-run 探测。
+
+        列出分享中的文件（含 sha1），逐个用 probe_by_sha1 探测本账号网盘是否已存在，
+        向用户展示"X/Y 个文件已在网盘（可秒传/可跳过）"，便于大批量转存前预估。
+        非破坏性：只读探测，不实际转存。
+
+        返回: {
+            "total": 文件总数,
+            "existing": 已存在文件数,
+            "missing": 不存在文件数,
+            "files": [{"name", "sha1", "size", "exists"}],
+        }
+        目录（无 sha1 条目）不计入探测，但会标注 is_dir。
+        """
+        snap = cls.share_snap(cookies, share_url, cid)
+        if isinstance(snap, dict) and snap.get("error"):
+            return {"error": snap["error"]}
+        # share_snap 返回 115 原始结构，文件列表在 data.list
+        data = snap.get("data") if isinstance(snap, dict) else None
+        items = []
+        if isinstance(data, dict):
+            items = data.get("list") or []
+        elif isinstance(snap, dict):
+            items = snap.get("list") or []
+
+        files: list[dict] = []
+        existing = 0
+        missing = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("n") or it.get("fn") or "")
+            # 目录条目无 sha1（115 用 fid 存在与否/‘c’ 字段区分），跳过探测
+            sha1 = str(it.get("sha") or it.get("sha1") or "")
+            is_dir = not sha1 and (it.get("c") is not None or it.get("fid") is None)
+            if is_dir or not sha1:
+                files.append({"name": name, "sha1": "", "size": it.get("s") or 0,
+                              "exists": False, "is_dir": True})
+                continue
+            exists = cls.probe_by_sha1(cookies, sha1).get("exists", False)
+            if exists:
+                existing += 1
+            else:
+                missing += 1
+            files.append({"name": name, "sha1": sha1, "size": it.get("s") or 0,
+                          "exists": exists, "is_dir": False})
+        return {
+            "total": existing + missing,
+            "existing": existing,
+            "missing": missing,
+            "files": files,
+        }
 
     @classmethod
     def share_receive(cls, cookies: str, share_url: str, file_ids: list[str], target_cid: str = "0") -> dict:

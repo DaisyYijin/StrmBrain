@@ -58,12 +58,21 @@ def _extract_item(payload: dict) -> dict | None:
     if not thumb and item.get("ImageTags"):
         thumb = item.get("ImageTags", {}).get("Primary", "") or ""
 
+    item_id = (
+        metadata.get("Id")
+        or item.get("Id")
+        or payload.get("ItemId")
+        or payload.get("Id")
+        or ""
+    )
+
     return {
         "name": name,
         "type": item_type,
         "year": year,
         "path": path,
         "overview": overview[:200] if overview else "",
+        "item_id": str(item_id) if item_id else "",
     }
 
 
@@ -264,6 +273,30 @@ async def emby_webhook(
         return JSONResponse(
             content={"code": 0, "message": "无法提取媒体信息", "data": None}
         )
+
+    # O7: 新入库的 STRM 媒体触发 Emby 原生媒体信息提取，使编码/分辨率徽章立即显示。
+    # 仅对视频类条目（Movie/Episode/Video）处理，且需开关启用（默认关闭，避免风控）。
+    try:
+        emby_notify_cfg = read_setting("emby_notify") or {}
+        if emby_notify_cfg.get("sync_media_info", False):
+            item_type = info.get("type", "")
+            item_path = info.get("path", "")
+            is_video = item_type in ("Movie", "Episode", "Video") or item_path.lower().endswith(".strm")
+            is_strm = item_path.lower().endswith(".strm")
+            if is_video and (is_strm or item_type in ("Movie", "Episode")):
+                from app.services.emby import EmbyClient
+                emby_cfg = read_setting("emby") or {}
+                _host = (emby_cfg.get("host", "") or "").strip()
+                _key = emby_cfg.get("api_key", "")
+                if _host and _key:
+                    client = EmbyClient(_host, _key)
+                    item_id = info.get("item_id", "")
+                    if not item_id and item_path:
+                        item_id = await client.get_item_id_by_path(item_path)
+                    if item_id or item_path:
+                        await client.sync_media_info_native(item_id=item_id, path=item_path)
+    except Exception as e:
+        logger.warning(f"[emby-webhook] O7 SyncMediaInfo 触发失败: {e}")
 
     # 发送通知
     try:

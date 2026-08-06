@@ -188,6 +188,59 @@ async def auth_check(user: dict = Depends(require_auth)):
     return ApiResponse(data={"username": user.get("sub", "")})
 
 
+@router.get("/setup/status", response_model=ApiResponse, dependencies=[Depends(require_auth)])
+async def setup_status():
+    """feature #82: 首启配置向导——汇总各步骤完成状态，供向导判断从哪步开始。
+
+    返回每步的 done 布尔 + 整体 completed。步骤：115 账号 / STRM 服务器 / Emby / TMDB。
+    """
+    from app.core.json_storage import read_accounts
+
+    accounts = read_accounts()
+    has_account = any(a.get("status") == 1 for a in accounts)
+
+    strm_cfg = read_setting("strm") or {}
+    has_strm = bool((strm_cfg.get("server_url") or "").strip())
+
+    emby_cfg = read_setting("emby") or {}
+    has_emby = bool((emby_cfg.get("host") or "").strip() and (emby_cfg.get("api_key") or "").strip())
+
+    tmdb_cfg = read_setting("tmdb") or {}
+    has_tmdb = bool((tmdb_cfg.get("api_key") or "").strip())
+
+    # 是否已手动完成/跳过向导（持久化标记）
+    wiz = read_setting("setup_wizard") or {}
+    dismissed = bool(wiz.get("dismissed", False))
+
+    steps = [
+        {"key": "account", "name": "登录 115 账号", "done": has_account, "required": True},
+        {"key": "strm", "name": "配置 STRM 服务器地址", "done": has_strm, "required": True},
+        {"key": "emby", "name": "配置 Emby（可选）", "done": has_emby, "required": False},
+        {"key": "tmdb", "name": "配置 TMDB（可选，用于整理）", "done": has_tmdb, "required": False},
+    ]
+    # 必填项全部完成即算 completed
+    completed = all(s["done"] for s in steps if s["required"])
+    return ApiResponse(data={
+        "steps": steps,
+        "completed": completed,
+        "dismissed": dismissed,
+        # 向导是否应展示：未完成必填 且 未手动关闭
+        "show_wizard": (not completed) and (not dismissed),
+    })
+
+
+class SetupWizardUpdate(BaseModel):
+    dismissed: bool = True
+
+
+@router.post("/setup/dismiss", response_model=ApiResponse, dependencies=[Depends(require_auth)])
+async def dismiss_setup_wizard(payload: SetupWizardUpdate):
+    """标记首启向导为已完成/已跳过（不再自动弹出）。"""
+    from app.core.json_storage import save_setting
+    save_setting("setup_wizard", {"dismissed": bool(payload.dismissed)})
+    return ApiResponse(message="已保存")
+
+
 @router.get("/logs", response_model=ApiResponse, dependencies=[Depends(require_auth)])
 async def get_logs(since: int = Query(default=0)):
     """
@@ -490,3 +543,49 @@ async def mcp_messages(request: Request):
     server = get_mcp_server()
     result = await server.handle_message(body)
     return result
+
+
+class McpSettingsUpdate(BaseModel):
+    """MCP Server 配置更新"""
+    enabled: bool = False
+
+
+@router.get("/mcp/settings", response_model=ApiResponse, dependencies=[Depends(require_auth)])
+async def get_mcp_settings(request: Request):
+    """G6: 获取 MCP Server 配置与状态。
+
+    返回 {enabled, sse_url, messages_url, tools:[{name,description}], tool_count}。
+    sse_url 基于当前请求 host 拼接，方便用户直接复制到 AI 客户端。
+    """
+    from app.services.mcp_server import get_mcp_server
+
+    cfg = read_setting("mcp_server") or {}
+    enabled = bool(cfg.get("enabled", False))
+
+    # 基于当前请求拼接可访问的 SSE 地址
+    base = str(request.base_url).rstrip("/")
+    tools = []
+    try:
+        tools = get_mcp_server().get_tools_meta()
+    except Exception as e:
+        logger.warning(f"[mcp] 获取工具列表失败: {e}")
+
+    return ApiResponse(data={
+        "enabled": enabled,
+        "sse_url": f"{base}/api/mcp/sse",
+        "messages_url": f"{base}/api/mcp/messages",
+        "tools": tools,
+        "tool_count": len(tools),
+    })
+
+
+@router.post("/mcp/settings", response_model=ApiResponse, dependencies=[Depends(require_auth)])
+async def save_mcp_settings(payload: McpSettingsUpdate):
+    """G6: 保存 MCP Server 配置（启用/禁用）。"""
+    from app.core.json_storage import save_setting
+
+    cfg = read_setting("mcp_server") or {}
+    cfg["enabled"] = bool(payload.enabled)
+    save_setting("mcp_server", cfg)
+    logger.info(f"[mcp] MCP Server {'已启用' if payload.enabled else '已禁用'}")
+    return ApiResponse(message="已保存", data={"enabled": bool(payload.enabled)})

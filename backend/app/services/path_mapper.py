@@ -18,6 +18,7 @@
 import hmac
 import hashlib
 import base64
+import re
 import time
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
@@ -29,7 +30,7 @@ from app.core.logbuffer import get_logger
 logger = get_logger("app.services.path_mapper")
 
 # 合法的操作类型
-_VALID_OPS = {"replace", "replaceAll", "prefix", "suffix"}
+_VALID_OPS = {"replace", "replaceAll", "prefix", "suffix", "regex"}
 
 # 合法的来源类型
 _VALID_SOURCES = {"local", "strm_rel", "strm_url", "all"}
@@ -87,6 +88,14 @@ class PathMapper:
                 # 替换全部匹配
                 if frm:
                     result = result.replace(frm, to)
+            elif op == "regex":
+                # O10: 正则替换（from 为正则，to 支持 \1 反向引用），
+                # 覆盖前缀/后缀/条件路径等复杂场景。正则无效则跳过该规则。
+                if frm:
+                    try:
+                        result = re.sub(frm, to, result)
+                    except re.error:
+                        logger.debug(f"[path_mapper] 跳过无效正则: {frm}")
             elif op == "prefix":
                 # 前缀追加
                 result = to + result

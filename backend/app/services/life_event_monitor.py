@@ -240,6 +240,18 @@ class LifeEventMonitor:
         if handled > 0:
             self._pending_changes += handled
             await self._maybe_refresh_emby()
+            # O11: 去抖动汇总通知——批量事件平息后只发一条汇总，避免逐条刷屏
+            try:
+                from app.services.notification_manager import get_notification_manager
+                await get_notification_manager().send_notification_debounced(
+                    "sync_complete",
+                    "115 生活事件增量同步",
+                    counters={"变更文件": handled},
+                    delay=60.0,
+                    group_key="life_event",
+                )
+            except Exception as e:
+                logger.debug(f"[life-event] 去抖动通知登记失败: {e}")
 
     async def _process_events(self, client, cookies: str, events: list) -> int:
         """

@@ -540,7 +540,7 @@ class SyncService:
                 time.sleep(_interval)
 
         # 检测已删除的文件
-        cls._cleanup_deleted_files(local_root, last_manifest, new_manifest, video_exts, image_exts, data_exts)
+        cls._cleanup_deleted_files(local_root, last_manifest, new_manifest, video_exts, image_exts, data_exts, result=result, strm_settings=strm_settings)
 
         # 保存更新后的清单
         cls._save_manifest(local_root, new_manifest)
@@ -1050,11 +1050,44 @@ class SyncService:
         video_exts: set,
         image_exts: set,
         data_exts: set,
+        result: Optional[dict] = None,
+        strm_settings: Optional[dict] = None,
     ):
-        """检测已从网盘删除的文件，清理本地对应的 STRM/图片/数据文件，并删除空目录。"""
+        """检测已从网盘删除的文件，清理本地对应的 STRM/图片/数据文件，并删除空目录。
+
+        O1 统计式防误删保护：
+          除"远端返回 0 结果"的极端保护（在调用方 incremental_sync 中）外，
+          此处再加一道删除比例阈值。当本次拟删除的文件数占上次清单的比例超过
+          阈值（默认 50%）时，极大概率是 115 API 返回了"部分结果"（列了一半就断），
+          而非文件真的被大批量删除。此时中止清理，保留本地文件不被误删。
+
+          阈值可通过 strm 设置的 max_delete_ratio 配置（0~100，单位%，
+          0 或 >=100 表示关闭该保护）。
+        """
         deleted_ids = set(last_manifest.keys()) - set(new_manifest.keys())
         if not deleted_ids:
             return
+
+        # O1: 删除比例阈值保护
+        last_count = len(last_manifest)
+        del_count = len(deleted_ids)
+        if last_count > 0:
+            try:
+                cfg = strm_settings if isinstance(strm_settings, dict) else cls._load_strm_settings()
+                max_ratio = float((cfg or {}).get("max_delete_ratio", 50) or 0)
+            except Exception:
+                max_ratio = 50.0
+            del_ratio = del_count / last_count * 100.0
+            # max_ratio<=0 或 >=100 视为关闭保护
+            if 0 < max_ratio < 100 and del_ratio > max_ratio:
+                msg = (
+                    f"拟删除 {del_count}/{last_count} 个文件（{del_ratio:.1f}%），"
+                    f"超过防误删阈值 {max_ratio:.0f}%，疑似 115 API 返回部分结果，已中止清理保护本地文件"
+                )
+                logger.warning(f"[sync] {msg}")
+                if isinstance(result, dict):
+                    result.setdefault("errors", []).append({"name": "", "error": msg})
+                return
 
         cleaned = 0
         affected_dirs: set = set()

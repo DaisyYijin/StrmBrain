@@ -41,6 +41,7 @@ _PUBLIC_PREFIXES = (
     "/api/events/sse", # SSE 实时事件推送（EventSource 无法设置 Authorization 头）
     "/api/mcp/sse",    # MCP Server SSE 流（同上）
     "/api/mcp/messages",  # MCP Server JSON-RPC 消息（SSE 客户端 POST 提交）
+    "/dav",            # WebDAV 只读访问（自带 HTTP Basic 认证，见 webdav_service）
 )
 
 
@@ -332,6 +333,16 @@ app.include_router(tasks_router)
 app.include_router(sync_del_router)
 app.include_router(automation_router)
 app.include_router(automation_webhook_router)
+
+
+# WebDAV 只读访问（G5）：支持 OPTIONS/PROPFIND/GET/HEAD 等方法，
+# 用通用路由注册（Starlette route 支持自定义方法集）。
+from app.services.webdav_service import handle_webdav as _handle_webdav
+
+_DAV_METHODS = ["GET", "HEAD", "OPTIONS", "PROPFIND", "PUT", "DELETE",
+                "MKCOL", "MOVE", "COPY", "PROPPATCH", "LOCK", "UNLOCK"]
+app.add_route("/dav", _handle_webdav, methods=_DAV_METHODS)
+app.add_route("/dav/{path:path}", _handle_webdav, methods=_DAV_METHODS)
 
 
 # 静态文件（前端）- 必须放在最后
