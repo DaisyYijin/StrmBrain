@@ -81,6 +81,8 @@ class LifeEventMonitor:
         self._last_data: Optional[dict] = None   # 增量游标
         self._last_check_ts: float = 0.0
         self._running = False
+        self._last_sync_ts: float = 0.0          # 上次触发增量同步的时间戳
+        self._sync_cooldown: float = 300.0       # 同步冷却时间（秒），避免频繁全量扫描
         self._stats = {
             "total_polls": 0,        # 轮询次数
             "events_seen": 0,        # 累计事件数
@@ -243,20 +245,32 @@ class LifeEventMonitor:
     async def _process_events(self, client, cookies: str, events: list) -> int:
         """
         解析并应用事件列表，返回实际处理（产生本地变更）的事件数。
-        client: p115client 实例（用于获取事件详情）
+        策略：批量收集事件，最后统一触发一次增量同步（带冷却），避免逐事件触发全量扫描。
         """
         handled = 0
-        # 事件可能批量到达，先合并同类事件避免重复处理
+        need_sync = False  # 本批次是否有事件需要触发增量同步
+
         for ev in events:
             try:
-                if await self._handle_event(client, cookies, ev):
+                result = await self._handle_event(client, cookies, ev)
+                if result:
                     handled += 1
+                # _handle_event 返回 "sync" 表示需要触发增量同步（但不在事件级别触发）
+                if result == "sync":
+                    need_sync = True
             except Exception as e:
                 logger.warning(f"[life-event] 处理事件异常 {ev}: {e}")
+
+        # 批量处理完所有事件后，统一触发一次增量同步（带冷却）
+        if need_sync:
+            synced = await self._trigger_batch_sync(cookies)
+            if synced > 0:
+                handled = max(handled, synced)
+
         return handled
 
-    async def _handle_event(self, client, cookies: str, ev: dict) -> bool:
-        """处理单条事件，返回是否产生本地变更。
+    async def _handle_event(self, client, cookies: str, ev: dict):
+        """处理单条事件，返回 "sync" 表示需要触发增量同步，True 表示已处理，False 表示跳过。
         ev: 生活事件条目（含 behavior_type / file_id / parent_id / file_name 等）"""
         behavior_type = ev.get("behavior_type") or ev.get("type") or ""
         if not behavior_type:
@@ -290,9 +304,32 @@ class LifeEventMonitor:
             f"file_id={file_id} parent_id={parent_id}"
         )
 
-        # 委托给同步服务应用变更（新增/删除/移动/重命名统一走增量同步对比）
-        changed = await self._apply_event_to_sync(cookies, file_id, file_name, parent_id, behavior_type, action)
-        return changed
+        # 删除事件：直接精确处理，无需全量扫描
+        if action == "deleted" and file_id:
+            from app.services.sync_service import SyncService
+            config = SyncService.load_schedule()
+            if config:
+                local_media_dir = config.get("local_media_dir", "")
+                if local_media_dir:
+                    return SyncService.remove_from_manifest_by_file_id(local_media_dir, file_id)
+            return False
+
+        # 其他事件（新增/移动/重命名/复制）：标记需要批量增量同步
+        return "sync"
+
+    async def _trigger_batch_sync(self, cookies: str) -> int:
+        """批量触发一次增量同步（带冷却保护）。
+        如果距离上次同步不足冷却时间，则跳过本次同步。
+        返回同步的文件数（0 表示跳过或无变更）。"""
+        now = time.time()
+        elapsed = now - self._last_sync_ts
+        if elapsed < self._sync_cooldown:
+            logger.info(f"[life-event] 增量同步冷却中（距上次 {elapsed:.0f}s/{self._sync_cooldown:.0f}s），跳过本次")
+            return 0
+
+        self._last_sync_ts = now
+        result = await self._apply_event_to_sync(cookies, "", "", "", "", "created")
+        return result if isinstance(result, int) else (1 if result else 0)
 
     async def _apply_event_to_sync(
         self,
