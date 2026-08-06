@@ -6135,6 +6135,15 @@
                                 <span>{{ clouddownload.savePath || '点击选择 115 网盘目录（留空=根目录）' }}</span>
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label>转存后自动整理<span class="help-tip">?<span class="tip-text">开启后，转存或离线下载完成时自动执行影视整理并生成 STRM 文件。关闭则仅下载不整理。</span></span></label>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <div class="tool-toggle" :class="{ 'toggle-on': clouddownload.autoOrganize }" @click="toggleAutoOrganize">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                                <span style="font-size:13px; color:#606266;">{{ clouddownload.autoOrganize ? '已启用' : '已关闭' }}</span>
+                            </div>
+                        </div>
                         <div style="display:flex; gap:8px; margin-top:8px;">
                             <button class="btn btn-primary btn-action" @click="addTask" :disabled="clouddownload.adding || clouddownload.snapping">
                                 {{ clouddownload.snapping ? '获取文件列表中...' : (clouddownload.adding ? '添加中...' : '添加') }}
@@ -6221,156 +6230,6 @@
                         正在自动整理转存的文件...
                     </div>
 
-                    <!-- 离线下载任务列表 -->
-                    <div class="card" style="margin-top:20px;">
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-                            <span style="font-weight:600; color:#303133;">离线下载任务</span>
-                            <button class="btn btn-default btn-sm" @click="loadDownloadTasks" :disabled="downloadTasks.loading" style="padding:2px 10px;">
-                                {{ downloadTasks.loading ? '加载中...' : '刷新' }}
-                            </button>
-                        </div>
-                        <div v-if="downloadTasks.tasks.length === 0 && !downloadTasks.loading" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">
-                            {{ downloadTasks.loaded ? '暂无离线下载任务' : '点击「刷新」加载任务列表' }}
-                        </div>
-                        <div style="overflow-x:auto;" v-if="downloadTasks.tasks.length > 0">
-                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                                <thead>
-                                    <tr style="border-bottom:2px solid #ebeef5;">
-                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">文件名</th>
-                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">状态</th>
-                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">进度</th>
-                                        <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">操作</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="t in downloadTasks.tasks" :key="t.info_hash || t.name" style="border-bottom:1px solid #ebeef5;">
-                                        <td style="padding:8px 12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="t.name">{{ t.name || '-' }}</td>
-                                        <td style="padding:8px 12px; white-space:nowrap;">
-                                            <span :style="{ color: t.status === 2 ? '#67c23a' : (t.status === 1 ? '#409eff' : '#e6a23c') }">{{ t.status_text || downloadTaskStatusText(t.status) }}</span>
-                                        </td>
-                                        <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ t.percentDone !== undefined ? t.percentDone + '%' : '-' }}</td>
-                                        <td style="padding:8px 12px; white-space:nowrap;">
-                                            <button v-if="t.info_hash" class="btn btn-default btn-sm" @click="showDownloadDetail(t.info_hash)" style="padding:2px 10px;">详情</button>
-                                            <span v-else style="color:#c0c4cc;">-</span>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- 离线下载任务详情弹窗 -->
-                    <div v-if="downloadDetail.show" class="modal-mask" @click.self="closeDownloadDetail">
-                        <div class="modal-box" style="max-width:640px;">
-                            <div class="modal-header">
-                                <span class="modal-title">离线下载任务详情</span>
-                                <button class="modal-close" @click="closeDownloadDetail">×</button>
-                            </div>
-                            <div v-if="downloadDetail.loading" style="text-align:center; padding:30px; color:#909399;">加载中...</div>
-                            <div v-else-if="downloadDetail.error" style="text-align:center; padding:30px; color:#f56c6c;">{{ downloadDetail.error }}</div>
-                            <div v-else-if="downloadDetail.task">
-                                <div v-if="downloadDetail.task.not_found" style="text-align:center; padding:30px; color:#909399;">未找到该任务（可能已被删除）</div>
-                                <div v-else>
-                                    <div style="display:grid; grid-template-columns:110px 1fr; gap:8px 16px; font-size:13px; margin-bottom:14px;">
-                                        <div style="color:#909399;">任务名称</div>
-                                        <div style="color:#303133; word-break:break-all;">{{ downloadDetail.task.name || '-' }}</div>
-                                        <div style="color:#909399;">状态</div>
-                                        <div style="color:#303133;">{{ downloadDetail.task.status_text || downloadTaskStatusText(downloadDetail.task.status) }}</div>
-                                        <div style="color:#909399;">进度</div>
-                                        <div style="color:#303133;">{{ downloadDetail.task.percent || 0 }}%</div>
-                                        <div style="color:#909399;">速度</div>
-                                        <div style="color:#303133;">{{ downloadDetail.task.speed || '0KB/s' }}</div>
-                                        <div style="color:#909399;">文件数</div>
-                                        <div style="color:#303133;">{{ downloadDetail.task.file_count || 0 }}</div>
-                                        <div v-if="downloadDetail.task.create_time" style="color:#909399;">创建时间</div>
-                                        <div v-if="downloadDetail.task.create_time" style="color:#303133;">{{ formatTaskTime(downloadDetail.task.create_time) }}</div>
-                                        <div v-if="downloadDetail.task.finish_time" style="color:#909399;">完成时间</div>
-                                        <div v-if="downloadDetail.task.finish_time" style="color:#303133;">{{ formatTaskTime(downloadDetail.task.finish_time) }}</div>
-                                    </div>
-                                    <div style="font-weight:600; color:#303133; margin-bottom:8px;">文件列表</div>
-                                    <div v-if="!downloadDetail.task.files || downloadDetail.task.files.length === 0" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">暂无文件明细</div>
-                                    <div v-else style="max-height:260px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
-                                        <div v-for="(f, i) in downloadDetailTaskFiles" :key="i" style="display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #f5f5f5; font-size:12px;">
-                                            <span style="flex:1; color:#606266; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="f.path || f.name">{{ f.name || '-' }}</span>
-                                            <span style="color:#909399; white-space:nowrap;">{{ formatDownloadSize(f.size) }}</span>
-                                        </div>
-                                    </div>
-                                    <div v-if="downloadDetail.task.files && downloadDetail.task.files.length > 20" style="display:flex; align-items:center; justify-content:center; gap:12px; margin-top:10px; font-size:13px; color:#606266;">
-                                        <button class="btn btn-default btn-sm" @click="downloadDetail.page = Math.max(1, downloadDetail.page - 1)" :disabled="downloadDetail.page <= 1" style="padding:2px 10px;">上一页</button>
-                                        <span>{{ downloadDetail.page }} / {{ downloadDetailTotalPages }}</span>
-                                        <button class="btn btn-default btn-sm" @click="downloadDetail.page = Math.min(downloadDetailTotalPages, downloadDetail.page + 1)" :disabled="downloadDetail.page >= downloadDetailTotalPages" style="padding:2px 10px;">下一页</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 分享管理 -->
-                    <div class="card" style="margin-top:20px;">
-                        <div class="card-title" style="margin-bottom:12px;">分享管理</div>
-                        <!-- 创建分享 -->
-                        <div style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid #ebeef5;">
-                            <div style="font-weight:600; color:#303133; margin-bottom:8px;">创建分享</div>
-                            <div class="form-group">
-                                <label>文件 ID（逗号分隔）<span class="help-tip">?<span class="tip-text">填写 115 网盘中要分享的文件/目录 ID，多个用英文逗号隔开</span></span></label>
-                                <input type="text" v-model="shareMgr.createFileIds" placeholder="如 123456789,987654321" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
-                            </div>
-                            <div style="display:flex; gap:8px;">
-                                <div class="form-group" style="flex:1;">
-                                    <label>有效期</label>
-                                    <select v-model="shareMgr.expireDays" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;">
-                                        <option :value="0">长期有效</option>
-                                        <option :value="1">1 天</option>
-                                        <option :value="7">7 天</option>
-                                        <option :value="30">30 天</option>
-                                    </select>
-                                </div>
-                                <div class="form-group" style="flex:1;">
-                                    <label>访问密码（可选）</label>
-                                    <input type="text" v-model="shareMgr.password" placeholder="留空=无密码" style="width:100%; min-height:36px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;" />
-                                </div>
-                            </div>
-                            <button class="btn btn-primary btn-sm" @click="createShare" :disabled="shareMgr.creating" style="padding:4px 14px;">
-                                {{ shareMgr.creating ? '创建中...' : '创建分享' }}
-                            </button>
-                        </div>
-                        <!-- 我的分享 -->
-                        <div>
-                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-                                <span style="font-weight:600; color:#303133;">我的分享（{{ shareMgr.shares.length }}）</span>
-                                <button class="btn btn-default btn-sm" @click="loadShares" :disabled="shareMgr.loading" style="padding:2px 10px;">{{ shareMgr.loading ? '加载中...' : '刷新' }}</button>
-                            </div>
-                            <div v-if="shareMgr.shares.length === 0 && !shareMgr.loading" style="color:#909399; font-size:13px; text-align:center; padding:12px 0;">暂无分享记录，点击「刷新」加载</div>
-                            <div style="overflow-x:auto;" v-if="shareMgr.shares.length > 0">
-                                <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                                    <thead>
-                                        <tr style="border-bottom:2px solid #ebeef5;">
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">分享码</th>
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500;">名称</th>
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">文件数</th>
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">创建时间</th>
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">过期时间</th>
-                                            <th style="padding:8px 12px; text-align:left; color:#909399; font-weight:500; white-space:nowrap;">操作</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr v-for="s in shareMgr.shares" :key="s.share_code" style="border-bottom:1px solid #ebeef5;">
-                                            <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ s.share_code || '-' }}</td>
-                                            <td style="padding:8px 12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="s.name">{{ s.name || '-' }}</td>
-                                            <td style="padding:8px 12px; white-space:nowrap; color:#606266;">{{ s.file_count }}</td>
-                                            <td style="padding:8px 12px; white-space:nowrap; color:#909399;">{{ formatShareTime(s.create_time) }}</td>
-                                            <td style="padding:8px 12px; white-space:nowrap; color:#909399;">{{ formatShareTime(s.expire_time) }}</td>
-                                            <td style="padding:8px 12px; white-space:nowrap;">
-                                                <button class="btn btn-danger btn-sm" @click="cancelShare(s.share_code)" :disabled="shareMgr.cancelling === s.share_code" style="padding:2px 10px;">
-                                                    {{ shareMgr.cancelling === s.share_code ? '取消中...' : '取消分享' }}
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- ===== 实时日志 ===== -->
@@ -9334,7 +9193,7 @@ av:
                         api('/api/clouddownload/config/save', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ save_cid: clouddownload.saveCid, save_path: clouddownload.savePath }),
+                            body: JSON.stringify({ save_cid: clouddownload.saveCid, save_path: clouddownload.savePath, auto_organize: clouddownload.autoOrganize }),
                         }).catch(() => {});
                     } else if (dirPicker.target === 'strmscrape_source') {
                         strmScrape.sourceCid = dirPicker.cid;
@@ -12526,6 +12385,7 @@ av:
                     torrentParsing: false,
                     torrentAdding: false,
                     quota: null,              // 离线配额信息
+                    autoOrganize: true,       // 转存后自动整理（默认启用）
                     autoOrganizing: false,  // 自动整理进行中
                     // 离线下载/转存 等待检测
                     pollingDownload: false,  // 正在等待检测
@@ -12536,58 +12396,6 @@ av:
                     downloadCompleted: 0,    // 已完成任务数
                     pollTimer: null,         // 定时器
                 });
-
-                // G3: 离线下载任务列表 + 详情
-                const downloadTasks = reactive({ loading: false, tasks: [], loaded: false });
-                const downloadDetail = reactive({
-                    show: false, loading: false, task: null, infoHash: '', error: '', page: 1,
-                });
-                const DETAIL_PAGE_SIZE = 20;
-                const downloadDetailTaskFiles = computed(() => {
-                    const files = (downloadDetail.task && downloadDetail.task.files) || [];
-                    const start = (downloadDetail.page - 1) * DETAIL_PAGE_SIZE;
-                    return files.slice(start, start + DETAIL_PAGE_SIZE);
-                });
-                const downloadDetailTotalPages = computed(() => {
-                    const files = (downloadDetail.task && downloadDetail.task.files) || [];
-                    return Math.max(1, Math.ceil(files.length / DETAIL_PAGE_SIZE));
-                });
-
-                // G4: 分享管理（简化方案：文本输入 file_id 列表）
-                const shareMgr = reactive({
-                    loading: false,       // 我的分享列表加载中
-                    shares: [],           // 我的分享列表
-                    creating: false,      // 创建分享中
-                    createFileIds: '',    // 逗号分隔的文件/目录 id（简化方案用文本输入）
-                    password: '',         // 访问密码
-                    expireDays: 0,        // 有效期天数（0=长期）
-                    cancelling: '',       // 正在取消的 share_code
-                });
-
-                const downloadTaskStatusText = (s) => {
-                    if (s === 2) return '已完成';
-                    if (s === 1) return '进行中';
-                    if (s === 0) return '等待中';
-                    if (s === 3) return '失败';
-                    return '未知';
-                };
-
-                const formatTaskTime = (v) => {
-                    if (v === undefined || v === null || v === '') return '-';
-                    if (typeof v === 'number') {
-                        const t = v < 1e12 ? v * 1000 : v;
-                        const d = new Date(t);
-                        if (isNaN(d.getTime())) return String(v);
-                        const p = (n) => String(n).padStart(2, '0');
-                        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-                    }
-                    return String(v);
-                };
-
-                const formatShareTime = (v) => {
-                    if (v === 0 || v === '0' || v === undefined || v === null || v === '') return '长期有效';
-                    return formatTaskTime(v);
-                };
 
                 const formatDownloadSize = (bytes) => {
                     if (!bytes || bytes <= 0) return '-';
@@ -12974,147 +12782,6 @@ av:
                     clouddownload.pollingDownload = false;
                 };
 
-                // ===== G3: 离线下载任务列表 / 详情 =====
-                const loadDownloadTasks = async () => {
-                    const accId = getDefaultAccountId();
-                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
-                    downloadTasks.loading = true;
-                    try {
-                        const res = await api('/api/clouddownload/list', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ account_id: accId, page: 1, page_size: 50 }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            downloadTasks.tasks = Array.isArray(data.data.tasks) ? data.data.tasks : [];
-                            downloadTasks.loaded = true;
-                        } else {
-                            showToast(data.message || '获取任务列表失败', 4000);
-                        }
-                    } catch (e) {
-                        showToast(e._network ? e.message : '获取任务列表失败', 4000);
-                    }
-                    downloadTasks.loading = false;
-                };
-
-                const showDownloadDetail = async (ih) => {
-                    downloadDetail.infoHash = ih;
-                    downloadDetail.show = true;
-                    downloadDetail.loading = true;
-                    downloadDetail.error = '';
-                    downloadDetail.task = null;
-                    downloadDetail.page = 1;
-                    const accId = getDefaultAccountId();
-                    if (!accId) {
-                        downloadDetail.loading = false;
-                        downloadDetail.error = '未找到有效 115 账号';
-                        return;
-                    }
-                    try {
-                        const res = await api('/api/clouddownload/detail', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ account_id: accId, info_hash: ih }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0 && data.data && data.data.task) {
-                            downloadDetail.task = data.data.task;
-                        } else {
-                            downloadDetail.error = data.message || '获取详情失败';
-                        }
-                    } catch (e) {
-                        downloadDetail.error = e._network ? e.message : '获取详情失败';
-                    }
-                    downloadDetail.loading = false;
-                };
-
-                const closeDownloadDetail = () => {
-                    downloadDetail.show = false;
-                    downloadDetail.task = null;
-                    downloadDetail.error = '';
-                };
-
-                // ===== G4: 分享管理 =====
-                const loadShares = async () => {
-                    const accId = getDefaultAccountId();
-                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
-                    shareMgr.loading = true;
-                    try {
-                        const res = await api('/api/clouddownload/share/list', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ account_id: accId, page: 1, page_size: 50 }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            shareMgr.shares = Array.isArray(data.data.shares) ? data.data.shares : [];
-                        } else {
-                            showToast(data.message || '获取分享列表失败', 4000);
-                        }
-                    } catch (e) {
-                        showToast(e._network ? e.message : '获取分享列表失败', 4000);
-                    }
-                    shareMgr.loading = false;
-                };
-
-                const createShare = async () => {
-                    const ids = String(shareMgr.createFileIds || '').split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
-                    if (ids.length === 0) { showToast('请输入要分享的文件 ID（逗号分隔）'); return; }
-                    const accId = getDefaultAccountId();
-                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
-                    shareMgr.creating = true;
-                    try {
-                        const res = await api('/api/clouddownload/share/create', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                account_id: accId,
-                                file_ids: ids,
-                                password: String(shareMgr.password || '').trim(),
-                                expire_days: Number(shareMgr.expireDays) || 0,
-                            }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('分享创建成功');
-                            shareMgr.createFileIds = '';
-                            shareMgr.password = '';
-                            shareMgr.expireDays = 0;
-                            loadShares();
-                        } else {
-                            showToast(data.message || '创建分享失败', 4000);
-                        }
-                    } catch (e) {
-                        showToast(e._network ? e.message : '创建分享失败', 4000);
-                    }
-                    shareMgr.creating = false;
-                };
-
-                const cancelShare = async (code) => {
-                    if (!confirm(`确定取消分享 ${code}？取消后该分享链接将失效。`)) return;
-                    const accId = getDefaultAccountId();
-                    if (!accId) { showToast('请先添加有效的 115 账号'); return; }
-                    shareMgr.cancelling = code;
-                    try {
-                        const res = await api('/api/clouddownload/share/cancel', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ account_id: accId, share_code: code }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('已取消分享');
-                            loadShares();
-                        } else {
-                            showToast(data.message || '取消分享失败', 4000);
-                        }
-                    } catch (e) {
-                        showToast(e._network ? e.message : '取消分享失败', 4000);
-                    }
-                    shareMgr.cancelling = '';
-                };
-
                 // 离线下载状态检测：快速轮询直到完成或超时
                 const pollDownloadStatus = async () => {
                     if (!clouddownload.pollingDownload || clouddownload.downloadInfoHashes.length === 0) {
@@ -13182,6 +12849,7 @@ av:
 
                 // 转存成功后自动调用影视整理
                 const triggerAutoOrganize = async () => {
+                    if (!clouddownload.autoOrganize) return;
                     const accId = getDefaultAccountId();
                     if (!accId) {
                         showToast('自动整理跳过：未找到有效 115 账号');
@@ -13275,8 +12943,24 @@ av:
                         if (data.code === 0 && data.data) {
                             if (data.data.save_cid) clouddownload.saveCid = data.data.save_cid;
                             if (data.data.save_path) clouddownload.savePath = data.data.save_path;
+                            if (data.data.auto_organize !== undefined) clouddownload.autoOrganize = data.data.auto_organize;
                         }
                     } catch (e) { /* 静默忽略 */ }
+                };
+
+                // 切换转存后自动整理开关
+                const toggleAutoOrganize = () => {
+                    clouddownload.autoOrganize = !clouddownload.autoOrganize;
+                    api('/api/clouddownload/config/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            save_cid: clouddownload.saveCid,
+                            save_path: clouddownload.savePath,
+                            auto_organize: clouddownload.autoOrganize,
+                        }),
+                    }).catch(() => {});
+                    showToast(clouddownload.autoOrganize ? '已启用转存后自动整理' : '已关闭转存后自动整理');
                 };
 
                 return {
@@ -13386,15 +13070,8 @@ av:
                     formatDownloadSize,
                     toggleAllShareFiles, toggleShareSelect, receiveShare, probeShareDedup,
                     parseTorrent, toggleAllTorrentFiles, submitTorrent, loadQuota,
-                    triggerAutoOrganize, loadClouddownloadConfig,
+                    triggerAutoOrganize, loadClouddownloadConfig, toggleAutoOrganize,
                     startDownloadPolling, stopDownloadPolling, startTransferWait,
-                    // 转存下载 - G3 任务明细
-                    downloadTasks, downloadDetail,
-                    downloadDetailTaskFiles, downloadDetailTotalPages,
-                    loadDownloadTasks, showDownloadDetail, closeDownloadDetail,
-                    downloadTaskStatusText, formatTaskTime,
-                    // 转存下载 - G4 分享管理
-                    shareMgr, loadShares, createShare, cancelShare, formatShareTime,
                 };
             }
         }).mount('#app');

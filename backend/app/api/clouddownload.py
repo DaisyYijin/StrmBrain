@@ -419,6 +419,7 @@ async def task_detail(payload: TaskDetailRequest):
 class SaveDirConfigRequest(BaseModel):
     save_cid: str = ""
     save_path: str = ""
+    auto_organize: bool = True
 
 
 @router.post("/config/save", response_model=ApiResponse)
@@ -427,6 +428,7 @@ async def save_dir_config(payload: SaveDirConfigRequest):
     save_setting("clouddownload_config", {
         "save_cid": payload.save_cid,
         "save_path": payload.save_path,
+        "auto_organize": payload.auto_organize,
     })
     return ApiResponse(data={"saved": True})
 
@@ -435,7 +437,10 @@ async def save_dir_config(payload: SaveDirConfigRequest):
 async def load_dir_config():
     """加载转存下载的目录配置"""
     config = read_setting("clouddownload_config")
-    return ApiResponse(data=config if config else {"save_cid": "", "save_path": ""})
+    if config:
+        config.setdefault("auto_organize", True)
+        return ApiResponse(data=config)
+    return ApiResponse(data={"save_cid": "", "save_path": "", "auto_organize": True})
 
 
 # ===== 分享链接转存 =====
