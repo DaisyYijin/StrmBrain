@@ -24,7 +24,7 @@ import time
 from typing import Optional
 
 from app.config import DATA_DIR
-from app.core.json_storage import read_setting, save_setting
+from app.core.json_storage import read_setting
 from app.core.logbuffer import get_logger
 from app.services.client_115 import (
     Client115Service,
@@ -166,11 +166,6 @@ class MediasyncDelService:
             if item is self._SENTINEL:
                 q.task_done()
                 break
-            # 级联删除开关：禁用时事件出队但不处理（防止队列堆积）
-            if not self.get_enabled():
-                logger.info("[mediasyncdel] 级联删除已禁用，跳过删除事件")
-                q.task_done()
-                continue
             try:
                 self._process_delete_event(item)
             except Exception as e:
@@ -181,31 +176,8 @@ class MediasyncDelService:
     # ===== 配置开关 =====
 
     def get_enabled(self) -> bool:
-        """读取级联删除启用开关（settings.json 的 mediasyncdel.enabled，默认 True）。"""
-        with self._config_lock:
-            try:
-                cfg = read_setting("mediasyncdel") or {}
-                return bool(cfg.get("enabled", True))
-            except Exception as e:
-                logger.warning(f"[mediasyncdel] 读取级联删除开关异常: {e}")
-                return True
-
-    def set_enabled(self, enabled: bool) -> bool:
-        """写入级联删除启用开关（settings.json 的 mediasyncdel.enabled）。"""
-        enabled = bool(enabled)
-        with self._config_lock:
-            try:
-                cfg = read_setting("mediasyncdel") or {}
-                cfg["enabled"] = enabled
-                ok = save_setting("mediasyncdel", cfg)
-                if ok:
-                    logger.info(f"[mediasyncdel] 级联删除已{'启用' if enabled else '禁用'}")
-                else:
-                    logger.warning("[mediasyncdel] 保存级联删除开关失败")
-                return ok
-            except Exception as e:
-                logger.warning(f"[mediasyncdel] 设置级联删除开关异常: {e}")
-                return False
+        """级联删除始终启用，默认开启，不可在页面中关闭。"""
+        return True
 
     # ===== 队列状态 =====
 

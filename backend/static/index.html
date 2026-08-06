@@ -4735,35 +4735,6 @@
                             </div>
                         </div>
 
-                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.sync_del.enabled, 'tool-disabled': !toolsState.sync_del.enabled }">
-                            <div class="tool-card-header">
-                                <div class="tool-card-title">
-                                    <span class="tool-bar" v-if="toolsState.sync_del.enabled"></span>
-                                    媒体库删除级联
-                                </div>
-                                <div class="tool-card-status">
-                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.sync_del.enabled, 'dot-off': !toolsState.sync_del.enabled }"></span>
-                                    <span :style="{ color: toolsState.sync_del.enabled ? '#67c23a' : '#909399' }">{{ toolsState.sync_del.enabled ? '已启用' : '未启用' }}</span>
-                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.sync_del.enabled }" @click="toggleTool('sync_del')">
-                                        <span class="toggle-knob"></span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="tool-card-desc">
-                                Emby 中删除媒体时级联删除 115 网盘对应文件，防误删：仅匹配到网盘文件才删除。
-                            </div>
-                            <div class="tool-card-footer">
-                                <button class="tool-btn tool-btn-config" @click="openToolConfig('sync_del')">
-                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z" fill="currentColor"/></svg>
-                                    删除管控
-                                </button>
-                                <button class="tool-btn tool-btn-run" @click="openToolConfig('sync_del')">
-                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-                                    打开面板
-                                </button>
-                            </div>
-                        </div>
-
                         <!-- 工具13：自动化规则 -->
                         <div class="tool-card" :class="{ 'tool-enabled': toolsState.automation.enabled, 'tool-disabled': !toolsState.automation.enabled }">
                             <div class="tool-card-header">
@@ -5530,64 +5501,6 @@
                                 <span style="font-size:12px; color:#909399;">队列 {{ q.queue_size || 0 }}/{{ q.queue_maxsize || '-' }}</span>
                                 <span v-if="q.current_task && q.current_task.name" style="flex:1; font-size:12px; color:#606266; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right;" :title="q.current_task.name">当前：{{ q.current_task.name }}</span>
                             </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 媒体库删除级联管控弹窗 -->
-                <div v-if="toolConfig.show === 'sync_del'" class="modal-mask" @click.self="toolConfig.show = ''">
-                    <div class="modal-box" style="max-width:640px;">
-                        <div class="modal-header">
-                            <span class="modal-title">媒体库删除级联管控</span>
-                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
-                        </div>
-
-                        <!-- 启用开关 -->
-                        <div class="form-group" style="display:flex; align-items:center; justify-content:space-between; padding:4px 0;">
-                            <div>
-                                <div style="font-size:14px; font-weight:600; color:#303133;">启用级联删除</div>
-                                <div style="font-size:12px; color:#909399; margin-top:2px;">Emby 中删除媒体时，级联删除 115 网盘对应文件（防误删：仅匹配到网盘文件才删除）</div>
-                            </div>
-                            <div class="tool-toggle" :class="{ 'toggle-on': syncDelState.enabled }" @click="toggleSyncDel" style="flex-shrink:0;" :style="{ opacity: syncDelState.toggling ? 0.6 : 1 }">
-                                <span class="toggle-knob"></span>
-                            </div>
-                        </div>
-
-                        <!-- 队列/历史统计 -->
-                        <div style="display:flex; gap:8px; margin-bottom:14px;">
-                            <div style="flex:1; background:#f5f7fa; border-radius:8px; padding:10px 14px; text-align:center;">
-                                <div style="font-size:20px; font-weight:700; color:#409eff;">{{ syncDelState.queueSize }}</div>
-                                <div style="font-size:12px; color:#909399; margin-top:2px;">待处理事件（队列）</div>
-                            </div>
-                            <div style="flex:1; background:#f5f7fa; border-radius:8px; padding:10px 14px; text-align:center;">
-                                <div style="font-size:20px; font-weight:700; color:#67c23a;">{{ syncDelState.historyCount }}</div>
-                                <div style="font-size:12px; color:#909399; margin-top:2px;">删除历史记录</div>
-                            </div>
-                        </div>
-
-                        <!-- 历史列表 -->
-                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
-                            <span style="font-size:13px; font-weight:600; color:#303133;">删除历史（最近 {{ syncDelState.records.length }} 条）</span>
-                            <button class="btn btn-danger btn-sm" @click="clearSyncDelHistory" :disabled="syncDelState.clearing || syncDelState.records.length === 0" style="padding:2px 12px; font-size:12px;">{{ syncDelState.clearing ? '清空中...' : '清空历史' }}</button>
-                        </div>
-                        <div style="max-height:280px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
-                            <div v-if="syncDelState.loading" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">加载中...</div>
-                            <div v-else-if="syncDelState.records.length === 0" style="color:#909399; font-size:13px; padding:20px 0; text-align:center;">暂无删除历史</div>
-                            <div v-else>
-                                <div v-for="(rec, i) in syncDelState.records" :key="i" style="display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid #f2f3f5; font-size:12px;">
-                                    <span :style="{
-                                        padding:'1px 8px', borderRadius:'10px', fontSize:'11px', flexShrink:0,
-                                        color: rec.result === 'success' ? '#67c23a' : (rec.result === 'not_found' ? '#e6a23c' : '#f56c6c'),
-                                        background: rec.result === 'success' ? 'rgba(103,194,58,0.1)' : (rec.result === 'not_found' ? 'rgba(230,162,60,0.1)' : 'rgba(245,108,108,0.1)'),
-                                    }">{{ rec.result === 'success' ? '成功' : (rec.result === 'not_found' ? '未匹配' : '失败') }}</span>
-                                    <span style="color:#909399; flexShrink:0; white-space:nowrap;">{{ rec.time }}</span>
-                                    <span style="flex:1; color:#303133; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="rec.path">{{ rec.path }}</span>
-                                    <span v-if="rec.message" style="flex-shrink:0; color:#c0c4cc; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="rec.message">{{ rec.message }}</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div style="font-size:12px; color:#909399; margin-top:10px; line-height:1.6;">
-                            说明：Emby 中删除媒体（deep.delete / item.removed 等）时，后台 worker 将匹配 115 网盘对应文件并移入回收站。仅在网盘中精确匹配到文件时才执行删除，未匹配到会标记为「未匹配」并跳过，防止误删。
                         </div>
                     </div>
                 </div>
@@ -8243,7 +8156,6 @@ av:
                     watcher:      { enabled: localStorage.getItem('strmhub_tool_watcher') === '1' },
                     upload_queue: { enabled: localStorage.getItem('strmhub_tool_upload_queue') === '1' },
                     task_console:{ enabled: localStorage.getItem('strmhub_tool_task_console') === '1' },
-                    sync_del:    { enabled: localStorage.getItem('strmhub_tool_sync_del') === '1' },
                     automation:  { enabled: localStorage.getItem('strmhub_tool_automation') === '1' },
                     checkin:     { enabled: localStorage.getItem('strmhub_tool_checkin') === '1' },
                     share_review:{ enabled: localStorage.getItem('strmhub_tool_share_review') === '1' },
@@ -8394,17 +8306,6 @@ av:
                     paused: false,
                     pausing: false,
                     resuming: false,
-                });
-
-                // 媒体库删除级联管控
-                const syncDelState = reactive({
-                    loading: false,
-                    enabled: true,
-                    queueSize: 0,
-                    historyCount: 0,
-                    records: [],
-                    toggling: false,
-                    clearing: false,
                 });
 
                 // 自动化规则（G7）
@@ -11433,81 +11334,6 @@ av:
                     taskConsole.resuming = false;
                 };
 
-                // ============ 特色工具 - 媒体库删除级联管控 ============
-
-                // 加载开关状态 + 队列/历史统计 + 删除历史列表
-                const loadSyncDel = async () => {
-                    syncDelState.loading = true;
-                    try {
-                        const [statusRes, historyRes] = await Promise.all([
-                            api('/api/sync-del/status'),
-                            api('/api/sync-del/history?limit=50'),
-                        ]);
-                        const status = await statusRes.json();
-                        if (status && typeof status.enabled === 'boolean') {
-                            syncDelState.enabled = status.enabled;
-                            syncDelState.queueSize = status.queue_size || 0;
-                            syncDelState.historyCount = status.history_count || 0;
-                        }
-                        const history = await historyRes.json();
-                        if (history && Array.isArray(history.records)) {
-                            syncDelState.records = history.records;
-                        }
-                    } catch (e) {
-                        console.warn('[app] 加载删除级联管控失败:', e);
-                        showToast('加载删除级联管控失败');
-                    }
-                    syncDelState.loading = false;
-                };
-
-                // 启用/禁用级联删除（乐观更新，失败回滚）
-                const toggleSyncDel = async () => {
-                    if (syncDelState.toggling) return;
-                    const prev = syncDelState.enabled;
-                    const next = !prev;
-                    syncDelState.enabled = next; // 乐观更新
-                    syncDelState.toggling = true;
-                    try {
-                        const res = await api('/api/sync-del/toggle', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ enabled: next }),
-                        });
-                        const data = await res.json();
-                        if (data && typeof data.enabled === 'boolean') {
-                            syncDelState.enabled = data.enabled;
-                        } else {
-                            throw new Error(data && data.message ? data.message : '未知错误');
-                        }
-                        showToast(next ? '已启用级联删除' : '已禁用级联删除');
-                    } catch (e) {
-                        syncDelState.enabled = prev; // 失败回滚
-                        showToast(e && e.message ? e.message : '切换失败');
-                    }
-                    syncDelState.toggling = false;
-                };
-
-                // 清空删除历史（confirm 后 DELETE）
-                const clearSyncDelHistory = async () => {
-                    if (syncDelState.clearing) return;
-                    if (!confirm('确定清空全部删除历史记录？此操作不可恢复。')) return;
-                    syncDelState.clearing = true;
-                    try {
-                        const res = await api('/api/sync-del/history', { method: 'DELETE' });
-                        const data = await res.json();
-                        if (data && data.cleared) {
-                            syncDelState.records = [];
-                            syncDelState.historyCount = 0;
-                            showToast('删除历史已清空');
-                        } else {
-                            showToast(data && data.message ? data.message : '清空失败');
-                        }
-                    } catch (e) {
-                        showToast('清空失败');
-                    }
-                    syncDelState.clearing = false;
-                };
-
                 // ============ 自动化规则（G7） ============
                 const actionLabel = (type) => {
                     const found = autoRule.actions.find(a => a.type === type);
@@ -12257,7 +12083,6 @@ av:
                     if (key === 'watcher') loadWatcher();
                     else if (key === 'upload_queue') loadUploadQueue();
                     else if (key === 'task_console') loadTasks();
-                    else if (key === 'sync_del') loadSyncDel();
                     else if (key === 'automation') loadAutoRules();
                     else if (key === 'checkin') loadCheckinSettings();
                     else if (key === 'share_review') loadShareReview();
@@ -13047,7 +12872,6 @@ av:
                     // 特色工具
                     toolsState, toolConfig,
                     toggleTool, openToolConfig, runToolNow,
-                    syncDelState, loadSyncDel, toggleSyncDel, clearSyncDelHistory,
                     autoRule, actionLabel, loadAutoRules, autoRuleAdd, autoRuleRun, autoRuleToggle, autoRuleDel,
                     checkinTool, loadCheckinSettings, saveCheckinSettings, runCheckinNow,
                     mcpTool, loadMcpSettings, saveMcpSettings, toggleMcpEnabled, copyMcpUrl,
