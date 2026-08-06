@@ -2382,6 +2382,51 @@
                                 </div>
                             </div>
 
+                            <!-- 系统信息 + 115 账号详情 -->
+                            <div class="two-col" style="margin-bottom:14px;">
+                                <!-- 系统信息 -->
+                                <div class="status-card" v-if="dash.system">
+                                    <div class="status-head">
+                                        <div class="server-icon" style="background:#f0f9eb;color:#67c23a;">
+                                            <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4V6zm0 5h16v6H4v-6z" fill="currentColor"/></svg>
+                                        </div>
+                                        <span>系统信息</span>
+                                    </div>
+                                    <div class="status-body">
+                                        <div class="kv"><span>操作系统</span><span class="v">{{ dash.system.os }}</span></div>
+                                        <div class="kv"><span>Python</span><span class="v">{{ dash.system.python }}</span></div>
+                                        <div class="kv"><span>CPU 核心</span><span class="v">{{ dash.system.cpu_count }} 核</span></div>
+                                        <div class="kv" v-if="dash.system.cpu_percent !== undefined"><span>CPU 使用率</span><span class="v">{{ dash.system.cpu_percent }}%</span></div>
+                                        <div class="kv" v-if="dash.system.mem_total !== undefined">
+                                            <span>内存</span>
+                                            <span class="v">{{ formatSize(dash.system.mem_used) }} / {{ formatSize(dash.system.mem_total) }}（{{ dash.system.mem_percent }}%）</span>
+                                        </div>
+                                        <div class="kv" v-if="dash.system.disk_total !== undefined">
+                                            <span>磁盘</span>
+                                            <span class="v">{{ formatSize(dash.system.disk_used) }} / {{ formatSize(dash.system.disk_total) }}（{{ dash.system.disk_percent }}%）</span>
+                                        </div>
+                                        <div class="kv"><span>运行时长</span><span class="v">{{ formatUptime(dash.system.uptime) }}</span></div>
+                                    </div>
+                                </div>
+                                <!-- 多账号列表 -->
+                                <div class="status-card" v-if="dash.accounts && dash.accounts.length > 1">
+                                    <div class="status-head">
+                                        <div class="server-icon" style="background:#f4f0ff;color:#8e44ad;">
+                                            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" fill="currentColor"/></svg>
+                                        </div>
+                                        <span>所有账号（{{ dash.accounts.length }}）</span>
+                                    </div>
+                                    <div class="status-body">
+                                        <div v-for="(a, i) in dash.accounts" :key="a.id || i" style="display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid #f5f5f5; font-size:12px;">
+                                            <img v-if="a.avatar_url" :src="a.avatar_url" style="width:24px; height:24px; border-radius:50%;" @error="$event.target.style.display='none'">
+                                            <span style="flex:1; color:#303133; font-weight:500;">{{ a.name }}</span>
+                                            <span style="color:#909399;">{{ formatSize(a.space_used) }} / {{ formatSize(a.space_total) }}</span>
+                                            <span v-if="a.vip_level" style="color:#e6a23c; font-size:11px;">VIP{{ a.vip_level }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
                             <!-- 媒体库卡片 -->
                             <div class="section-title">
                                 <h3>
@@ -4316,15 +4361,6 @@
                             <button class="btn btn-primary btn-action" @click="runFullSync" :disabled="organize.syncing">
                                 {{ organize.syncing ? '同步中...' : '开始全量同步' }}
                             </button>
-                        </div>
-                        <div v-if="organize.syncing && syncTab === 'full'" style="margin-top:12px;">
-                            <div style="color:#909399; font-size:13px; margin-bottom:8px;">正在扫描和同步文件，请耐心等待...</div>
-                            <div class="mini-log-panel">
-                                <div v-for="entry in syncLogs" :key="entry.seq" class="mini-log-line" :class="'log-line-log-' + (entry.level || 'INFO').toLowerCase()">
-                                    <span class="log-source-tag" :class="'log-source-' + (entry.source || 'app')">{{ sourceLabel(entry.source) }}</span>{{ entry.line }}
-                                </div>
-                                <div v-if="syncLogs.length === 0" style="color:#666;padding:8px 0;">等待日志...</div>
-                            </div>
                         </div>
                     </div>
 
@@ -6695,6 +6731,8 @@
                     emby: null,
                     emby_status: null,
                     account: null,
+                    accounts: [],
+                    system: null,
                     weekAdded: 0,
                     libCount: 0,
                     libraries: [], libLoading: false,
@@ -8991,6 +9029,16 @@ av:
                     return bytes.toFixed(2) + ' ' + u[i];
                 };
 
+                const formatUptime = (seconds) => {
+                    if (!seconds || seconds < 0) return '-';
+                    const d = Math.floor(seconds / 86400);
+                    const h = Math.floor((seconds % 86400) / 3600);
+                    const m = Math.floor((seconds % 3600) / 60);
+                    if (d > 0) return `${d}天 ${h}小时`;
+                    if (h > 0) return `${h}小时 ${m}分钟`;
+                    return `${m}分钟`;
+                };
+
                 // 设备类型显示名
                 const appLabel = (v) => {
                     const hit = loginApps.value.find(a => a.value === v);
@@ -10040,6 +10088,8 @@ av:
                             dash.emby = data.data.emby;
                             dash.emby_status = data.data.emby_status;
                             dash.account = data.data.account;
+                            dash.accounts = data.data.accounts || [];
+                            dash.system = data.data.system;
                             if (dash.emby && dash.emby.connected) {
                                 loadDashAll();
                             }
@@ -12780,7 +12830,7 @@ av:
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
                     hasValidAccount, openLoginModal, closeLoginModal,
                     getQRCode, checkAccount, deleteAccount, appLabel,
-                    loadFiles, clickFile, goToPath, formatSize,
+                    loadFiles, clickFile, goToPath, formatSize, formatUptime,
                     appSelectOpen, accountSelectOpen,
                     selectedAppLabel, selectedAccountLabel,
                     selectApp, selectFileAccount,

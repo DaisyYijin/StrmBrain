@@ -1,9 +1,14 @@
 """
 API 路由 - 仪表盘
 """
+import os
+import platform
+import shutil
+import time
+
 from fastapi import APIRouter
 
-from app.core.json_storage import read_setting, get_first_valid_account
+from app.core.json_storage import read_setting, get_first_valid_account, read_accounts
 from app.schemas import ApiResponse
 from app.services.emby import EmbyClient
 from app.core.cache import cached, invalidate
@@ -14,6 +19,9 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 TTL_SHORT = 60       # 列表/统计类：1 分钟
 TTL_MEDIUM = 120     # 趋势/分布类：2 分钟
 
+# 应用启动时间（用于计算运行时长）
+_APP_START_TS = time.time()
+
 
 async def _get_emby_client() -> EmbyClient | None:
     cfg = read_setting("emby")
@@ -22,10 +30,51 @@ async def _get_emby_client() -> EmbyClient | None:
     return EmbyClient(cfg["host"], cfg["api_key"])
 
 
+def _collect_system_info() -> dict:
+    """收集本机系统信息（CPU/内存/磁盘/运行时长）。"""
+    info = {
+        "os": f"{platform.system()} {platform.release()}",
+        "python": platform.python_version(),
+        "cpu_count": os.cpu_count() or 0,
+        "uptime": int(time.time() - _APP_START_TS),
+    }
+
+    # 内存信息（优先用 psutil，无则跳过）
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        info["mem_total"] = mem.total
+        info["mem_used"] = mem.used
+        info["mem_percent"] = mem.percent
+        info["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+    except ImportError:
+        pass
+
+    # 磁盘信息（挂载点 / 或 cwd 所在分区）
+    try:
+        disk = shutil.disk_usage("/")
+        info["disk_total"] = disk.total
+        info["disk_used"] = disk.used
+        info["disk_free"] = disk.free
+        info["disk_percent"] = round(disk.used / disk.total * 100, 1) if disk.total else 0
+    except Exception:
+        # Windows 下 / 可能无效，尝试 cwd
+        try:
+            disk = shutil.disk_usage(os.getcwd())
+            info["disk_total"] = disk.total
+            info["disk_used"] = disk.used
+            info["disk_free"] = disk.free
+            info["disk_percent"] = round(disk.used / disk.total * 100, 1) if disk.total else 0
+        except Exception:
+            pass
+
+    return info
+
+
 @router.get("/overview", response_model=ApiResponse)
 async def overview():
-    """仪表盘概览：Emby 媒体库统计 + 服务器状态 + 115 容量"""
-    result = {"emby": None, "emby_status": None, "account": None}
+    """仪表盘概览：Emby 媒体库统计 + 服务器状态 + 115 容量 + 系统信息"""
+    result = {"emby": None, "emby_status": None, "account": None, "accounts": [], "system": None}
 
     client = await _get_emby_client()
     if client:
@@ -41,7 +90,6 @@ async def overview():
                 "series_count": (counts or {}).get("SeriesCount", 0),
                 "episode_count": (counts or {}).get("EpisodeCount", 0),
             }
-            # 服务器状态（在线用户等）
             try:
                 result["emby_status"] = await client.server_status()
             except Exception:
@@ -49,17 +97,35 @@ async def overview():
         else:
             result["emby"] = {"connected": False}
 
-    # 115 账号容量（取第一个有效账号）
-    acc = get_first_valid_account()
+    # 115 账号信息（第一个有效账号 + 所有账号列表）
+    all_accounts = read_accounts()
+    valid_accounts = [acc for acc in all_accounts if acc.get("status") == 1]
+    acc = valid_accounts[0] if valid_accounts else (all_accounts[0] if all_accounts else None)
     if acc:
         result["account"] = {
             "id": acc.get("id"),
             "name": acc.get("name", ""),
+            "username": acc.get("username", ""),
+            "user_id": acc.get("user_id", ""),
             "vip_level": acc.get("vip_level", 0),
             "space_used": acc.get("space_used", 0),
             "space_total": acc.get("space_total", 0),
             "avatar_url": acc.get("avatar_url", ""),
+            "app": acc.get("app", ""),
         }
+        # 所有有效账号的简要信息
+        result["accounts"] = [{
+            "id": a.get("id"),
+            "name": a.get("name", ""),
+            "username": a.get("username", ""),
+            "vip_level": a.get("vip_level", 0),
+            "space_used": a.get("space_used", 0),
+            "space_total": a.get("space_total", 0),
+            "avatar_url": a.get("avatar_url", ""),
+        } for a in valid_accounts]
+
+    # 系统信息
+    result["system"] = _collect_system_info()
 
     # 上传队列状态
     try:

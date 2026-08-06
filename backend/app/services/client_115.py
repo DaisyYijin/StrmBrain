@@ -1532,15 +1532,30 @@ class Client115Service:
     def daily_checkin(cls, cookies: str) -> dict:
         """115 每日签到（积分签到）。
 
-        调用 p115client 的 user_points_sign 方法获取并执行签到，
-        方法不存在（老版本）时抛异常由 try/except 兜底，返回结果 dict：
+        调用 p115client 的 user_points_sign_post 方法执行签到：
+        - POST https://proapi.115.com/android/2.0/user/points_sign
+        - 注意：不能用 web（浏览器）cookies，否则会失败，需使用 android 等 app 的 cookies
+        返回结果 dict：
         - 成功：签到接口返回的 dict（如 {"state": true, "data": {...}}）
-        - 失败：{"error": 原因}（含 cookies 失效 / 方法不存在等情况）
+        - 失败：{"error": 原因}
         """
         client = cls.create_client_from_cookies(cookies)
         try:
-            result = client.user_points_sign()
-            return result if isinstance(result, dict) else {"data": result}
+            # 先尝试用 android 签到（p115client 默认 app="android"）
+            result = client.user_points_sign_post()
+            if not isinstance(result, dict):
+                return {"error": f"签到返回异常: {result}"}
+            # state=false 时尝试其他 app 类型（部分账号需特定 app 环境）
+            if result.get("state") is False:
+                for app in ("ios", "alipaymini", "115ios"):
+                    try:
+                        retry = client.user_points_sign_post(app=app)
+                        if isinstance(retry, dict) and retry.get("state") is not False:
+                            return retry
+                    except Exception:
+                        continue
+                return result
+            return result
         except Exception as e:
             logger.warning(f"[115] 每日签到失败: {e}")
             return {"error": str(e)}

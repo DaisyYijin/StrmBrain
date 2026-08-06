@@ -578,7 +578,6 @@ def _is_checkin_success(result: dict) -> bool:
         return False
     return True
 
-
 async def _run_daily_checkin():
     """每日 115 签到执行体：遍历所有有效账号（status==1）逐个签到，日志记录成功/失败。
 
