@@ -6,6 +6,7 @@ import re
 import os
 import shutil
 import time as _time
+import threading
 from typing import Optional
 from collections import defaultdict, Counter
 
@@ -1431,6 +1432,10 @@ def _try_delete_local(path: str) -> bool:
 class OrganizeService:
     """网盘文件整理服务"""
 
+    # 整理并发锁：手动整理（API /run）和定时整理（_run_scheduled_organize）
+    # 共用一把锁，防止并发调用 115 API 触发风控。非阻塞获取，获取不到即跳过。
+    _organize_lock = threading.Lock()
+
     @classmethod
     async def scan_and_organize(
         cls,
@@ -1481,6 +1486,56 @@ class OrganizeService:
                 "dry_run": bool,
             }
         """
+        # 并发保护：非阻塞获取整理锁，已有整理任务在运行时直接跳过本次
+        # （手动整理 API 侧另有 progress_manager 保护，这里是服务层兜底，
+        #   覆盖定时整理路径，避免与手动整理并发触发 115 风控）
+        if not cls._organize_lock.acquire(blocking=False):
+            logger.warning("[organize] 已有整理任务正在运行，跳过本次整理（防止并发触发风控）")
+            return {
+                "total": 0, "organized": [], "redundant": [],
+                "unrecognized": [], "errors": [],
+                "skipped_concurrent": True, "dry_run": dry_run,
+            }
+        try:
+            return await cls._scan_and_organize_locked(
+                cookies=cookies, source_cid=source_cid, target_cid=target_cid,
+                existing_cid=existing_cid, redundant_cid=redundant_cid,
+                unrecognized_cid=unrecognized_cid, classify_config=classify_config,
+                category_roots=category_roots, rename_rules=rename_rules,
+                wash_config=wash_config, use_ffprobe=use_ffprobe,
+                skip_no_info=skip_no_info, prefer_filename=prefer_filename,
+                min_organize_size_mb=min_organize_size_mb,
+                organize_blacklist=organize_blacklist, ai_mode=ai_mode,
+                dry_run=dry_run, progress_callback=progress_callback,
+                source_path=source_path,
+            )
+        finally:
+            cls._organize_lock.release()
+
+    @classmethod
+    async def _scan_and_organize_locked(
+        cls,
+        cookies: str,
+        source_cid: str,
+        target_cid: str = "",
+        existing_cid: str = "",
+        redundant_cid: str = "",
+        unrecognized_cid: str = "",
+        classify_config: str = "",
+        category_roots: dict = None,
+        rename_rules: dict = None,
+        wash_config: dict = None,
+        use_ffprobe: bool = False,
+        skip_no_info: bool = False,
+        prefer_filename: bool = False,
+        min_organize_size_mb: int = 0,
+        organize_blacklist: str = "",
+        ai_mode: str = "off",
+        dry_run: bool = False,
+        progress_callback=None,
+        source_path: str = "",
+    ) -> dict:
+        """整理核心逻辑（已持有 _organize_lock，仅由 scan_and_organize 调用）"""
         result = {
             "total": 0,
             "organized": [],

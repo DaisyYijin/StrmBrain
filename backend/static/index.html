@@ -10324,8 +10324,11 @@ av:
                     });
                 });
 
-                // 实时日志
+                // 实时日志（加并发保护：多个轮询入口并发请求时避免重复插入）
+                let _fetchLogsInFlight = false;
                 const fetchLogs = async () => {
+                    if (_fetchLogsInFlight) return;  // 上一次请求未完成时跳过，避免并发重复
+                    _fetchLogsInFlight = true;
                     try {
                         const url = logs.lastSeq > 0
                             ? `/api/logs?since=${logs.lastSeq}`
@@ -10336,15 +10339,21 @@ av:
                             const newEntries = data.data.entries || [];
                             if (data.data.sources) logs.sources = data.data.sources;
                             if (data.data.latest_seq) logs.lastSeq = data.data.latest_seq;
-                            if (logs.lastSeq === 0) {
+                            if (logs.entries.length === 0) {
                                 // 首次加载：全量替换
                                 logs.entries = newEntries;
                             } else if (newEntries.length > 0) {
                                 // 增量加载：新日志插到顶部（后端已反转，最新在前）
-                                logs.entries = newEntries.concat(logs.entries);
+                                // 按 seq 去重，防止并发请求返回相同增量导致重复
+                                const knownSeq = new Set(logs.entries.map(e => e.seq));
+                                const deduped = newEntries.filter(e => !knownSeq.has(e.seq));
+                                if (deduped.length > 0) {
+                                    logs.entries = deduped.concat(logs.entries);
+                                }
                             }
                         }
                     } catch (e) { console.warn('[app] 操作失败:', e); }
+                    finally { _fetchLogsInFlight = false; }
                 };
 
                 const toggleLevelFilter = (level) => {
