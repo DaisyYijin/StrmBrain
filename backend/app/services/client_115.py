@@ -411,6 +411,14 @@ _auth_sm: dict = {
 }
 _auth_sm_lock = threading.Lock()
 
+# 认证状态机状态的中文标签（日志展示用）
+_AUTH_STATE_LABELS = {
+    _AUTH_STATE_ACTIVE: "正常",
+    _AUTH_STATE_COOLDOWN: "冷却",
+    _AUTH_STATE_FAILED: "熔断",
+    _AUTH_STATE_RECOVERED: "观察期",
+}
+
 # 保留旧变量名兼容（_circuit_breaker_until 仍可被外部读取，由状态机同步维护）
 _circuit_breaker_until: float = 0.0
 _circuit_breaker_lock = threading.Lock()
@@ -432,19 +440,19 @@ def _refresh_auth_sm():
             _auth_sm["cooldown_until"] = 0.0
             global _circuit_breaker_until
             _circuit_breaker_until = 0.0
-            logger.info("[115] 认证状态机：cooldown 到期，恢复为 active")
+            logger.info("[115] 认证状态机：冷却期到期，恢复为正常")
         elif state == _AUTH_STATE_FAILED and now >= _auth_sm["cooldown_until"]:
             _auth_sm["state"] = _AUTH_STATE_RECOVERED
             _auth_sm["recovery_until"] = now + _AUTH_SM_RECOVERY_DURATION
             _auth_sm["recovery_count"] += 1
             _auth_sm["cooldown_until"] = 0.0
             _circuit_breaker_until = 0.0
-            logger.info("[115] 认证状态机：failed 熔断到期，进入 recovered 观察期")
+            logger.info("[115] 认证状态机：熔断期到期，进入观察期")
         elif state == _AUTH_STATE_RECOVERED and now >= _auth_sm["recovery_until"]:
             _auth_sm["state"] = _AUTH_STATE_ACTIVE
             _auth_sm["recovery_until"] = 0.0
             _auth_sm["fail_count"] = 0
-            logger.info("[115] 认证状态机：recovered 观察期结束，恢复为 active")
+            logger.info("[115] 认证状态机：观察期结束，恢复为正常")
 
 
 def _record_auth_failure(reason: str = "", is_network: bool = False):
@@ -479,7 +487,7 @@ def _record_auth_failure(reason: str = "", is_network: bool = False):
             _auth_sm["cooldown_until"] = now + step
             _circuit_breaker_until = _auth_sm["cooldown_until"]
             logger.warning(
-                f"[115] 认证状态机：active -> cooldown，冷却 {step}s。原因: {reason[:100]}"
+                f"[115] 认证状态机：正常 -> 冷却，冷却 {step}s。原因: {reason[:100]}"
             )
 
         elif state == _AUTH_STATE_COOLDOWN:
@@ -489,7 +497,7 @@ def _record_auth_failure(reason: str = "", is_network: bool = False):
                 _auth_sm["cooldown_until"] = now + _AUTH_SM_FAILED_DURATION
                 _circuit_breaker_until = _auth_sm["cooldown_until"]
                 logger.warning(
-                    f"[115] 认证状态机：cooldown -> failed，熔断 {_AUTH_SM_FAILED_DURATION}s。"
+                    f"[115] 认证状态机：冷却 -> 熔断，熔断 {_AUTH_SM_FAILED_DURATION}s。"
                     f"连续失败 {_auth_sm['fail_count']} 次。原因: {reason[:100]}"
                 )
             else:
@@ -499,7 +507,7 @@ def _record_auth_failure(reason: str = "", is_network: bool = False):
                 _auth_sm["cooldown_until"] = now + step
                 _circuit_breaker_until = _auth_sm["cooldown_until"]
                 logger.warning(
-                    f"[115] 认证状态机：cooldown 升级，冷却 {step}s。"
+                    f"[115] 认证状态机：冷却升级，冷却 {step}s。"
                     f"连续失败 {_auth_sm['fail_count']} 次。原因: {reason[:100]}"
                 )
 
@@ -511,7 +519,7 @@ def _record_auth_failure(reason: str = "", is_network: bool = False):
             _auth_sm["recovery_until"] = 0.0
             _circuit_breaker_until = _auth_sm["cooldown_until"]
             logger.warning(
-                f"[115] 认证状态机：recovered -> cooldown（观察期内失败），冷却 {step}s。"
+                f"[115] 认证状态机：观察期 -> 冷却（观察期内失败），冷却 {step}s。"
                 f"原因: {reason[:100]}"
             )
         # failed 状态：已熔断，忽略新失败
@@ -527,8 +535,9 @@ def _record_auth_success():
     with _auth_sm_lock:
         prev_state = _auth_sm["state"]
         if prev_state != _AUTH_STATE_ACTIVE:
+            label = _AUTH_STATE_LABELS.get(prev_state, prev_state)
             logger.info(
-                f"[115] 认证状态机：{prev_state} -> active（认证成功，重置失败状态）"
+                f"[115] 认证状态机：{label} -> 正常（认证成功，重置失败状态）"
             )
         _auth_sm["state"] = _AUTH_STATE_ACTIVE
         _auth_sm["fail_count"] = 0

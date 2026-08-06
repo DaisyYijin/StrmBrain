@@ -9,6 +9,7 @@ uvicorn.access（HTTP 访问日志）不进入缓冲区，避免日志面板自�
 uvicorn 日志排除在 stdout 之外（避免与 uvicorn 自带 handler 重复打印）。
 """
 import logging
+import re
 import sys
 from collections import deque
 from datetime import datetime
@@ -56,6 +57,29 @@ SOURCE_LABELS = {
 # httpx: 第三方 HTTP 客户端请求日志（Emby/TMDB 等外部 API 调用），量大且无用
 _EXCLUDED_LOGGERS = {"uvicorn.access", "httpx"}
 
+# APScheduler 框架日志英文 → 中文翻译映射
+# APScheduler 自身以英文输出（如 "Job xxx executed successfully"），
+# 普通用户难以理解，这里在进入日志面板前统一翻译为中文。
+_APSCHEDULER_TRANSLATIONS = {
+    "Scheduler started": "定时调度器已启动",
+    "Scheduler has been shut down": "定时调度器已关闭",
+    "Paused scheduler job processing": "已暂停定时任务处理",
+    "Resumed scheduler job processing": "已恢复定时任务处理",
+    "Adding job tentatively -- it will be properly scheduled when the scheduler starts": "调度器尚未启动，任务将在调度器启动时正式安排执行",
+    "Removed job %s": "已移除定时任务 %s",
+    "Added job \"%s\" to job store \"%s\"": "已添加定时任务 \"%s\" 到任务存储 \"%s\"",
+    "Error getting due jobs from job store %r: %s": "获取到期定时任务出错（任务存储 %r）: %s",
+    "Executor lookup (\"%s\") failed for job \"%s\" -- removing it from the job store": "执行器查找 (\"%s\") 失败，已移除定时任务 \"%s\"",
+    "Execution of job \"%s\" skipped: maximum number of running instances reached (%d)": "定时任务 \"%s\" 被跳过：并发实例数已达上限 (%d)",
+    "Error submitting job \"%s\" to executor \"%s\"": "提交定时任务 \"%s\" 到执行器 \"%s\" 出错",
+    "Run time of job \"%s\" was missed by %s": "定时任务 \"%s\" 错过了计划执行时间 %s",
+    "Running job \"%s\" (scheduled at %s)": "正在执行定时任务 \"%s\"（计划时间 %s）",
+    "Job \"%s\" executed successfully": "定时任务 \"%s\" 执行成功",
+    "Job \"%s\" raised an exception": "定时任务 \"%s\" 执行时抛出异常",
+    "Error running job %s": "定时任务 %s 执行出错",
+    "Process pool is broken; replacing pool with a fresh instance": "进程池已损坏，正在重建",
+}
+
 
 def _resolve_source(record: logging.LogRecord) -> str:
     """根据 logger.name 推断日志来源分类"""
@@ -84,6 +108,17 @@ class RingBufferHandler(logging.Handler):
         if record.name in _EXCLUDED_LOGGERS:
             return
         try:
+            # APScheduler 框架英文日志汉化（如 "Job xxx executed successfully"）
+            if record.name.startswith("apscheduler") and isinstance(record.msg, str):
+                translated = _APSCHEDULER_TRANSLATIONS.get(record.msg)
+                if translated:
+                    record.msg = translated
+                # 简化任务名中的触发器描述：cron[month='*', day='*', ...] → 定时计划
+                record.msg = re.sub(
+                    r" \(trigger: cron\[[^\]]*\]\)",
+                    "（定时计划）",
+                    record.msg,
+                )
             ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
             msg = self.format(record)
             level = record.levelname

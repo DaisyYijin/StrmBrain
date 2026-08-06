@@ -152,7 +152,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"启动 Emby 反代服务线程异常: {e}")
 
-    logger.info(f"STRMhub started (AUTH_ENABLED={AUTH_ENABLED})")
+    logger.info("STRMhub 应用已启动（登录验证已开启）" if AUTH_ENABLED else "STRMhub 应用已启动（登录验证未开启）")
     yield
     await shutdown_scheduler()
 
@@ -210,7 +210,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"停止 Emby 反代服务时异常: {e}")
 
-    logger.info("Application closed")
+    logger.info("STRMhub 应用已关闭")
 
 
 app = FastAPI(

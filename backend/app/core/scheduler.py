@@ -168,7 +168,7 @@ async def _run_scheduled_sync(config: dict):
         logger.warning(f"定时整理失败（继续执行增量同步）: {e}")
 
     # ========== 第二步：执行增量同步 ==========
-    logger.info(f"开始执行定时增量同步: account={account.get('id')}, source={source_cid}")
+    logger.info(f"开始执行定时增量同步: 账号 id={account.get('id')}, 网盘目录={source_cid}")
 
     try:
         # 解析扩展名
@@ -847,7 +847,8 @@ async def _run_automation_rule(rule_id):
     logger.info(f"自动化规则 {rule_id} 定时触发执行")
     try:
         result = await get_automation_service().run_rule(rule_id, context="cron")
-        logger.info(f"自动化规则 {rule_id} 执行完成: success={result.get('success')}")
+        ok = "成功" if result.get("success") else "失败"
+        logger.info(f"自动化规则 {rule_id} 执行完成：{ok}")
     except Exception as e:
         logger.warning(f"自动化规则 {rule_id} 执行异常: {e}")
 
