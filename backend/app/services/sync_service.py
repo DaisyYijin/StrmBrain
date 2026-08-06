@@ -471,7 +471,8 @@ class SyncService:
 
             processed += 1
             _interval = get_api_intervals().get("sync_file_interval", 3.0)
-            logger.info(f"[sync] 正在处理第 {processed}/{len(all_files)} 个文件: {name}")
+            # 增量同步不逐文件打印进度日志（大多数文件为"未变更跳过"，逐条显示只会刷屏），
+            # 仅每 10 个文件上报一次进度条；有实际动作时 _sync_single_file 内部会输出日志
             if processed % 10 == 0:
                 cls._safe_schedule(loop, progress_manager.update_progress(processed, name))
 
