@@ -4,7 +4,7 @@
 import time as _time
 import hashlib
 import threading
-from typing import Optional
+from typing import Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from collections import deque, OrderedDict
 import asyncio
@@ -901,13 +901,16 @@ def _mark_endpoint_cooldown(endpoint: str, duration: float = 0):
 
 
 def _call_write_with_405_fallback(client, primary_method_name: str, app_method_name: str,
-                                   *args, max_retries: int = _MAX_RETRIES, **kwargs):
+                                   *args, max_retries: int = _MAX_RETRIES,
+                                   arg_adapter: Callable = None, **kwargs):
     """
     通用写操作 405 降级：先调 primary_method，405 时降级到 app_method。
     支持限流重试和端点级冷却。
 
     - primary_method_name: 主方法名（如 'fs_move'）
     - app_method_name: 降级方法名（如 'fs_move_app'）
+    - arg_adapter: 可选参数转换函数，降级调用 app_method 时传入
+      （如 fs_mkdir 用 {"cname": name}，fs_mkdir_app 用 {"name": name}，需要转换）
     - 返回 API 响应 dict，或抛出最终异常
     """
     primary = getattr(client, primary_method_name, None)
@@ -923,6 +926,8 @@ def _call_write_with_405_fallback(client, primary_method_name: str, app_method_n
             continue
 
         try:
+            if use_app and arg_adapter:
+                return method(*arg_adapter(*args, **kwargs))
             return method(*args, **kwargs)
         except Exception as e:
             # Q1: 记录认证失败（限流不计入认证失败；网络类错误不计数；无法识别账号时传 0）
@@ -934,6 +939,8 @@ def _call_write_with_405_fallback(client, primary_method_name: str, app_method_n
                     logger.info(f"[115] {primary_method_name} 返回 405，降级到 {app_method_name}")
                     _mark_endpoint_cooldown(primary_method_name, duration=300)  # 主端点冷却 5 分钟
                     try:
+                        if arg_adapter:
+                            return app_fallback(*arg_adapter(*args, **kwargs))
                         return app_fallback(*args, **kwargs)
                     except Exception as e2:
                         if _is_method_not_allowed(e2):
@@ -2166,14 +2173,23 @@ class Client115Service:
     def mkdir(cls, cookies: str, name: str, parent_id: str = "0") -> Optional[str]:
         """
         新建目录，返回目录 ID。如已存在则返回已存在目录 ID。
-        405 时自动降级到 fs_mkdir_app。
+        405 时自动降级到 fs_mkdir_app（注意参数格式差异：
+        fs_mkdir 用 {"cname": name}，fs_mkdir_app 内部走 fs_folder_update_app 用 {"name": name}，
+        降级时必须转换参数，否则 name 为空导致创建失败）。
         """
         _apply_rate_limit("mkdir")
         client = cls.create_client_from_cookies(cookies)
+        # 参数转换：fs_mkdir 用 {"cname": name}，fs_mkdir_app 内部走 fs_folder_update_app 用 {"name": name}
+        def _adapt(payload: dict):
+            if "cname" in payload and "name" not in payload:
+                payload = dict(payload)
+                payload["name"] = payload.pop("cname")
+            return (payload,)
         try:
             resp = _call_write_with_405_fallback(
                 client, "fs_mkdir", "fs_mkdir_app",
                 {"cname": name, "pid": parent_id},
+                arg_adapter=_adapt,
             )
             # 成功返回 {"cid": ...} 或 {"file_id": ...}
             cid = resp.get("cid") or resp.get("file_id") or resp.get("category_id")

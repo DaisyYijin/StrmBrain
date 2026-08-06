@@ -2474,6 +2474,20 @@ class OrganizeService:
         # 4. 清理源目录：将残留的子目录和散落文件移到冗余目录（仅非预览模式）
         if not dry_run and result["total"] > 0 and redundant_cid:
             try:
+                # 收集本次整理涉及的所有文件 ID（成功/失败/冗余/无法识别都算），
+                # 清理残留时排除它们，避免"整理失败但仍在源目录"的文件被误当残留移走
+                involved_ids: set = set()
+                for _group in (to_organize, to_redundant, to_unrecognized):
+                    for _it in _group:
+                        _fid = str(_it.get("file", {}).get("file_id", ""))
+                        if _fid:
+                            involved_ids.add(_fid)
+                # 重命名/移动阶段已处理的文件 ID 也纳入保护
+                for _rr in rename_results:
+                    _fid = str(_rr.get("item", {}).get("file", {}).get("file_id", ""))
+                    if _fid:
+                        involved_ids.add(_fid)
+
                 logger.info(f"[organize] 开始清理源目录残留...")
                 # 扫描源目录下的直接子项（目录和文件）
                 remaining_items = Client115Service.list_all_items(
@@ -2483,9 +2497,13 @@ class OrganizeService:
                     moved = 0
                     failed_items = []  # 记录第一轮移动失败的项
                     for item in remaining_items:
-                        item_id = item.get("id", "")
+                        item_id = str(item.get("id", ""))
                         item_name = item.get("name", "")
                         if not item_id:
+                            continue
+                        # 跳过本次整理涉及的文件（避免误移整理失败/待重试的文件）
+                        if item_id in involved_ids:
+                            logger.info(f"[organize] 残留清理跳过整理中文件: {item_name}")
                             continue
                         try:
                             ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
@@ -2506,6 +2524,9 @@ class OrganizeService:
                         for item in failed_items:
                             item_id = item.get("id", "")
                             item_name = item.get("name", "")
+                            if str(item_id) in involved_ids:
+                                logger.info(f"[organize] 残留重试跳过整理中文件: {item_name}")
+                                continue
                             try:
                                 ok = Client115Service.move(cookies, [item_id], redundant_cid, context=item_name)
                                 if ok:
