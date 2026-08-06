@@ -10385,7 +10385,7 @@ av:
                         showToast('清空失败');
                     }
                     // 恢复轮询
-                    logs.timer = setInterval(fetchLogs, 2000);
+                    logs.timer = setInterval(fetchLogs, 1000);
                 };
 
                 const openLogs = () => {
@@ -10393,7 +10393,7 @@ av:
                     // 不重置已有日志，仅确保轮询运行
                     if (!logs.timer) {
                         fetchLogs();
-                        logs.timer = setInterval(fetchLogs, 2000);
+                        logs.timer = setInterval(fetchLogs, 1000);
                     }
                 };
 
@@ -10650,7 +10650,7 @@ av:
 
                     // 启动实时日志轮询（页面加载即开始，不依赖切到日志页）
                     fetchLogs();
-                    if (!logs.timer) logs.timer = setInterval(fetchLogs, 2000);
+                    if (!logs.timer) logs.timer = setInterval(fetchLogs, 1000);
 
                     // 获取版本信息
                     fetchVersionInfo();
@@ -10687,7 +10687,7 @@ av:
                     // 若刷新后仍在日志页，确保轮询已启动（init 已启动则不重复）
                     if (tab.value === 'logs') {
                         fetchLogs();
-                        if (!logs.timer) logs.timer = setInterval(fetchLogs, 2000);
+                        if (!logs.timer) logs.timer = setInterval(fetchLogs, 1000);
                     }
                     if (!_docClickHandler) {
                         _docClickHandler = closeSelects;

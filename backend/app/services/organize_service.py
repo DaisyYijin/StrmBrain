@@ -1536,6 +1536,22 @@ class OrganizeService:
         source_path: str = "",
     ) -> dict:
         """整理核心逻辑（已持有 _organize_lock，仅由 scan_and_organize 调用）"""
+        # 局部辅助：把媒体文件移动到冗余目录，并按源目录 parent_path 在冗余目录下
+        # 重建子目录，避免图片/字幕平铺在冗余根目录（如 冗余目录/八佰/fanart.jpg）
+        def _move_to_redundant(f: dict, reason: str) -> bool:
+            parent_path = str(f.get("parent_path", "") or "")
+            target_cid = redundant_cid
+            parts = [p for p in parent_path.split("/") if p]
+            if parts:
+                target_cid = Client115Service.ensure_path(cookies, parts, redundant_cid)
+                if not target_cid:
+                    logger.warning(f"[organize] 创建冗余子目录失败: {parent_path}，改移冗余根目录")
+                    target_cid = redundant_cid
+            ok = Client115Service.move(cookies, [f.get("file_id", "")], target_cid, context=f.get("name", ""))
+            if ok:
+                result["redundant"].append({"name": f.get("name", ""), "reason": reason})
+            return ok
+
         result = {
             "total": 0,
             "organized": [],
@@ -1646,23 +1662,19 @@ class OrganizeService:
             logger.info(f"[organize] 源目录无匹配视频文件")
             # 即使没有视频文件，也要将残留的非视频文件移到冗余目录并清理源目录
             if not dry_run and redundant_cid:
-                # 移动媒体图片和媒体数据文件到冗余目录
+                # 移动媒体图片和媒体数据文件到冗余目录（保留源目录结构）
                 for img_f in image_files:
                     try:
-                        ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid, context=img_f["name"])
-                        if ok_img:
+                        if _move_to_redundant(img_f, "残留媒体图片文件"):
                             logger.info(f"[organize] 残留媒体图片移到冗余: {img_f['name']}")
-                            result["redundant"].append({"name": img_f["name"], "reason": "残留媒体图片文件"})
                         else:
                             logger.warning(f"[organize] 媒体图片移动失败: {img_f['name']}")
                     except Exception as e:
                         logger.warning(f"[organize] 媒体图片移动异常: {img_f['name']}: {e}")
                 for df in data_files:
                     try:
-                        ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid, context=df["name"])
-                        if ok_df:
+                        if _move_to_redundant(df, "残留媒体数据文件"):
                             logger.info(f"[organize] 残留媒体数据移到冗余: {df['name']}")
-                            result["redundant"].append({"name": df["name"], "reason": "残留媒体数据文件"})
                         else:
                             logger.warning(f"[organize] 媒体数据移动失败: {df['name']}")
                     except Exception as e:
@@ -1882,8 +1894,13 @@ class OrganizeService:
             for item in to_organize:
                 category_groups[item["category"]].append(item)
 
-            # ===== 阶段 1：ffprobe 探测 + 洗版检查 + 重命名（不移动） =====
-            logger.info(f"[organize] 阶段 1/2：开始 ffprobe 探测和重命名（共 {len(to_organize)} 个文件）")
+            # ===== 阶段 1：媒体信息探测 + 洗版检查 + 重命名（不移动） =====
+            # 仅当启用 ffprobe 且配置了重命名/洗版时才真正调用 ffprobe，
+            # 否则只做重命名计算（日志文案如实反映，避免误导）
+            _probe_mode = "ffprobe 探测" if (
+                use_ffprobe and is_ffprobe_available() and (rename_rules or (wash_config and wash_config.get("enabled")))
+            ) else "文件名解析"
+            logger.info(f"[organize] 阶段 1/2：开始{_probe_mode}和重命名（共 {len(to_organize)} 个文件）")
             rename_results = []  # [{item, renamed_to, new_folder, season_folder, media_info, skip_move, final_target_cid}]
 
             for category, items in category_groups.items():
@@ -2049,7 +2066,7 @@ class OrganizeService:
                     if is_clipped:
                         rename_results[-1]["clipped"] = True
 
-            logger.info(f"[organize] 阶段 1/2 完成：重命名和 ffprobe 探测结束")
+            logger.info(f"[organize] 阶段 1/2 完成：{_probe_mode}和重命名结束")
 
             # #32: 文件命名对齐 - Phase 1 识别完成后、Phase 2 移动前，
             # 对同一电视剧同一季的剧集文件集调用对齐函数，将对齐结果合并到重命名映射
@@ -2441,10 +2458,8 @@ class OrganizeService:
         if not dry_run and redundant_cid:
             for img_f in image_files:
                 try:
-                    ok_img = Client115Service.move(cookies, [img_f["file_id"]], redundant_cid, context=img_f["name"])
-                    if ok_img:
+                    if _move_to_redundant(img_f, "媒体图片文件"):
                         logger.info(f"[organize] 媒体图片移到冗余: {img_f['name']}")
-                        result["redundant"].append({"name": img_f["name"], "reason": "媒体图片文件"})
                     else:
                         logger.warning(f"[organize] 媒体图片移动失败: {img_f['name']}")
                 except Exception as e:
@@ -2454,10 +2469,8 @@ class OrganizeService:
                 if df["file_id"] in moved_data_file_ids:
                     continue
                 try:
-                    ok_df = Client115Service.move(cookies, [df["file_id"]], redundant_cid, context=df["name"])
-                    if ok_df:
+                    if _move_to_redundant(df, "未关联的媒体数据文件"):
                         logger.info(f"[organize] 未关联媒体数据移到冗余: {df['name']}")
-                        result["redundant"].append({"name": df["name"], "reason": "未关联的媒体数据文件"})
                     else:
                         logger.warning(f"[organize] 未关联媒体数据移动失败: {df['name']}")
                 except Exception as e:
