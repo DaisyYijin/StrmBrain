@@ -13,7 +13,7 @@ from app.api import (v115_router, accounts_router, settings_router,
                      tools_router, wechat_router,
                      ai_router, watcher_router,
                      emby_webhook_router, clouddownload_router,
-                     backup_router, notification_router, tasks_router,
+                     notification_router, tasks_router,
                      sync_del_router)
 from app.api.automation import router as automation_router
 from app.api.automation import webhook_router as automation_webhook_router
@@ -327,7 +327,6 @@ app.include_router(ai_router)
 app.include_router(watcher_router)
 app.include_router(emby_webhook_router)
 app.include_router(clouddownload_router)
-app.include_router(backup_router)
 app.include_router(notification_router)
 app.include_router(tasks_router)
 app.include_router(sync_del_router)

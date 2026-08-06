@@ -17,6 +17,11 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        /* 预留滚动条空间，防止 tab 切换时内容因滚动条出现/消失而左右抖动 */
+        html {
+            scrollbar-gutter: stable;
+        }
+
         /* v-cloak: 防止 Vue 挂载前模板语法闪烁 */
         [v-cloak] { display: none; }
 
@@ -2020,20 +2025,6 @@
         .task-queue-status.paused { background: #fef0f0; color: #f56c6c; }
         .task-queue-status.idle { background: #f4f4f5; color: #909399; }
 
-        /* ===== 备份管理 ===== */
-        .backup-item {
-            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-            border: 1px solid #ebeef5; border-radius: 6px; margin-bottom: 8px;
-        }
-        .backup-item-info { flex: 1; }
-        .backup-item-name { font-size: 14px; color: #303133; font-weight: 500; }
-        .backup-item-meta { font-size: 12px; color: #909399; margin-top: 4px; }
-        .backup-progress-bar {
-            height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-top: 8px;
-        }
-        .backup-progress-fill {
-            height: 100%; background: #409eff; border-radius: 3px; transition: width 0.3s;
-        }
 
         /* ===== 通知渠道卡片 ===== */
         .channel-card {
@@ -2927,6 +2918,14 @@
                                     <div class="toggle-label" :class="{ 'toggle-active': tmdb.language === 'zh' }" @click="selectTmdbLanguage('zh')">中文</div>
                                     <div class="toggle-label" :class="{ 'toggle-active': tmdb.language === 'en' }" @click="selectTmdbLanguage('en')">英文</div>
                                 </div>
+                            </div>
+                            <div class="form-group" style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-action" @click="saveTmdbSettings" :disabled="tmdb.saving">
+                                    {{ tmdb.saving ? '保存中...' : '保存配置' }}
+                                </button>
+                                <button class="btn btn-default btn-action" @click="testTmdbSettings" :disabled="tmdb.testing">
+                                    {{ tmdb.testing ? '测试中...' : '测试连接' }}
+                                </button>
                             </div>
                             <!-- 保存/测试结果通过顶部滑出通知显示 -->
                         </div>
@@ -4374,51 +4373,6 @@
                         </div>
                         <div v-if="organize.syncing && syncTab === 'incremental'" style="margin-top:12px; color:#909399; font-size:13px;">
                             正在识别新增文件并同步，请耐心等待...
-                        </div>
-                    </div>
-
-                    <!-- ===== 数据备份 ===== -->
-                    <div class="card" style="margin-top:20px;">
-                        <div class="card-title">数据备份<span class="help-tip">?<span class="tip-text">备份系统配置数据（JSON 文件）到本地压缩包，支持恢复与自动清理旧备份。建议在重要配置变更前手动备份。</span></span></div>
-
-                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
-                            <button class="btn btn-primary btn-action" @click="startBackup" :disabled="backupState.starting">
-                                {{ backupState.starting ? '备份中...' : '立即备份' }}
-                            </button>
-                            <button class="btn btn-default btn-action" @click="cleanupBackups" :disabled="backupState.cleaning || backupState.records.length === 0">
-                                {{ backupState.cleaning ? '清理中...' : '清理旧备份（保留 10 个）' }}
-                            </button>
-                        </div>
-
-                        <div v-if="backupState.status" class="info-box info-box--bordered" style="margin-bottom:12px; font-size:13px; color:#606266;">{{ backupState.status }}</div>
-
-                        <div v-if="backupState.loading" style="color:#909399; font-size:13px; padding:12px 0;">备份记录加载中...</div>
-                        <div v-else-if="backupState.records.length === 0" style="color:#909399; font-size:13px; padding:12px 0;">暂无备份记录</div>
-                        <div v-else>
-                            <div class="backup-item" v-for="rec in backupState.records" :key="rec.id">
-                                <div class="backup-item-info">
-                                    <div class="backup-item-name">
-                                        {{ backupTypeLabel(rec.type) }}
-                                        <span v-if="rec.reason" style="margin-left:8px; font-size:12px; font-weight:400; color:#909399;">{{ rec.reason }}</span>
-                                        <span class="task-queue-status" :class="backupStatusClass(rec.status)" style="margin-left:8px;">{{ backupStatusText(rec.status) }}</span>
-                                    </div>
-                                    <div class="backup-item-meta">
-                                        {{ formatBackupTime(rec.created_at) }}
-                                        <template v-if="rec.file_size"> · {{ formatSize(rec.file_size) }}</template>
-                                        <template v-if="rec.file_count"> · {{ rec.file_count }} 个文件</template>
-                                        <template v-if="rec.duration"> · 耗时 {{ rec.duration }} 秒</template>
-                                        <template v-if="rec.error_msg"> · <span style="color:#f56c6c;">{{ rec.error_msg }}</span></template>
-                                    </div>
-                                </div>
-                                <div style="display:flex; gap:8px; flex-shrink:0;">
-                                    <button class="btn btn-default btn-small" @click="restoreBackup(rec.id)" :disabled="backupState.restoringId === rec.id || rec.status !== 'completed'">
-                                        {{ backupState.restoringId === rec.id ? '恢复中...' : '恢复' }}
-                                    </button>
-                                    <button class="btn btn-danger btn-small" @click="deleteBackup(rec.id)" :disabled="backupState.deletingId === rec.id">
-                                        {{ backupState.deletingId === rec.id ? '删除中...' : '删除' }}
-                                    </button>
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -8550,17 +8504,6 @@ av:
                     enabled: true,
                 });
 
-                // 数据备份
-                const backupState = reactive({
-                    loading: false,
-                    starting: false,
-                    cleaning: false,
-                    deletingId: null,
-                    restoringId: null,
-                    records: [],
-                    status: '',
-                });
-
                 // 任务控制台
                 const taskConsole = reactive({
                     loading: false,
@@ -10954,10 +10897,6 @@ av:
                     if (v === 'dashboard' && dash.libraries.length === 0 && !dash.libLoading) {
                         loadDashboard();
                     }
-                    // 切换到同步归档时加载备份记录
-                    if (v === 'sync' && backupState.records.length === 0 && !backupState.loading) {
-                        loadBackups();
-                    }
                     // 离开日志页时停止轮询
                     if (v !== 'logs') {
                         if (logs.timer) { clearInterval(logs.timer); logs.timer = null; }
@@ -11545,121 +11484,6 @@ av:
                         showToast('轮换失败');
                     }
                     strmSecurity.rotating = false;
-                };
-
-                // ===== 数据备份 =====
-                const backupTypeLabel = (t) => {
-                    const map = { manual: '手动备份', auto: '自动备份', pre_update: '更新前备份' };
-                    return map[t] || (t || '备份');
-                };
-                const backupStatusClass = (s) => {
-                    if (s === 'completed') return 'running';
-                    if (s === 'running') return 'waiting';
-                    if (s === 'failed') return 'paused';
-                    return 'idle';
-                };
-                const backupStatusText = (s) => {
-                    if (s === 'completed') return '已完成';
-                    if (s === 'running') return '备份中';
-                    if (s === 'failed') return '失败';
-                    return (s || '-');
-                };
-                const formatBackupTime = (ts) => {
-                    if (!ts) return '';
-                    const d = new Date(ts * 1000);
-                    const p = (n) => String(n).padStart(2, '0');
-                    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-                };
-                const loadBackups = async () => {
-                    backupState.loading = true;
-                    try {
-                        const res = await api('/api/backup/list');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            backupState.records = data.data.records || [];
-                        }
-                    } catch (e) { console.warn('[app] 操作失败:', e); }
-                    backupState.loading = false;
-                };
-                const startBackup = async () => {
-                    backupState.starting = true;
-                    backupState.status = '';
-                    try {
-                        const res = await api('/api/backup/start', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ backup_type: 'manual', reason: '' })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('备份任务已启动');
-                            backupState.status = '备份任务已启动，完成后将出现在下方列表中。';
-                            setTimeout(() => loadBackups(), 3000);
-                        } else {
-                            showToast(data.message || '备份启动失败');
-                        }
-                    } catch (e) {
-                        showToast('备份启动失败');
-                    }
-                    backupState.starting = false;
-                };
-                const cleanupBackups = async () => {
-                    backupState.cleaning = true;
-                    backupState.status = '';
-                    try {
-                        const res = await api('/api/backup/cleanup?max_count=10', { method: 'POST' });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast(data.message || '已清理旧备份');
-                            backupState.status = data.message || '已清理旧备份';
-                        } else {
-                            showToast(data.message || '清理失败');
-                        }
-                        await loadBackups();
-                    } catch (e) {
-                        showToast('清理失败');
-                    }
-                    backupState.cleaning = false;
-                };
-                const deleteBackup = async (id) => {
-                    if (!confirm('确定删除该备份？删除后不可恢复。')) return;
-                    backupState.deletingId = id;
-                    try {
-                        const res = await api('/api/backup/' + id, { method: 'DELETE' });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('备份已删除');
-                        } else {
-                            showToast(data.message || '删除失败');
-                        }
-                        await loadBackups();
-                    } catch (e) {
-                        showToast('删除失败');
-                    }
-                    backupState.deletingId = null;
-                };
-                const restoreBackup = async (id) => {
-                    if (!confirm('确定从该备份恢复？当前数据将被覆盖，建议先手动备份一次。')) return;
-                    backupState.restoringId = id;
-                    backupState.status = '';
-                    try {
-                        const res = await api('/api/backup/restore', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ backup_id: id })
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('恢复任务已启动');
-                            backupState.status = '恢复任务已启动，完成后页面配置将更新。';
-                            setTimeout(() => loadBackups(), 3000);
-                        } else {
-                            showToast(data.message || '恢复失败');
-                        }
-                    } catch (e) {
-                        showToast('恢复失败');
-                    }
-                    backupState.restoringId = null;
                 };
 
                 // ===== 任务控制台 =====
@@ -13494,9 +13318,6 @@ av:
                     strmConfig, strmExample, loadStrmSettings, saveStrmSettings, updateStrmExample,
                     // STRM 播放安全
                     strmSecurity, loadStrmSecurity, saveStrmSecurity, rotateStrmToken,
-                    // 数据备份
-                    backupState, loadBackups, startBackup, cleanupBackups, deleteBackup, restoreBackup,
-                    backupTypeLabel, backupStatusClass, backupStatusText, formatBackupTime,
                     // 任务控制台
                     taskConsole, loadTasks, pauseAll, resumeAll, taskTypeLabel, taskStatusClass, taskStatusText,
                     windowHost,
