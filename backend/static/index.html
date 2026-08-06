@@ -5616,8 +5616,9 @@
                             <span v-if="checkinTool.resultMessage" style="font-size:13px; color:#67c23a;">{{ checkinTool.resultMessage }}</span>
                         </div>
 
-                        <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
-                            说明：签到为所有有效 115 账号（状态正常）逐一执行，单个账号失败不影响其他账号；结果可在实时日志中查看。
+                        <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.8; background:#fdf6ec; border:1px solid #f5dab1; border-radius:6px; padding:10px 12px;">
+                            说明：签到为所有有效 115 账号（状态正常）逐一执行，单个账号失败不影响其他账号；结果可在实时日志中查看。<br>
+                            <strong style="color:#e6a23c;">注意：</strong>115 签到接口不支持 web（浏览器/扫码登录）cookies，会签到失败。若签到失败，日志会提示该账号的登录方式；请改用「开放平台登录」（android 环境 cookies）后再签到。
                         </div>
                     </div>
                 </div>

@@ -583,6 +583,8 @@ async def _run_daily_checkin():
 
     - 账号 cookies 为空或签到失败（cookies 可能已失效）时跳过并警告
     - 逐个账号独立签到，单个账号失败不影响其它账号
+    - 签到使用 115 OpenAPI 的 points_sign 接口，要求 android/ios 等 app 环境 cookies；
+      使用 web（浏览器）cookies 会失败，失败日志会提示该账号的登录方式。
     """
     from app.core.logbuffer import get_logger
     from app.core.json_storage import read_accounts
@@ -599,22 +601,34 @@ async def _run_daily_checkin():
     fail = 0
     for acc in valid:
         account_id = acc.get("id", 0)
+        account_name = acc.get("name", "") or f"账号{account_id}"
+        app_type = acc.get("app", "") or acc.get("auth_type", "") or "unknown"
         cookies = acc.get("cookies", "")
         if not cookies:
-            logger.warning(f"每日 115 签到：账号 {account_id} cookies 为空，跳过")
+            logger.warning(f"每日 115 签到：账号 {account_name}(id={account_id}) cookies 为空，跳过")
             fail += 1
             continue
         try:
             result = await asyncio.to_thread(Client115Service.daily_checkin, cookies)
         except Exception as e:
-            logger.warning(f"每日 115 签到：账号 {account_id} 异常: {e}")
+            logger.warning(f"每日 115 签到：账号 {account_name}(id={account_id}) 异常: {e}")
             fail += 1
             continue
 
         if not isinstance(result, dict) or not _is_checkin_success(result):
             err = result.get("error") if isinstance(result, dict) else str(result)
-            # cookies 失效等场景：跳过并警告
-            logger.warning(f"每日 115 签到：账号 {account_id} 失败（cookies 可能已失效）: {err}")
+            # 签到失败：提示登录方式（web cookies 无法签到）
+            if app_type == "web" or app_type == "unknown":
+                logger.warning(
+                    f"每日 115 签到：账号 {account_name}(id={account_id}) 签到失败，"
+                    f"登录方式为【{app_type}】（浏览器/扫码登录）。115 签到接口不支持 web cookies，"
+                    f"请改用「开放平台登录」（android 环境 cookies）后再试。错误详情: {err}"
+                )
+            else:
+                logger.warning(
+                    f"每日 115 签到：账号 {account_name}(id={account_id}) 签到失败，"
+                    f"登录方式为【{app_type}】（cookies 可能已失效或接口异常）。错误详情: {err}"
+                )
             fail += 1
             continue
 
@@ -623,9 +637,9 @@ async def _run_daily_checkin():
         data = result.get("data", result) if isinstance(result, dict) else result
         if isinstance(data, dict):
             msg = data.get("error_msg") or data.get("msg") or data.get("message") or "OK"
-            logger.info(f"每日 115 签到：账号 {account_id} 成功 ({msg})")
+            logger.info(f"每日 115 签到：账号 {account_name}(id={account_id}) 成功 ({msg})，登录方式【{app_type}】")
         else:
-            logger.info(f"每日 115 签到：账号 {account_id} 成功")
+            logger.info(f"每日 115 签到：账号 {account_name}(id={account_id}) 成功，登录方式【{app_type}】")
 
     logger.info(f"每日 115 签到完成: 成功 {ok} 个账号, 失败 {fail} 个账号")
 
