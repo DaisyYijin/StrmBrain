@@ -2716,23 +2716,20 @@
                         <button class="btn" :class="hasValidAccount ? 'btn-default btn-small' : 'btn-primary'" @click="openLoginModal('cookie')">
                             {{ hasValidAccount ? '重新扫码' : '扫码登录 115' }}
                         </button>
-                        <button class="btn btn-default btn-small" @click="openLoginModal('open')">
-                            开放平台登录
-                        </button>
-                        <span class="help-tip">?<span class="tip-text">开放平台登录使用 115 OpenAPI（access_token + refresh_token），需在 open.115.com 申请 App ID。相比 Cookie 更稳定、token 自动续期，适合长期同步。</span></span>
+                        <span class="help-tip">?<span class="tip-text">Cookie 扫码登录适合临时使用。如需长期稳定同步，建议在下方开启「开放平台登录」。</span></span>
                     </div>
 
                     <!-- 扫码登录弹窗 -->
                     <div v-if="qr.show" class="modal-mask" @click.self="closeLoginModal">
                         <div class="modal-box">
                             <div class="modal-header">
-                                <span class="modal-title">{{ qr.mode === 'open' ? '开放平台登录 115' : '扫码登录 115' }}</span>
+                                <span class="modal-title">扫码登录 115</span>
                                 <button class="modal-close" @click="closeLoginModal">×</button>
                             </div>
                             <div class="qrcode-box">
                                 <div v-if="!qr.image">
                                     <!-- Cookie 模式：选择设备类型 -->
-                                    <div class="form-group" style="margin-bottom: 16px;" v-if="qr.mode !== 'open'">
+                                    <div class="form-group" style="margin-bottom: 16px;">
                                         <label>cookie 对应设备类型</label>
                                         <div class="v-select" :class="{ open: appSelectOpen }">
                                             <div class="v-select-trigger" @click.stop="appSelectOpen = !appSelectOpen">
@@ -2749,18 +2746,13 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <!-- 开放平台模式：输入 App ID -->
-                                    <div class="form-group" style="margin-bottom: 16px;" v-else>
-                                        <label>开放平台 App ID<span class="help-tip">?<span class="tip-text">在 open.115.com 申请的应用 ID（纯数字）。同一 App ID 最多同时 3 个登录。</span></span></label>
-                                        <input type="text" v-model="qr.appId" placeholder="如 100195125" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
-                                    </div>
                                     <button class="btn btn-primary" @click="getQRCode" :disabled="qr.loading">
                                         {{ qr.loading ? '加载中...' : '获取二维码' }}
                                     </button>
                                 </div>
                                 <div v-else>
                                     <img :src="qr.image" alt="扫码登录">
-                                    <div class="qrcode-tip">{{ qr.mode === 'open' ? '请使用 115 App 扫码并在手机上确认授权' : '请使用 115 App 扫描二维码' }}</div>
+                                    <div class="qrcode-tip">请使用 115 App 扫描二维码</div>
                                     <div class="qrcode-status" :class="qrStatusClass">{{ qr.message }}</div>
                                     <div style="margin-top: 12px;" v-if="qr.status < 0">
                                         <button class="btn btn-primary" @click="getQRCode">刷新二维码</button>
@@ -2805,6 +2797,23 @@
                             </div>
                         </div>
 
+                        <!-- 开放平台登录 -->
+                        <div style="margin-top:16px; padding-top:16px; border-top:1px solid #ebeef5;">
+                            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                <label style="font-size:14px; color:#606266; white-space:nowrap;">开放平台登录<span class="help-tip">?<span class="tip-text">使用 115 OpenAPI（access_token + refresh_token）登录，需在 open.115.com 申请 App ID。相比 Cookie 更稳定、token 自动续期，适合长期同步。开启后点击「登录」按钮扫码授权。</span></span></label>
+                                <div class="tool-toggle" :class="{ 'toggle-on': openLogin.enabled }" @click="openLogin.enabled = !openLogin.enabled">
+                                    <div class="toggle-knob"></div>
+                                </div>
+                                <span style="font-size:13px;" :style="{ color: openLogin.enabled ? '#67c23a' : '#909399' }">{{ openLogin.enabled ? '已启用' : '未启用' }}</span>
+                            </div>
+                            <div v-if="openLogin.enabled" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px;">
+                                <input type="text" v-model="openLogin.appId" placeholder="输入开放平台 App ID（如 100195125）" style="flex:1; min-width:200px; max-width:320px; padding:8px 12px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                <button class="btn btn-primary btn-small" @click="openLoginModal('open')" :disabled="!openLogin.appId.trim()">
+                                    登录
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- API 请求间隔 -->
                         <div style="margin-top:16px; padding-top:16px; border-top:1px solid #ebeef5;">
                             <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
@@ -2821,49 +2830,6 @@
                                 <input type="number" v-model="apiInterval.retryCooldown" step="1" min="1" max="300" style="width:80px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; text-align:center;">
                                 <span style="font-size:13px; color:#909399;">秒</span>
                                 <span style="font-size:12px; color:#c0c4cc;">被限流后等待多久再重试（默认 30 秒），整理/同步/下载均生效</span>
-                            </div>
-
-                            <!-- 115 API 限流统计 -->
-                            <div style="margin-top:16px; border:1px solid #ebeef5; border-radius:8px; padding:16px; background:#fafafa;">
-                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-                                    <span style="font-size:14px; font-weight:600; color:#303133;">115 API 限流统计<span class="help-tip">?<span class="tip-text">实时展示 115 API 的请求速率、限流次数、缓存命中率等指标。QPS=每秒请求数，QPM=每分钟，QPH=每小时。缓存命中率高说明直链缓存有效降低了 API 调用。</span></span></span>
-                                    <button class="btn btn-default btn-small" @click="loadRateStats" :disabled="rateStats.loading" style="padding:4px 12px;">{{ rateStats.loading ? '加载中...' : '刷新' }}</button>
-                                </div>
-                                <div v-if="rateStats.data" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px;">
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qps > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qps || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPS（每秒）</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qpm > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qpm || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPM（每分钟）</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.qph > 0 ? '#409eff' : '#909399' }">{{ rateStats.data.qph || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">QPH（每小时）</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700; color:#67c23a;">{{ (rateStats.data.cache_hit_rate * 100 || 0).toFixed(1) }}%</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">缓存命中率</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700;" :style="{ color: rateStats.data.throttle_count > 0 ? '#f56c6c' : '#909399' }">{{ rateStats.data.throttle_count || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">限流次数</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700; color:#909399;">{{ (rateStats.data.avg_latency || 0).toFixed(0) }}ms</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">平均延迟</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700; color:#e6a23c;">{{ rateStats.data.cache_size || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">缓存条目数</div>
-                                    </div>
-                                    <div style="background:white; border-radius:6px; padding:10px 12px; text-align:center; border:1px solid #ebeef5;">
-                                        <div style="font-size:22px; font-weight:700; color:#909399;">{{ rateStats.data.total_requests || 0 }}</div>
-                                        <div style="font-size:11px; color:#909399; margin-top:2px;">总请求数</div>
-                                    </div>
-                                </div>
-                                <div v-else style="color:#909399; font-size:13px; padding:12px 0; text-align:center;">点击刷新查看限流统计</div>
                             </div>
                         </div>
                     </div>
@@ -8262,11 +8228,13 @@ av:
                     saving: false,
                 });
 
-                // 115 API 限流统计（P0-2）
-                const rateStats = reactive({
-                    loading: false,
-                    data: null,
+                // 开放平台登录配置
+                const openLogin = reactive({
+                    enabled: localStorage.getItem('strmhub_open_login_enabled') === '1',
+                    appId: localStorage.getItem('strmhub_open_appid') || '',
                 });
+                Vue.watch(() => openLogin.enabled, (v) => localStorage.setItem('strmhub_open_login_enabled', v ? '1' : '0'));
+                Vue.watch(() => openLogin.appId, (v) => localStorage.setItem('strmhub_open_appid', v || ''));
 
                 // P1 高级功能
                 const advFeatures = reactive({
@@ -8544,11 +8512,18 @@ av:
                 const openLoginModal = (mode = 'cookie') => {
                     stopPolling();
                     qr.mode = mode === 'open' ? 'open' : 'cookie';
+                    if (qr.mode === 'open') {
+                        qr.appId = openLogin.appId;
+                    }
                     qr.show = true;
                     qr.image = '';
                     qr.uid = '';
                     qr.status = 0;
                     qr.message = '';
+                    // 开放平台模式：已有 App ID 时直接获取二维码
+                    if (qr.mode === 'open' && qr.appId) {
+                        getQRCode();
+                    }
                 };
 
                 // 关闭弹窗：立即停止轮询并重置状态
@@ -8696,21 +8671,6 @@ av:
                         showToast('保存失败');
                     }
                     apiInterval.saving = false;
-                };
-
-                // 加载 115 API 限流统计（P0-2）
-                const loadRateStats = async () => {
-                    rateStats.loading = true;
-                    try {
-                        const res = await api('/api/115/rate-stats');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            rateStats.data = data.data;
-                        }
-                    } catch (e) {
-                        console.warn('[app] 加载限流统计失败:', e);
-                    }
-                    rateStats.loading = false;
                 };
 
                 // ===== P1 高级功能方法 =====
@@ -12896,7 +12856,7 @@ av:
                     uploadQueueState, loadUploadQueue, retryUploads, clearUploads, uploadStatusLabel, uploadStatusIcon,
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
-                    rateStats, loadRateStats,
+                    openLogin,
                     advFeatures, loadRouteRules, addRouteRule, saveRouteRules, saveProxyFeatures,
                     cacheWarmer, loadCacheWarmer, saveCacheWarmer, runCacheWarmer,
                     tgBot, loadTgBot, saveTgBot, testTgBot,
