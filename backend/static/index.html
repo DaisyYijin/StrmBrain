@@ -2904,8 +2904,8 @@
                             <div class="card-title">STRM 直链配置<span class="help-tip">?<span class="tip-text">配置 STRM 链接生成规则。全量同步和增量同步时会根据此配置生成 .strm 文件内容。</span></span></div>
 
                             <div class="form-group">
-                                <label>STRMhub 服务器地址<span class="help-tip">?<span class="tip-text">本服务（STRMhub）的访问地址（不含端口），如 http://192.168.1.100。播放器通过此地址请求 302 跳转获取 115 直链。</span></span></label>
-                                <input type="text" v-model="strmConfig.server_url" placeholder="http://192.168.1.100" class="code">
+                                <label>STRMhub 服务器地址<span class="help-tip">?<span class="tip-text">本服务（STRMhub）的访问地址（不含端口），如 http://172.17.0.1。播放器通过此地址请求 302 跳转获取 115 直链。</span></span></label>
+                                <input type="text" v-model="strmConfig.server_url" placeholder="http://172.17.0.1" class="code">
                             </div>
 
                             <!-- 端口 -->
@@ -6605,7 +6605,7 @@
 
                 // STRM 直链配置
                 const strmConfig = reactive({
-                    server_url: '',
+                    server_url: 'http://172.17.0.1',
                     server_port: '6060',
                     overwrite_mode: 'skip',
                 });
@@ -9353,7 +9353,7 @@ av:
                         const data = await res.json();
                         if (data.code === 0 && data.data) {
                             _loadingConfig = true;
-                            strmConfig.server_url = data.data.server_url || '';
+                            strmConfig.server_url = data.data.server_url || 'http://172.17.0.1';
                             strmConfig.server_port = data.data.server_port || '6060';
                             strmConfig.overwrite_mode = data.data.overwrite_mode || 'skip';
                             _loadingConfig = false;
@@ -9394,7 +9394,7 @@ av:
                     strmExample.filename = `${sampleName}.strm`;
 
                     // 302 跳转模式
-                    let serverUrl = (strmConfig.server_url || 'http://192.168.1.100').trim();
+                    let serverUrl = (strmConfig.server_url || 'http://172.17.0.1').trim();
                     let serverPort = (strmConfig.server_port || '6060').trim();
                     let base = serverPort ? `${serverUrl}:${serverPort}` : serverUrl;
                     strmExample.content = `${base}/api/115/url/${samplePath}?pickcode=abc123&account_id=1`;
