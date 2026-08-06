@@ -2566,12 +2566,31 @@ class Client115Service:
             with cls._export_dir_lock:
                 # 1. 提交导出目录树任务（layer_limit=0 表示不限深度）
                 export_id = export_dir_start(client, file_ids=str(cid), layer_limit=0)
-                # 2. 轮询等待任务完成（超时抛 TimeoutError，不取消远程任务）
-                export_dir_result(client, export_id, timeout=timeout, check_interval=2)
-                # 3. 下载并解析目录树（按路径解析，根路径为第一项），完成后删除导出文件
-                paths = list(export_dir_parse_iter(
-                    client, export_id, parse_iter="path", delete=True,
-                ))
+                export_file_id = ""
+                try:
+                    # 2. 轮询等待任务完成（超时抛 TimeoutError，不取消远程任务）
+                    result = export_dir_result(client, export_id, timeout=timeout, check_interval=2)
+                    export_file_id = str((result or {}).get("file_id", ""))
+                    # 3. 下载并解析目录树（按路径解析，根路径为第一项）
+                    # 注意：这里用 delete=False，由下方 finally 统一兜底删除，
+                    # 避免解析中途异常时 115 端临时文件残留（名为"xxx_目录树.txt"）
+                    paths = list(export_dir_parse_iter(
+                        client, export_id, parse_iter="path", delete=False,
+                    ))
+                finally:
+                    # 4. 兜底清理：无论成功/失败/超时，都尝试删除 115 端的导出临时文件
+                    if not export_file_id:
+                        try:
+                            result = export_dir_result(client, export_id, timeout=15, check_interval=1)
+                            export_file_id = str((result or {}).get("file_id", ""))
+                        except Exception:
+                            pass
+                    if export_file_id:
+                        try:
+                            client.fs_delete(export_file_id)
+                            logger.info(f"[115] 已清理导出目录树临时文件 file_id={export_file_id}")
+                        except Exception as e:
+                            logger.warning(f"[115] 清理导出目录树临时文件失败 file_id={export_file_id}: {e}")
         except Exception as e:
             logger.warning(f"[115] export_dir 树导出失败 cid={cid}: {e}")
             return {}
