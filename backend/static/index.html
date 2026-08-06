@@ -2882,7 +2882,7 @@
                     <!-- Emby 连接配置 -->
                     <div v-show="configTab === 'emby'">
                         <div class="card">
-                            <div class="card-title">Emby 连接<span class="help-tip">?<span class="tip-text">配置 Emby 服务器地址和 API Key。反代（302 播放）依赖此配置，保存后自动在 6086 端口启动反代服务，Emby 客户端连 http://主机IP:6086 即可播放 STRM 文件。</span></span></div>
+                            <div class="card-title">Emby 连接<span class="help-tip">?<span class="tip-text">配置 Emby 服务器地址和 API Key，用于获取媒体库信息和通知刷新。</span></span></div>
                             <div class="form-group">
                                 <label>Emby 地址<span class="help-tip">?<span class="tip-text">Emby 服务器的访问地址（含端口），如 http://192.168.1.100:8096。反代和媒体库信息都基于此地址。</span></span></label>
                                 <input type="text" v-model="emby.host" placeholder="http://192.168.1.100:8096" class="code">
@@ -2899,29 +2899,7 @@
                                     {{ emby.testing ? '测试中...' : '测试连接' }}
                                 </button>
                             </div>
-                            <div class="info-box info-box--bordered" style="margin-top:12px;">
-                                <div style="font-size:12px; color:#909399; line-height:1.6;">
-                                    <b style="color:#606266;">302 反代播放：</b><br>
-                                    保存后反代自动运行在端口 6086。将 Emby 客户端（或 Emby 设置中的服务器地址）改为<br>
-                                    <code style="word-break:break-all;">http://{{ windowHost }}:6086</code><br>
-                                    即可实现 STRM 文件 302 跳转 115 直链播放（不占服务器带宽、不转码）。
-                                </div>
-                            </div>
 
-                            <!-- Emby 302 反代管理 -->
-                            <div style="margin-top:16px; padding-top:16px; border-top:1px solid #ebeef5;">
-                                <div class="card-title" style="margin-bottom:12px;">Emby 302 反代<span class="help-tip">?<span class="tip-text">内置 302 反代服务状态与端口。Emby 客户端连接反代端口即可播放 STRM 文件。</span></span></div>
-                                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-                                    <span class="task-queue-status" :class="embyProxyState.status === 'running' ? 'running' : 'idle'">{{ embyProxyState.statusText }}</span>
-                                    <span style="font-size:13px; color:#606266;">反代端口：<strong style="color:#409eff;">{{ embyProxyState.port }}</strong></span>
-                                    <span style="font-size:13px; color:#909399;">客户端连接：<code style="word-break:break-all;">http://{{ windowHost }}:{{ embyProxyState.port }}</code></span>
-                                    <button class="btn btn-default btn-action" @click="restartEmbyProxy" :disabled="embyProxyState.restarting">
-                                        {{ embyProxyState.restarting ? '重启中...' : '重启反代' }}
-                                    </button>
-                                </div>
-                                <div v-if="embyProxyState.status === 'running'" style="font-size:12px; color:#67c23a; margin-top:8px;">反代服务运行中，Emby 客户端连接反代端口即可实现 302 播放。</div>
-                                <div v-else style="font-size:12px; color:#e6a23c; margin-top:8px;">反代服务未运行，请先保存 Emby 连接配置。</div>
-                            </div>
                         </div>
                     </div>
                     <!-- /Emby 连接配置 -->
@@ -8620,16 +8598,6 @@ av:
                     enabled: true,
                 });
 
-                // Emby 302 反代状态
-                const embyProxyState = reactive({
-                    loading: false,
-                    restarting: false,
-                    port: 6086,
-                    status: '',        // running / stopped
-                    statusText: '未知',
-                    enabled: true,
-                });
-
                 // 数据备份
                 const backupState = reactive({
                     loading: false,
@@ -9624,11 +9592,10 @@ av:
                         });
                         const data = await res.json();
                         if (data.code === 0) {
-                            showToast('已保存，反代服务已启动');
+                            showToast('已保存');
                             // 清除前端缓存，重新加载仪表盘
                             try { localStorage.removeItem(DASH_CACHE_KEY); } catch (e) { console.warn('[app] 操作失败:', e); }
                             loadDashboard();
-                            // 反代为内置功能，保存 Emby 后后端自动启动
                         } else {
                             showToast(data.message || '保存失败');
                         }
@@ -10933,7 +10900,6 @@ av:
                         await loadStrmSettings();
                         await loadLifeMonitor();
                         await loadStrmSecurity();
-                        await loadEmbyProxy();
                         await loadEmbySyncSettings();
                         await loadEmbyNotifySettings();
                         await loadNotifySettings();
@@ -11669,38 +11635,6 @@ av:
                         showToast('轮换失败');
                     }
                     strmSecurity.rotating = false;
-                };
-
-                // ===== Emby 302 反代 =====
-                const loadEmbyProxy = async () => {
-                    embyProxyState.loading = true;
-                    try {
-                        const res = await api('/api/settings/emby-proxy');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            embyProxyState.port = data.data.port || 6086;
-                            embyProxyState.enabled = data.data.enabled !== false;
-                            embyProxyState.status = data.data.running ? 'running' : 'stopped';
-                            embyProxyState.statusText = data.data.running ? '运行中' : '未运行';
-                        }
-                    } catch (e) { console.warn('[app] 操作失败:', e); }
-                    embyProxyState.loading = false;
-                };
-                const restartEmbyProxy = async () => {
-                    embyProxyState.restarting = true;
-                    try {
-                        const res = await api('/api/settings/emby-proxy/restart', { method: 'POST' });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast('反代已重启');
-                        } else {
-                            showToast(data.message || '重启失败');
-                        }
-                        await loadEmbyProxy();
-                    } catch (e) {
-                        showToast('重启失败');
-                    }
-                    embyProxyState.restarting = false;
                 };
 
                 // ===== 数据备份 =====
@@ -13648,9 +13582,8 @@ av:
                     tmdb, loadTmdbSettings, saveTmdbSettings, testTmdbSettings, autoSaveAndTestTmdb, selectTmdbLanguage,
                     // STRM 配置
                     strmConfig, strmExample, loadStrmSettings, saveStrmSettings, updateStrmExample,
-                    // STRM 播放安全 / Emby 反代
+                    // STRM 播放安全
                     strmSecurity, loadStrmSecurity, saveStrmSecurity, rotateStrmToken,
-                    embyProxyState, loadEmbyProxy, restartEmbyProxy,
                     // 数据备份
                     backupState, loadBackups, startBackup, cleanupBackups, deleteBackup, restoreBackup,
                     backupTypeLabel, backupStatusClass, backupStatusText, formatBackupTime,
