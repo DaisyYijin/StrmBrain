@@ -1743,18 +1743,34 @@
             left: 50%;
             transform: translate(-50%, -100%);
             z-index: 10000;
-            padding: 14px 28px;
+            padding: 14px 18px 14px 28px;
             border-radius: 0 0 8px 8px;
             font-size: 14px;
             color: #fff;
             box-shadow: 0 4px 16px rgba(0,0,0,0.18);
             max-width: 80vw;
             word-break: break-all;
-            pointer-events: none;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            gap: 14px;
         }
         .top-notice.success { background: #67c23a; }
         .top-notice.error { background: #f56c6c; }
         .top-notice.info { background: #409eff; }
+        .top-notice-text { flex: 1; }
+        .top-notice-close {
+            flex-shrink: 0;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0.75;
+            padding: 2px 4px;
+            border-radius: 4px;
+            transition: opacity 0.2s;
+            user-select: none;
+        }
+        .top-notice-close:hover { opacity: 1; }
         .slide-down-enter-active { transition: all 0.35s ease; }
         .slide-down-leave-active { transition: all 0.25s ease; }
         .slide-down-enter-from, .slide-down-leave-to { transform: translate(-50%, -100%); opacity: 0; }
@@ -6358,7 +6374,10 @@
 
         <!-- 顶部滑出通知（TMDB 保存/测试结果） -->
         <transition name="slide-down">
-            <div class="top-notice" :class="topNotice.type" v-if="topNotice.show">{{ topNotice.message }}</div>
+            <div class="top-notice" :class="topNotice.type" v-if="topNotice.show">
+                <span class="top-notice-text">{{ topNotice.message }}</span>
+                <span class="top-notice-close" @click="closeTopNotice">×</span>
+            </div>
         </transition>
     </div>
     
@@ -8521,7 +8540,7 @@ av:
                 // ms 传 0 表示持续显示，直到下一次 showTopNotice 替换或手动关闭
                 const topNotice = reactive({ show: false, message: '', type: 'info' });
                 let _topNoticeTimer = null;
-                const showTopNotice = (msg, type = 'info', ms = 3000) => {
+                const showTopNotice = (msg, type = 'info', ms = 6000) => {
                     topNotice.message = msg;
                     topNotice.type = type;
                     topNotice.show = true;
@@ -8531,6 +8550,12 @@ av:
                     } else {
                         _topNoticeTimer = null;
                     }
+                };
+                // 手动关闭顶部通知
+                const closeTopNotice = () => {
+                    if (_topNoticeTimer) clearTimeout(_topNoticeTimer);
+                    _topNoticeTimer = null;
+                    topNotice.show = false;
                 };
                 
                 const qrStatusClass = computed(() => {
@@ -9308,7 +9333,8 @@ av:
                     } catch (e) { console.warn('[app] 操作失败:', e); }
                 };
                 // 保存 TMDB 配置（结果通过顶部滑出通知显示，返回是否成功）
-                const saveTmdbSettings = async () => {
+                // silent=true 时成功不弹通知（用于失焦自动保存，避免被后续测试结果覆盖）
+                const saveTmdbSettings = async (silent = false) => {
                     tmdb.saving = true;
                     try {
                         const res = await api('/api/settings/tmdb', {
@@ -9325,17 +9351,17 @@ av:
                         if (data.code === 0) {
                             tmdb.saveOk = true;
                             tmdb.saveResult = '保存成功';
-                            showTopNotice('TMDB 配置保存成功', 'success');
+                            if (!silent) showTopNotice('TMDB 配置保存成功', 'success', 5000);
                         } else {
                             tmdb.saveOk = false;
                             tmdb.saveResult = data.message || '保存失败';
-                            showTopNotice(tmdb.saveResult, 'error', 4000);
+                            showTopNotice(tmdb.saveResult, 'error', 7000);
                         }
                         return tmdb.saveOk;
                     } catch (e) {
                         tmdb.saveOk = false;
                         tmdb.saveResult = '保存失败：网络错误';
-                        showTopNotice(tmdb.saveResult, 'error', 4000);
+                        showTopNotice(tmdb.saveResult, 'error', 7000);
                         return false;
                     } finally {
                         tmdb.saving = false;
@@ -9367,12 +9393,12 @@ av:
                         const data = await res.json();
                         tmdb.testOk = data.code === 0;
                         tmdb.testResult = data.message;
-                        showTopNotice(tmdb.testResult, tmdb.testOk ? 'success' : 'error', 4000);
+                        showTopNotice(tmdb.testResult, tmdb.testOk ? 'success' : 'error', tmdb.testOk ? 7000 : 9000);
                         return tmdb.testOk;
                     } catch (e) {
                         tmdb.testOk = false;
                         tmdb.testResult = e.name === 'AbortError' ? '连接超时，请检查域名是否可访问' : '测试失败';
-                        showTopNotice(tmdb.testResult, 'error', 4000);
+                        showTopNotice(tmdb.testResult, 'error', 9000);
                         return false;
                     } finally {
                         clearTimeout(timeoutId);
@@ -9381,8 +9407,9 @@ av:
                 };
                 // 输入框失焦（点击空白处）自动保存 + 测试连接
                 const autoSaveAndTestTmdb = async () => {
-                    // 先保存，再测试；结果均以顶部滑出通知显示
-                    const saved = await saveTmdbSettings();
+                    // 先静默保存，再测试；测试结果以顶部滑出通知显示
+                    // 自动保存不弹"保存成功"，避免被接下来的测试结果快速覆盖（一闪而过）
+                    const saved = await saveTmdbSettings(true);
                     if (saved) {
                         await testTmdbSettings();
                     }
@@ -12825,7 +12852,7 @@ av:
 
                 return {
                     tab, configTab, sidebarCollapsed,
-                    accounts, loginApps, qr, qrStatusClass, files, toast, topNotice,
+                    accounts, loginApps, qr, qrStatusClass, files, toast, topNotice, closeTopNotice,
                     version, logs, logViewer, localAccount, accountMenu,
                     openLogs, closeLogs, openLogWindow, clearLogs, toggleLevelFilter, onKeywordInput, sourceLabel, filteredLogs, syncLogs, organizeLogs, openLocalAccount, closeLocalAccount, saveLocalAccount, fetchVersionInfo,
                     toggleAccountMenu, closeAccountMenu, onAccountManage, onAccountLogout,
