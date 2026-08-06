@@ -2239,7 +2239,10 @@ class Client115Service:
         """
         _apply_rate_limit("mkdir")
         client = cls.create_client_from_cookies(cookies)
-        # 参数转换：fs_mkdir 用 {"cname": name}，fs_mkdir_app 内部走 fs_folder_update_app 用 {"name": name}
+        # 参数转换：fs_mkdir（web）用 {"cname": name}，fs_mkdir_app 内部走
+        # fs_folder_update_app 用 {"name": name}（p115client edit.makedir 官方实现
+        # 是传 name 字符串 + pid 关键字，这里用等效 payload dict）。
+        # 返回结构差异：web 直接返回 {"cid": ...}，proapi 返回 {"data": {"category_id": ...}}。
         def _adapt(payload: dict):
             if "cname" in payload and "name" not in payload:
                 payload = dict(payload)
@@ -2251,8 +2254,14 @@ class Client115Service:
                 {"cname": name, "pid": parent_id},
                 arg_adapter=_adapt,
             )
-            # 成功返回 {"cid": ...} 或 {"file_id": ...}
-            cid = resp.get("cid") or resp.get("file_id") or resp.get("category_id")
+            # 解析新目录 ID：兼容 web 直接返回 cid/file_id，以及 proapi 的 data.category_id
+            cid = (
+                resp.get("cid") or resp.get("file_id") or resp.get("category_id")
+                or (isinstance(resp.get("data"), dict) and (
+                    resp["data"].get("category_id") or resp["data"].get("file_id")
+                    or resp["data"].get("cid")
+                ))
+            )
             if cid:
                 # 目录创建成功，清除失败黑名单缓存
                 cache_key = (str(parent_id), name)
