@@ -3003,46 +3003,6 @@
                                 </div>
                             </div>
                         </div>
-
-                        <!-- 115 生活事件监控 -->
-                        <div class="card" style="margin-top:16px;">
-                            <div class="card-title">115 生活事件监控<span class="help-tip">?<span class="tip-text">开启后，后台定时轮询 115 网盘生活事件，感知网盘文件变化并自动增量同步到本地 STRM，实现网盘变更自动入库。</span></span></div>
-
-                            <!-- 开关 -->
-                            <div class="form-group">
-                                <label>启用生活事件监控<span class="help-tip">?<span class="tip-text">开启后后台定时轮询 115 生活事件，检测到网盘文件变化时自动增量同步到本地 STRM 目录</span></span></label>
-                                <div style="display:flex; align-items:center; gap:8px;">
-                                    <div class="tool-toggle" :class="{ 'toggle-on': lifeMonitor.enabled }" @click="lifeMonitor.enabled = !lifeMonitor.enabled">
-                                        <div class="toggle-knob"></div>
-                                    </div>
-                                    <span style="font-size:13px;" :style="{ color: lifeMonitor.enabled ? '#67c23a' : '#909399' }">{{ lifeMonitor.enabled ? '已启用' : '未启用' }}</span>
-                                </div>
-                            </div>
-
-                            <!-- 轮询间隔 -->
-                            <div class="form-group" v-show="lifeMonitor.enabled">
-                                <label>轮询间隔（秒）<span class="help-tip">?<span class="tip-text">轮询 115 生活事件的间隔时间，最小 10 秒，默认 30 秒。间隔越短响应越快，但会略微增加 115 请求频率</span></span></label>
-                                <div style="display:flex; align-items:center; gap:12px;">
-                                    <input type="number" class="form-input" v-model.number="lifeMonitor.interval" min="10" max="3600" step="10" style="width:120px;" placeholder="30">
-                                    <span style="font-size:13px; color:#909399;">秒</span>
-                                </div>
-                            </div>
-
-                            <!-- 保存 -->
-                            <div style="display:flex; gap:8px;">
-                                <button class="btn btn-primary btn-action" @click="saveLifeMonitor" :disabled="lifeMonitor.saving">
-                                    {{ lifeMonitor.saving ? '保存中...' : '保存并生效' }}
-                                </button>
-                            </div>
-
-                            <!-- 说明 -->
-                            <div class="info-box info-box--bordered" style="margin-top:16px;">
-                                <div class="info-box-title">说明</div>
-                                <div class="info-box-content">
-                                    115 网盘文件变化自动增量同步到本地 STRM。启用后需保持服务运行，监控器会按设定间隔轮询 115 生活事件，检测到新增/变更文件后自动增量同步，让本地 STRM 媒体库与网盘保持同步。
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <!-- /STRM 配置 -->
 
@@ -8376,14 +8336,6 @@ av:
                     clearing: false,
                 });
 
-                // ===== 115 生活事件监控 =====
-                const lifeMonitor = reactive({
-                    loading: false,
-                    saving: false,
-                    enabled: false,
-                    interval: 60,    // 轮询间隔（秒）
-                });
-
                 // 实时日志
                 const logs = reactive({ show: false, entries: [], levelFilter: '', keyword: '', sources: {}, timer: null, lastSeq: 0 });
                 const logViewer = ref(null);
@@ -10898,7 +10850,6 @@ av:
                         await loadApiInterval();
                         await loadTmdbSettings();
                         await loadStrmSettings();
-                        await loadLifeMonitor();
                         await loadStrmSecurity();
                         await loadEmbySyncSettings();
                         await loadEmbyNotifySettings();
@@ -11524,47 +11475,6 @@ av:
                         showToast('清空失败：网络错误', 3000);
                     }
                     uploadQueueState.clearing = false;
-                };
-
-                // ============ 115 生活事件监控 ============
-
-                // 加载生活事件监控状态
-                const loadLifeMonitor = async () => {
-                    lifeMonitor.loading = true;
-                    try {
-                        const res = await api('/api/life-event-monitor');
-                        const data = await res.json();
-                        if (data.code === 0 && data.data) {
-                            lifeMonitor.enabled = !!data.data.enabled;
-                            if (data.data.interval) lifeMonitor.interval = data.data.interval;
-                        }
-                    } catch (e) {
-                        console.warn('[app] 加载生活事件监控失败:', e);
-                    }
-                    lifeMonitor.loading = false;
-                };
-
-                // 保存生活事件监控配置（开关 + 轮询间隔）
-                const saveLifeMonitor = async () => {
-                    lifeMonitor.saving = true;
-                    try {
-                        const interval = Math.max(10, Math.floor(lifeMonitor.interval || 60));
-                        const res = await api('/api/life-event-monitor', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ enabled: lifeMonitor.enabled, interval }),
-                        });
-                        const data = await res.json();
-                        if (data.code === 0) {
-                            showToast(data.message || '已保存', 3000);
-                            loadLifeMonitor();
-                        } else {
-                            showToast(data.message || '保存失败', 3000);
-                        }
-                    } catch (e) {
-                        showToast('保存失败：网络错误', 3000);
-                    }
-                    lifeMonitor.saving = false;
                 };
 
                 // 工具5：Emby 影视缺集管理
@@ -13631,7 +13541,6 @@ av:
                     baseUrlTool, baseUrlDetect, baseUrlExtract, baseUrlRun,
                     watcherState, loadWatcher, startWatcher, stopWatcher, stopAllWatchers, watcherPathText,
                     uploadQueueState, loadUploadQueue, retryUploads, clearUploads, uploadStatusLabel, uploadStatusIcon,
-                    lifeMonitor, loadLifeMonitor, saveLifeMonitor,
                     // API 间隔配置
                     apiInterval, loadApiInterval, saveApiInterval,
                     rateStats, loadRateStats,

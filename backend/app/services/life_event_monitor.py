@@ -21,7 +21,7 @@
 - 变更累计后触发 Emby 媒体库刷新
 
 配置（存于 settings.json 的 life_event 键）：
-- enabled: bool 是否启用（默认 False，需用户手动开启）
+- enabled: bool 是否启用（默认 True，自动后台运行）
 - interval: int 轮询间隔秒数（默认 30，最小 10）
 - sync_after_changes: bool 有变更时是否触发增量同步兜底（默认 True，
   防止事件遗漏导致本地与网盘不一致）
@@ -105,7 +105,7 @@ class LifeEventMonitor:
         return max(interval, MIN_INTERVAL)
 
     def is_enabled(self) -> bool:
-        return bool(self._get_config().get("enabled", False))
+        return bool(self._get_config().get("enabled", True))
 
     # ===== 生命周期 =====
 
@@ -144,7 +144,7 @@ class LifeEventMonitor:
         """获取监控状态（供 API 使用）。"""
         cfg = self._get_config()
         return {
-            "enabled": cfg.get("enabled", False),
+            "enabled": cfg.get("enabled", True),
             "running": self._running,
             "interval": self._get_interval(),
             "last_data": self._last_data,
