@@ -1300,3 +1300,166 @@ async def run_checkin_now():
         return ApiResponse(data={"accounts": len(valid), "message": "签到已执行，详情见日志"})
     except Exception as e:
         return ApiResponse(code=500, message=f"签到执行异常: {str(e)}")
+
+
+# ============ 工具11：分享审核队列（#27） ============
+
+class ShareReviewAddRequest(BaseModel):
+    link: str
+    title: str = ""
+    source: str = "manual"
+
+
+class ShareReviewActionRequest(BaseModel):
+    note: str = ""
+
+
+@router.get("/share-review/list", response_model=ApiResponse)
+async def share_review_list(status: str = ""):
+    """获取分享审核队列列表（可选状态过滤）"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    return ApiResponse(data=queue.list_items(status))
+
+
+@router.get("/share-review/pending-count", response_model=ApiResponse)
+async def share_review_pending_count():
+    """获取待审核数量"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    return ApiResponse(data={"count": queue.get_pending_count()})
+
+
+@router.post("/share-review/add", response_model=ApiResponse)
+async def share_review_add(payload: ShareReviewAddRequest):
+    """添加分享链接到审核队列"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    item = queue.add_item(payload.link, payload.title, payload.source)
+    return ApiResponse(data=item, message="已添加到审核队列")
+
+
+@router.post("/share-review/{item_id}/approve", response_model=ApiResponse)
+async def share_review_approve(item_id: str, payload: ShareReviewActionRequest):
+    """审核通过"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    if queue.approve_item(item_id, payload.note):
+        return ApiResponse(message="已审核通过")
+    return ApiResponse(code=404, message="项不存在或已审核")
+
+
+@router.post("/share-review/{item_id}/reject", response_model=ApiResponse)
+async def share_review_reject(item_id: str, payload: ShareReviewActionRequest):
+    """审核拒绝"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    if queue.reject_item(item_id, payload.note):
+        return ApiResponse(message="已拒绝")
+    return ApiResponse(code=404, message="项不存在或已审核")
+
+
+@router.delete("/share-review/{item_id}", response_model=ApiResponse)
+async def share_review_delete(item_id: str):
+    """删除审核项"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    if queue.delete_item(item_id):
+        return ApiResponse(message="已删除")
+    return ApiResponse(code=404, message="项不存在")
+
+
+@router.post("/share-review/clear-reviewed", response_model=ApiResponse)
+async def share_review_clear():
+    """清除已审核项"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    count = queue.clear_reviewed()
+    return ApiResponse(data={"cleared": count}, message=f"已清除 {count} 条已审核项")
+
+
+@router.get("/share-review/auto-approve", response_model=ApiResponse)
+async def share_review_auto_approve_status():
+    """获取自动审核通过设置"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    return ApiResponse(data={"enabled": queue.is_auto_approve_enabled()})
+
+
+@router.post("/share-review/auto-approve", response_model=ApiResponse)
+async def share_review_auto_approve_set(payload: ShareReviewActionRequest):
+    """设置自动审核通过"""
+    from app.services.share_review import ShareReviewQueue
+    queue = ShareReviewQueue.get_instance()
+    enabled = payload.note.lower() in ("true", "1", "yes", "on")
+    queue.set_auto_approve(enabled)
+    return ApiResponse(message=f"自动审核已{'开启' if enabled else '关闭'}")
+
+
+# ============ 工具12：外部播放器脚本生成（#26） ============
+
+class PlayerScriptRequest(BaseModel):
+    player: str = "potplayer"
+    url: str
+    title: str = ""
+
+
+class BatchPlayerScriptRequest(BaseModel):
+    player: str = "potplayer"
+    items: list[dict] = []  # [{"url": str, "title": str}, ...]
+
+
+@router.post("/player-script/generate", response_model=ApiResponse)
+async def generate_player_script(payload: PlayerScriptRequest):
+    """生成单个播放器脚本"""
+    from app.services.external_player import ExternalPlayerService
+    svc = ExternalPlayerService()
+    try:
+        result = svc.generate_script(payload.player, payload.url, payload.title)
+        return ApiResponse(data=result)
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
+
+
+@router.post("/player-script/generate-batch", response_model=ApiResponse)
+async def generate_batch_player_scripts(payload: BatchPlayerScriptRequest):
+    """批量生成播放器脚本"""
+    from app.services.external_player import ExternalPlayerService
+    svc = ExternalPlayerService()
+    try:
+        result = svc.generate_batch_scripts(payload.player, payload.items)
+        return ApiResponse(data=result)
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
+
+
+@router.get("/player-script/players", response_model=ApiResponse)
+async def list_supported_players():
+    """获取支持的播放器列表"""
+    from app.services.external_player import ExternalPlayerService
+    svc = ExternalPlayerService()
+    return ApiResponse(data=svc.get_supported_players())
+
+
+# ============ 工具13：多网盘驱动注册（#31） ============
+
+@router.get("/drivers", response_model=ApiResponse)
+async def list_drivers():
+    """列出所有已注册的网盘驱动"""
+    from app.services.driver_base import get_driver_registry
+    registry = get_driver_registry()
+    return ApiResponse(data=registry.get_driver_info())
+
+
+@router.get("/drivers/{name}", response_model=ApiResponse)
+async def get_driver_detail(name: str):
+    """获取指定驱动的信息"""
+    from app.services.driver_base import get_driver_registry
+    registry = get_driver_registry()
+    driver = registry.get(name)
+    if driver is None:
+        return ApiResponse(code=404, message=f"驱动 {name} 未注册")
+    return ApiResponse(data={
+        "name": driver.name,
+        "class": type(driver).__name__,
+    })

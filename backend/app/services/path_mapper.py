@@ -15,6 +15,12 @@
 
 配置持久化在 settings.json 的 "path_mapping" 键下（通过 read_setting / save_setting）。
 """
+import hmac
+import hashlib
+import base64
+import time
+from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
+
 from typing import Optional
 
 from app.core.json_storage import read_setting, save_setting
@@ -133,3 +139,125 @@ class PathMapper:
     def create_from_config(cls) -> "PathMapper":
         """从已保存的配置创建 PathMapper 实例（便捷方法）。"""
         return cls(cls.get_config())
+
+    def apply_signing(self, url: str) -> str:
+        """
+        根据 alist_sign 配置自动对 strm_url 类型的 URL 进行 alist 签名。
+
+        读取 settings.json 中的 "alist_sign" 配置，若已启用且配置了
+        secret_key，则对传入的 URL 调用 sign_alist_url 进行签名；
+        否则原样返回。
+
+        Args:
+            url: 待签名的 strm 播放 URL
+
+        Returns:
+            签名后的 URL（若未启用签名则原样返回）
+        """
+        config = AlistSigner.get_config()
+        if not config.get("enabled", False):
+            return url
+        secret_key = config.get("secret_key", "")
+        if not secret_key:
+            return url
+        expire_seconds = config.get("expire_seconds", 7200)
+        return sign_alist_url(url, secret_key, expire_seconds)
+
+
+def sign_alist_url(url: str, secret_key: str, expire_seconds: int = 7200) -> str:
+    """
+    对 alist 风格的 URL 进行 HMAC-SHA256 签名。
+
+    提取 URL 中 /d/ 及其后的完整路径作为签名内容，
+    使用 HMAC-SHA256(secret_key, path + expire) 计算签名，
+    并添加 sign、expire 参数到 URL query string。
+
+    Args:
+        url:            待签名的完整 URL
+        secret_key:     签名密钥
+        expire_seconds: 签名有效期（秒），默认 7200（2小时）
+
+    Returns:
+        签名后的 URL；若 URL 不包含 /d/ 路径或 secret_key 为空则原样返回。
+    """
+    if not secret_key or "/d/" not in url:
+        return url
+
+    parsed = urlparse(url)
+    # 提取 /d/ 及其后的完整路径作为签名内容
+    d_index = parsed.path.find("/d/")
+    sign_path = parsed.path[d_index:]
+
+    expire = int(time.time()) + expire_seconds
+    # HMAC-SHA256(secret_key, path + expire)
+    raw = sign_path + str(expire)
+    sign = base64.urlsafe_b64encode(
+        hmac.new(
+            secret_key.encode("utf-8"),
+            raw.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+    ).decode("utf-8")
+
+    # 添加 sign、expire 到 query string
+    query_params = dict(parse_qsl(parsed.query))
+    query_params["sign"] = sign
+    query_params["expire"] = str(expire)
+    new_query = urlencode(query_params)
+
+    return urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        new_query,
+        parsed.fragment,
+    ))
+
+
+class AlistSigner:
+    """alist 风格 URL 签名器。"""
+
+    def __init__(self, secret_key: str = "", expire_seconds: int = 7200):
+        """
+        Args:
+            secret_key:     签名密钥，为空时签名功能不生效
+            expire_seconds: 签名有效期（秒）
+        """
+        self.secret_key = secret_key
+        self.expire_seconds = expire_seconds
+
+    def sign(self, url: str) -> str:
+        """对 URL 进行签名（调用 sign_alist_url）。"""
+        return sign_alist_url(url, self.secret_key, self.expire_seconds)
+
+    def is_enabled(self) -> bool:
+        """检查是否配置了 secret_key（签名功能是否可用）。"""
+        return bool(self.secret_key)
+
+    @classmethod
+    def get_config(cls) -> dict:
+        """
+        从 settings.json 读取 "alist_sign" 配置。
+        返回 {"enabled": bool, "secret_key": str, "expire_seconds": int}。
+        """
+        data = read_setting("alist_sign")
+        if not isinstance(data, dict):
+            return {"enabled": False, "secret_key": "", "expire_seconds": 7200}
+        return {
+            "enabled": bool(data.get("enabled", False)),
+            "secret_key": str(data.get("secret_key", "")),
+            "expire_seconds": int(data.get("expire_seconds", 7200)),
+        }
+
+    @classmethod
+    def save_config(cls, enabled: bool, secret_key: str, expire_seconds: int) -> bool:
+        """
+        将 alist_sign 配置保存到 settings.json。
+        返回是否保存成功。
+        """
+        return save_setting("alist_sign", {
+            "enabled": enabled,
+            "secret_key": secret_key,
+            "expire_seconds": expire_seconds,
+        })

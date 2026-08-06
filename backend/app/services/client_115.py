@@ -327,37 +327,203 @@ def get_account_lock(account_id: int) -> threading.RLock:
         return _account_task_locks[account_id]
 
 
-# ===== Q2: 全局熔断器 =====
-# 检测到 115 限流码（REQUEST_MAX_LIMIT_CODE）后全局熔断 1 分钟，
-# 期间所有 115 API 调用直接拒绝（抛出异常），避免继续打 115 导致更严重的封号。
-# 熔断到期后自动恢复，恢复后通过通知通道告知调用方。
-_circuit_breaker_until: float = 0.0  # 熔断到期时间戳
+# ===== Q2 + #33: 全局认证状态机（熔断器升级） =====
+# 将简单的 _circuit_breaker_until（单时间戳）升级为状态机：
+# - state=active：正常工作
+# - state=cooldown：连续失败 1-2 次，阶梯退避（30s -> 60s -> 120s）
+# - state=failed：连续失败 3+ 次，熔断 5 分钟
+# - state=recovered：从熔断恢复，观察期（5 分钟内失败重新进入 cooldown）
+# - 网络错误（ConnectionError/Timeout）不计入失败次数
+
+# 状态枚举
+_AUTH_STATE_ACTIVE = "active"
+_AUTH_STATE_COOLDOWN = "cooldown"
+_AUTH_STATE_FAILED = "failed"
+_AUTH_STATE_RECOVERED = "recovered"
+
+# 阶梯退避秒数（cooldown 状态用）
+_AUTH_SM_COOLDOWN_STEPS = [30, 60, 120]
+# 熔断时长（failed 状态）
+_AUTH_SM_FAILED_DURATION = 300  # 5 分钟
+# 恢复观察期时长（recovered 状态）
+_AUTH_SM_RECOVERY_DURATION = 300  # 5 分钟
+# 进入 failed 状态的失败次数阈值
+_AUTH_SM_FAILED_THRESHOLD = 3
+
+# 全局认证状态机（内存态，线程安全）
+_auth_sm: dict = {
+    "state": _AUTH_STATE_ACTIVE,
+    "fail_count": 0,
+    "last_fail_ts": 0.0,
+    "cooldown_until": 0.0,
+    "recovery_count": 0,
+    "recovery_until": 0.0,
+    "last_reason": "",
+}
+_auth_sm_lock = threading.Lock()
+
+# 保留旧变量名兼容（_circuit_breaker_until 仍可被外部读取，由状态机同步维护）
+_circuit_breaker_until: float = 0.0
 _circuit_breaker_lock = threading.Lock()
-_CIRCUIT_BREAKER_DURATION = 60  # 熔断 60 秒
+_CIRCUIT_BREAKER_DURATION = 60
+
+
+def _refresh_auth_sm():
+    """惰性刷新认证状态机：冷却/熔断到期后自动状态转换。
+
+    - cooldown 到期 -> active
+    - failed 到期 -> recovered（进入观察期）
+    - recovered 观察期到期 -> active
+    """
+    now = _time.time()
+    with _auth_sm_lock:
+        state = _auth_sm["state"]
+        if state == _AUTH_STATE_COOLDOWN and now >= _auth_sm["cooldown_until"]:
+            _auth_sm["state"] = _AUTH_STATE_ACTIVE
+            _auth_sm["cooldown_until"] = 0.0
+            global _circuit_breaker_until
+            _circuit_breaker_until = 0.0
+            logger.info("[115] 认证状态机：cooldown 到期，恢复为 active")
+        elif state == _AUTH_STATE_FAILED and now >= _auth_sm["cooldown_until"]:
+            _auth_sm["state"] = _AUTH_STATE_RECOVERED
+            _auth_sm["recovery_until"] = now + _AUTH_SM_RECOVERY_DURATION
+            _auth_sm["recovery_count"] += 1
+            _auth_sm["cooldown_until"] = 0.0
+            _circuit_breaker_until = 0.0
+            logger.info("[115] 认证状态机：failed 熔断到期，进入 recovered 观察期")
+        elif state == _AUTH_STATE_RECOVERED and now >= _auth_sm["recovery_until"]:
+            _auth_sm["state"] = _AUTH_STATE_ACTIVE
+            _auth_sm["recovery_until"] = 0.0
+            _auth_sm["fail_count"] = 0
+            logger.info("[115] 认证状态机：recovered 观察期结束，恢复为 active")
+
+
+def _record_auth_failure(reason: str = "", is_network: bool = False):
+    """记录一次认证失败（#33 状态机）。
+
+    - 网络类错误（超时/连接失败）不计数，仅记录时间戳，避免误伤
+    - active -> cooldown：fail_count=1，冷却 30s
+    - cooldown -> cooldown/failed：fail_count++，>=3 进入 failed（5min），否则阶梯退避
+    - recovered -> cooldown：观察期内失败，重新进入 cooldown（用最大阶梯 120s）
+    - failed：已熔断，忽略新失败
+    """
+    global _circuit_breaker_until
+
+    if is_network:
+        # 网络类错误不计数，仅记录时间戳
+        with _auth_sm_lock:
+            _auth_sm["last_fail_ts"] = _time.time()
+        return
+
+    _refresh_auth_sm()
+    now = _time.time()
+    with _auth_sm_lock:
+        state = _auth_sm["state"]
+        _auth_sm["fail_count"] += 1
+        _auth_sm["last_fail_ts"] = now
+        _auth_sm["last_reason"] = reason[:200] if reason else ""
+
+        if state == _AUTH_STATE_ACTIVE:
+            # active -> cooldown（第 1 次失败）
+            step = _AUTH_SM_COOLDOWN_STEPS[0]
+            _auth_sm["state"] = _AUTH_STATE_COOLDOWN
+            _auth_sm["cooldown_until"] = now + step
+            _circuit_breaker_until = _auth_sm["cooldown_until"]
+            logger.warning(
+                f"[115] 认证状态机：active -> cooldown，冷却 {step}s。原因: {reason[:100]}"
+            )
+
+        elif state == _AUTH_STATE_COOLDOWN:
+            if _auth_sm["fail_count"] >= _AUTH_SM_FAILED_THRESHOLD:
+                # cooldown -> failed（连续失败 3+ 次）
+                _auth_sm["state"] = _AUTH_STATE_FAILED
+                _auth_sm["cooldown_until"] = now + _AUTH_SM_FAILED_DURATION
+                _circuit_breaker_until = _auth_sm["cooldown_until"]
+                logger.warning(
+                    f"[115] 认证状态机：cooldown -> failed，熔断 {_AUTH_SM_FAILED_DURATION}s。"
+                    f"连续失败 {_auth_sm['fail_count']} 次。原因: {reason[:100]}"
+                )
+            else:
+                # cooldown -> cooldown（阶梯退避）
+                idx = min(_auth_sm["fail_count"] - 1, len(_AUTH_SM_COOLDOWN_STEPS) - 1)
+                step = _AUTH_SM_COOLDOWN_STEPS[idx]
+                _auth_sm["cooldown_until"] = now + step
+                _circuit_breaker_until = _auth_sm["cooldown_until"]
+                logger.warning(
+                    f"[115] 认证状态机：cooldown 升级，冷却 {step}s。"
+                    f"连续失败 {_auth_sm['fail_count']} 次。原因: {reason[:100]}"
+                )
+
+        elif state == _AUTH_STATE_RECOVERED:
+            # recovered -> cooldown（观察期内失败，用最大阶梯 120s）
+            step = _AUTH_SM_COOLDOWN_STEPS[-1]
+            _auth_sm["state"] = _AUTH_STATE_COOLDOWN
+            _auth_sm["cooldown_until"] = now + step
+            _auth_sm["recovery_until"] = 0.0
+            _circuit_breaker_until = _auth_sm["cooldown_until"]
+            logger.warning(
+                f"[115] 认证状态机：recovered -> cooldown（观察期内失败），冷却 {step}s。"
+                f"原因: {reason[:100]}"
+            )
+        # failed 状态：已熔断，忽略新失败
+
+
+def _record_auth_success():
+    """记录一次认证成功（#33 状态机）。
+
+    成功时重置状态机为 active，清除所有失败计数和冷却。
+    在 API 调用成功时调用，使状态机从 cooldown/recovered 恢复。
+    """
+    global _circuit_breaker_until
+    with _auth_sm_lock:
+        prev_state = _auth_sm["state"]
+        if prev_state != _AUTH_STATE_ACTIVE:
+            logger.info(
+                f"[115] 认证状态机：{prev_state} -> active（认证成功，重置失败状态）"
+            )
+        _auth_sm["state"] = _AUTH_STATE_ACTIVE
+        _auth_sm["fail_count"] = 0
+        _auth_sm["cooldown_until"] = 0.0
+        _auth_sm["recovery_until"] = 0.0
+        _circuit_breaker_until = 0.0
 
 
 def _trip_circuit_breaker(reason: str = ""):
-    """触发全局熔断器"""
-    global _circuit_breaker_until
-    with _circuit_breaker_lock:
-        _circuit_breaker_until = _time.time() + _CIRCUIT_BREAKER_DURATION
-    logger.warning(f"[115] 全局熔断器已触发，熔断 {_CIRCUIT_BREAKER_DURATION}s。原因: {reason}")
+    """触发全局熔断器（兼容旧接口，内部调用 _record_auth_failure）。
+
+    #33 升级后，熔断器改为阶梯状态机，此函数保留用于兼容已有调用方。
+    """
+    _record_auth_failure(reason=reason)
 
 
 def _is_circuit_open() -> bool:
-    """检查全局熔断器是否处于开启状态"""
-    with _circuit_breaker_lock:
-        return _time.time() < _circuit_breaker_until
+    """检查全局熔断器是否处于开启状态（cooldown 或 failed）"""
+    _refresh_auth_sm()
+    with _auth_sm_lock:
+        return _auth_sm["state"] in (_AUTH_STATE_COOLDOWN, _AUTH_STATE_FAILED)
 
 
 def _check_circuit_breaker():
     """检查熔断器状态，若开启则抛出异常拒绝调用。
-    
+
     在所有 115 API 调用入口调用此函数。
+    #33: 使用状态机判断，cooldown 和 failed 状态均拒绝调用。
     """
-    if _is_circuit_open():
-        remaining = int(_circuit_breaker_until - _time.time())
-        raise RuntimeError(f"115 全局熔断中，请等待 {remaining}s 后重试")
+    _refresh_auth_sm()
+    with _auth_sm_lock:
+        state = _auth_sm["state"]
+        if state == _AUTH_STATE_COOLDOWN:
+            remaining = max(0, int(_auth_sm["cooldown_until"] - _time.time()))
+            raise RuntimeError(
+                f"115 认证冷却中（连续失败 {_auth_sm['fail_count']} 次），"
+                f"请等待 {remaining}s 后重试"
+            )
+        if state == _AUTH_STATE_FAILED:
+            remaining = max(0, int(_auth_sm["cooldown_until"] - _time.time()))
+            raise RuntimeError(
+                f"115 全局熔断中（连续失败 {_auth_sm['fail_count']} 次），"
+                f"请等待 {remaining}s 后重试"
+            )
 
 
 # ===== Q1: 账号认证状态机（阶梯冷却 + 失败暂停） =====
@@ -589,11 +755,12 @@ def _is_rate_limited(exc: Exception) -> bool:
     """判断异常是否为 115 访问频率过高
     
     Q2: 若检测到限流，自动触发全局熔断器。
+    #33: 限流视为认证失败，记录到状态机（阶梯退避/熔断）。
     """
     msg = str(exc)
     is_limited = "访问频率" in msg or "频率过高" in msg or "too many" in msg.lower() or "REQUEST_MAX_LIMIT" in msg or "请求过于频繁" in msg
     if is_limited:
-        _trip_circuit_breaker(reason=msg[:200])
+        _record_auth_failure(reason=msg[:200])
     return is_limited
 
 

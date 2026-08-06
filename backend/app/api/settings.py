@@ -634,3 +634,136 @@ async def get_emby_media_info_status():
     from app.services.emby_media_info import get_emby_media_info_service
     service = get_emby_media_info_service()
     return ApiResponse(data=service.get_status())
+
+
+# ===== #30: 内置自动更新 =====
+
+class UpdaterSettings(BaseModel):
+    """自动更新配置"""
+    enabled: bool = False
+    check_interval: int = 24  # 检查间隔（小时）
+    auto_install: bool = False
+    pre_release: bool = False
+
+
+@router.get("/updater", response_model=ApiResponse)
+async def get_updater_settings():
+    """获取自动更新配置与状态"""
+    from app.services.updater import get_updater
+    data = read_setting("updater")
+    updater = get_updater()
+    status = updater.get_status()
+    return ApiResponse(data={
+        "enabled": data.get("enabled", False),
+        "check_interval": data.get("check_interval", 24),
+        "auto_install": data.get("auto_install", False),
+        "pre_release": data.get("pre_release", False),
+        "status": status,
+    })
+
+
+@router.post("/updater", response_model=ApiResponse)
+async def save_updater_settings(payload: UpdaterSettings):
+    """保存自动更新配置"""
+    save_setting("updater", payload.model_dump())
+    return ApiResponse(message="更新设置已保存")
+
+
+@router.post("/updater/check", response_model=ApiResponse)
+async def check_update():
+    """主动触发版本检查"""
+    from app.services.updater import get_updater
+    result = await get_updater().check_latest()
+    return ApiResponse(data=result)
+
+
+@router.get("/updater/status", response_model=ApiResponse)
+async def get_updater_status():
+    """获取当前版本与最新版本状态"""
+    from app.services.updater import get_updater
+    return ApiResponse(data=get_updater().get_status())
+
+
+# ===== #35: alist Sign 配置 =====
+
+class AlistSignSettings(BaseModel):
+    """alist URL 签名配置"""
+    enabled: bool = False
+    secret_key: str = ""
+    expire_seconds: int = 7200
+
+
+@router.get("/alist-sign", response_model=ApiResponse)
+async def get_alist_sign_settings():
+    """获取 alist 签名配置"""
+    from app.services.path_mapper import AlistSigner
+    return ApiResponse(data=AlistSigner.get_config())
+
+
+@router.post("/alist-sign", response_model=ApiResponse)
+async def save_alist_sign_settings(payload: AlistSignSettings):
+    """保存 alist 签名配置"""
+    from app.services.path_mapper import AlistSigner
+    AlistSigner.save_config(
+        enabled=payload.enabled,
+        secret_key=payload.secret_key,
+        expire_seconds=payload.expire_seconds,
+    )
+    return ApiResponse(message="alist 签名配置已保存")
+
+
+# ===== #26: 外部播放器脚本配置 =====
+
+class ExternalPlayerSettings(BaseModel):
+    """外部播放器配置"""
+    default_player: str = "potplayer"
+    custom_templates: dict = {}
+
+
+@router.get("/external-player", response_model=ApiResponse)
+async def get_external_player_settings():
+    """获取外部播放器配置与支持的播放器列表"""
+    from app.services.external_player import ExternalPlayerService
+    svc = ExternalPlayerService()
+    return ApiResponse(data={
+        "default_player": svc.get_default_player(),
+        "custom_templates": svc.get_custom_templates(),
+        "supported_players": svc.get_supported_players(),
+    })
+
+
+@router.post("/external-player", response_model=ApiResponse)
+async def save_external_player_settings(payload: ExternalPlayerSettings):
+    """保存外部播放器配置"""
+    from app.services.external_player import ExternalPlayerService
+    svc = ExternalPlayerService()
+    svc.set_default_player(payload.default_player)
+    svc.save_custom_templates(payload.custom_templates)
+    return ApiResponse(message="外部播放器配置已保存")
+
+
+# ===== #34: 整理覆盖检查配置 =====
+
+class OrganizeOverwriteSettings(BaseModel):
+    """整理覆盖策略配置"""
+    overwrite_policy: str = "skip"  # skip / replace / rename
+
+
+@router.get("/organize-overwrite", response_model=ApiResponse)
+async def get_organize_overwrite_settings():
+    """获取整理覆盖策略"""
+    data = read_setting("organize_dirs")
+    return ApiResponse(data={
+        "overwrite_policy": data.get("overwrite_policy", "skip") if isinstance(data, dict) else "skip",
+    })
+
+
+@router.post("/organize-overwrite", response_model=ApiResponse)
+async def save_organize_overwrite_settings(payload: OrganizeOverwriteSettings):
+    """保存整理覆盖策略（合并到 organize_dirs 配置）"""
+    data = read_setting("organize_dirs")
+    if not isinstance(data, dict):
+        data = {}
+    data["overwrite_policy"] = payload.overwrite_policy
+    save_setting("organize_dirs", data)
+    return ApiResponse(message="覆盖策略已保存")

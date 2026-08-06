@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
+import threading
+import time
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -115,3 +117,141 @@ async def require_auth(
 def is_auth_enabled() -> bool:
     """返回认证是否启用"""
     return AUTH_ENABLED
+
+
+# ---------------------------------------------------------------------------
+# 认证状态机
+# ---------------------------------------------------------------------------
+
+# 全局认证状态机单例
+_auth_state_machine: Optional["AuthStateMachine"] = None
+
+
+class AuthStateMachine:
+    """认证状态机 - 跟踪115网盘认证状态，自动冷却和恢复
+
+    状态: active(正常) -> cooldown(短期冷却) -> failed(长期失败) -> active(恢复)
+    """
+
+    STATES = ['active', 'cooldown', 'failed', 'token_expired']
+
+    def __init__(self, cooldown_period=60, max_failures=5):
+        """
+        Args:
+            cooldown_period: 短期冷却时长（秒）
+            max_failures:    触发长期失败（failed）的连续失败次数上限
+        """
+        self.state = 'active'
+        self.failure_count = 0
+        self.cooldown_until = 0
+        self.cooldown_period = cooldown_period
+        self.max_failures = max_failures
+        self.lock = threading.Lock()
+
+    def record_success(self):
+        """记录成功认证，重置状态"""
+        with self.lock:
+            self.state = 'active'
+            self.failure_count = 0
+            self.cooldown_until = 0
+
+    def record_failure(self, is_network_error=False):
+        """记录失败认证，网络错误不计入失败计数"""
+        with self.lock:
+            # 网络错误不计入失败计数，但仍触发短期冷却
+            if is_network_error:
+                self.cooldown_until = time.time() + self.cooldown_period
+                self.state = 'cooldown'
+                return
+
+            self.failure_count += 1
+            if self.failure_count >= self.max_failures:
+                # 连续失败次数达到上限 -> 长期失败，冷却时间延长 10 倍
+                self.state = 'failed'
+                self.cooldown_until = time.time() + self.cooldown_period * 10
+            else:
+                self.state = 'cooldown'
+                self.cooldown_until = time.time() + self.cooldown_period
+
+    def is_active(self) -> bool:
+        """检查是否可用（非冷却/非失败/非过期）"""
+        with self.lock:
+            # token_expired 状态需手动恢复（重新获取 token 后调用 record_success）
+            if self.state == 'token_expired':
+                return False
+            if self.state == 'failed':
+                # 长期失败冷却到期后自动恢复
+                if time.time() >= self.cooldown_until:
+                    self.state = 'active'
+                    self.failure_count = 0
+                    return True
+                return False
+            if self.state == 'cooldown':
+                # 短期冷却到期后自动恢复（保留失败计数）
+                if time.time() >= self.cooldown_until:
+                    self.state = 'active'
+                    return True
+                return False
+            return True
+
+    def get_state(self) -> dict:
+        """返回当前状态详情"""
+        with self.lock:
+            now = time.time()
+            remaining = max(0, self.cooldown_until - now) if self.cooldown_until > 0 else 0
+            # 计算当前是否可用（不产生副作用，仅读取）
+            if self.state == 'token_expired':
+                active = False
+            elif self.state in ('cooldown', 'failed'):
+                active = now >= self.cooldown_until
+            else:
+                active = True
+            return {
+                'state': self.state,
+                'failure_count': self.failure_count,
+                'cooldown_until': self.cooldown_until,
+                'cooldown_remaining': remaining,
+                'is_active': active,
+            }
+
+    def force_cooldown(self, seconds: int = 60):
+        """强制进入冷却状态"""
+        with self.lock:
+            self.state = 'cooldown'
+            self.cooldown_until = time.time() + seconds
+
+    def set_token_expired(self):
+        """标记 token 过期"""
+        with self.lock:
+            self.state = 'token_expired'
+            self.failure_count = self.max_failures
+
+
+def get_auth_state_machine() -> AuthStateMachine:
+    """获取全局认证状态机单例"""
+    global _auth_state_machine
+    if _auth_state_machine is None:
+        _auth_state_machine = AuthStateMachine()
+    return _auth_state_machine
+
+
+# ---------------------------------------------------------------------------
+# 115 网盘认证状态机全局实例
+# ---------------------------------------------------------------------------
+
+_auth_state_115 = AuthStateMachine(cooldown_period=60, max_failures=5)
+
+
+def get_115_auth_state() -> dict:
+    """获取115网盘认证状态"""
+    return _auth_state_115.get_state()
+
+
+def record_115_success():
+    """记录115网盘操作成功"""
+    _auth_state_115.record_success()
+
+
+def record_115_failure(is_network_error=False):
+    """记录115网盘操作失败"""
+    _auth_state_115.record_failure(is_network_error)

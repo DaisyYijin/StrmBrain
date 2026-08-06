@@ -3258,6 +3258,71 @@
                             <button v-if="pathMapping.rules.length > 0" class="btn btn-primary btn-small" @click="savePathMapping" :disabled="pathMapping.saving" style="margin-top:6px;">{{ pathMapping.saving ? '保存中...' : '保存' }}</button>
                         </div>
 
+                        <!-- 自动更新 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">自动更新<span class="help-tip">?<span class="tip-text">定期检查新版本，可选自动安装。更新命令按当前系统平台自动生成。</span></span></div>
+                            <div style="font-size:13px; color:#303133; margin-bottom:10px;">
+                                当前版本：<strong style="color:#409eff;">v{{ versionInfo.current || '-' }}</strong>
+                                <template v-if="updaterCfg.status && updaterCfg.status.latest">
+                                    <span style="margin-left:12px;">最新版本：<strong style="color:#67c23a;">v{{ updaterCfg.status.latest }}</strong></span>
+                                    <span v-if="updaterCfg.status.has_update" style="margin-left:8px; color:#e6a23c;">（有新版本可更新）</span>
+                                </template>
+                                <span v-else-if="versionInfo.hasUpdate" style="margin-left:12px; color:#e6a23c;">发现新版本 v{{ versionInfo.latest }}</span>
+                            </div>
+                            <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+                                <div class="form-group" style="flex:1; min-width:140px;">
+                                    <label>检查间隔（小时）</label>
+                                    <input type="number" v-model.number="updaterCfg.check_interval" min="1" style="width:100%; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;" />
+                                </div>
+                                <div style="display:flex; flex-direction:column; justify-content:flex-end; gap:8px; padding-bottom:4px;">
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <span style="font-size:13px; color:#303133;">自动安装</span>
+                                        <div class="tool-toggle" :class="{ 'toggle-on': updaterCfg.auto_install }" @click="updaterCfg.auto_install = !updaterCfg.auto_install">
+                                            <span class="toggle-knob"></span>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <span style="font-size:13px; color:#303133;">预发布</span>
+                                        <div class="tool-toggle" :class="{ 'toggle-on': updaterCfg.pre_release }" @click="updaterCfg.pre_release = !updaterCfg.pre_release">
+                                            <span class="toggle-knob"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                <button class="btn btn-default btn-small" @click="checkUpdateNow" :disabled="updaterCfg.saving">检查更新</button>
+                                <button class="btn btn-primary btn-small" @click="saveUpdaterConfig" :disabled="updaterCfg.saving">{{ updaterCfg.saving ? '保存中...' : '保存' }}</button>
+                            </div>
+                            <div v-if="updaterCfg.status && updaterCfg.status.message" style="margin-top:10px; font-size:13px;" :style="{ color: (updaterCfg.status.message || '').includes('失败') ? '#f56c6c' : '#67c23a' }">{{ updaterCfg.status.message }}</div>
+                            <div v-if="updaterCfg.status && updaterCfg.status.update_commands && updaterCfg.status.update_commands.length > 0" style="margin-top:10px;">
+                                <div style="font-size:13px; font-weight:600; color:#303133; margin-bottom:6px;">更新命令指引</div>
+                                <pre style="margin:0; padding:10px; background:#f5f7fa; border:1px solid #ebeef5; border-radius:6px; font-size:12px; overflow-x:auto; line-height:1.7;">{{ updaterCfg.status.update_commands.join('\n') }}</pre>
+                            </div>
+                        </div>
+
+                        <!-- alist URL 签名 -->
+                        <div class="card" style="margin-top:20px;">
+                            <div class="card-title">alist URL 签名<span class="help-tip">?<span class="tip-text">为 alist 生成的下载/预览 URL 添加签名，防止链接被随意盗用。</span></span></div>
+                            <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                                <span style="font-size:13px; color:#303133;">启用签名</span>
+                                <div class="tool-toggle" :class="{ 'toggle-on': alistSign.enabled }" @click="alistSign.enabled = !alistSign.enabled">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                                <span style="font-size:12px; color:#909399;">{{ alistSign.enabled ? '已启用' : '未启用' }}</span>
+                            </div>
+                            <div class="form-group" style="margin-bottom:10px;">
+                                <label>Secret Key</label>
+                                <input type="text" v-model="alistSign.secret_key" placeholder="签名密钥" style="width:100%; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px; font-family:monospace;" />
+                            </div>
+                            <div class="form-group" style="margin-bottom:10px;">
+                                <label>过期时间（秒）</label>
+                                <input type="number" v-model.number="alistSign.expire_seconds" min="1" placeholder="7200" style="width:100%; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;" />
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-primary btn-small" @click="saveAlistSign" :disabled="alistSign.saving">{{ alistSign.saving ? '保存中...' : '保存' }}</button>
+                            </div>
+                        </div>
+
                         <!-- P2 新增功能说明 -->
                         <div class="card" style="margin-top:20px;">
                             <div class="card-title">P2 增强功能总览</div>
@@ -3622,6 +3687,25 @@
                         <div class="form-group">
                             <label>整理黑名单<span class="help-tip">?<span class="tip-text">文件名匹配任一正则则跳过整理。一行一个，留空不限制。</span></span></label>
                             <textarea ref="blacklistRef" v-model="organize.organize_blacklist" @input="autoResizeTextarea($refs.blacklistRef)" placeholder="一行一个正则表达式，如 (?i)sample" rows="1" style="width:100%; padding:10px 12px; font-size:14px; border:1px solid #dcdfe6; border-radius:4px; resize:none; overflow:hidden; line-height:1.5; outline:none; transition:border-color 0.2s;"></textarea>
+                        </div>
+                        <!-- 覆盖检查（P3 #34） -->
+                        <div class="form-group">
+                            <label>覆盖检查<span class="help-tip">?<span class="tip-text">整理时目标文件已存在时的处理策略：跳过=不处理；覆盖=直接覆盖；重命名=自动重命名后保留两个版本。</span></span></label>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <select v-model="organizeOverwrite.overwrite_policy" style="flex:1; padding:6px 10px; border:1px solid #dcdfe6; border-radius:4px; font-size:13px;">
+                                    <option value="skip">跳过（默认）</option>
+                                    <option value="replace">覆盖</option>
+                                    <option value="rename">重命名</option>
+                                </select>
+                                <button class="btn btn-primary btn-small" @click="saveOrganizeOverwrite" :disabled="organizeOverwrite.saving">{{ organizeOverwrite.saving ? '保存中...' : '保存' }}</button>
+                            </div>
+                        </div>
+                        <!-- 文件命名对齐（P3 #32） -->
+                        <div class="info-box" style="margin-top:4px;">
+                            <div style="font-size:13px; font-weight:600; color:#303133; margin-bottom:4px;">文件命名对齐</div>
+                            <div style="font-size:12px; color:#909399; line-height:1.7;">
+                                整理电视剧时自动将剧集名统一为 SxxExx 格式（如 S01E01），并与刮削后的 NFO 文件名保持一致，方便 Emby / Jellyfin 正确识别剧集。无需额外配置。
+                            </div>
                         </div>
                       </div>
                     </div>
@@ -4742,6 +4826,96 @@
                             </div>
                         </div>
 
+                        <!-- 工具15：分享审核队列 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.share_review.enabled, 'tool-disabled': !toolsState.share_review.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.share_review.enabled"></span>
+                                    分享审核队列
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.share_review.enabled, 'dot-off': !toolsState.share_review.enabled }"></span>
+                                    <span :style="{ color: toolsState.share_review.enabled ? '#67c23a' : '#909399' }">{{ toolsState.share_review.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.share_review.enabled }" @click="toggleTool('share_review')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                115 分享链接审核队列：提交链接后先审核（通过/拒绝）再决定是否转存，防止误操作。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('share_review')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    审核管理
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('share_review')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具16：外部播放器脚本 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.player_script.enabled, 'tool-disabled': !toolsState.player_script.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.player_script.enabled"></span>
+                                    外部播放器脚本
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.player_script.enabled, 'dot-off': !toolsState.player_script.enabled }"></span>
+                                    <span :style="{ color: toolsState.player_script.enabled ? '#67c23a' : '#909399' }">{{ toolsState.player_script.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.player_script.enabled }" @click="toggleTool('player_script')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                为 PotPlayer/VLC/mpv/IINA 生成播放脚本，点击即可在本地播放器打开 115 视频。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('player_script')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    脚本生成
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('player_script')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 工具17：多网盘驱动 -->
+                        <div class="tool-card" :class="{ 'tool-enabled': toolsState.drivers.enabled, 'tool-disabled': !toolsState.drivers.enabled }">
+                            <div class="tool-card-header">
+                                <div class="tool-card-title">
+                                    <span class="tool-bar" v-if="toolsState.drivers.enabled"></span>
+                                    多网盘驱动
+                                </div>
+                                <div class="tool-card-status">
+                                    <span class="tool-dot" :class="{ 'dot-on': toolsState.drivers.enabled, 'dot-off': !toolsState.drivers.enabled }"></span>
+                                    <span :style="{ color: toolsState.drivers.enabled ? '#67c23a' : '#909399' }">{{ toolsState.drivers.enabled ? '已启用' : '未启用' }}</span>
+                                    <div class="tool-toggle" :class="{ 'toggle-on': toolsState.drivers.enabled }" @click="toggleTool('drivers')">
+                                        <span class="toggle-knob"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tool-card-desc">
+                                查看已注册的网盘驱动（115 等），为多网盘支持做准备。
+                            </div>
+                            <div class="tool-card-footer">
+                                <button class="tool-btn tool-btn-config" @click="openToolConfig('drivers')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/></svg>
+                                    驱动列表
+                                </button>
+                                <button class="tool-btn tool-btn-run" @click="openToolConfig('drivers')">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; margin-right:4px;"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                                    打开面板
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -5381,6 +5555,187 @@
 
                         <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
                             说明：签到为所有有效 115 账号（状态正常）逐一执行，单个账号失败不影响其他账号；结果可在实时日志中查看。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 分享审核队列弹窗 -->
+                <div v-if="toolConfig.show === 'share_review'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:560px;">
+                        <div class="modal-header">
+                            <span class="modal-title">分享审核队列</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <!-- 添加链接 -->
+                        <div class="form-group">
+                            <label>添加分享链接<span class="help-tip">?<span class="tip-text">提交 115 分享链接后先进入审核队列，审核通过后才允许转存。</span></span></label>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="text" v-model="shareReview.newLink" placeholder="https://115.com/s/xxxxx?password=yyyy" style="flex:1; min-height:36px; font-size:13px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                            </div>
+                            <div style="display:flex; gap:6px; align-items:center; margin-top:6px;">
+                                <input type="text" v-model="shareReview.newTitle" placeholder="标题（可选）" style="flex:1; min-height:36px; font-size:13px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                                <select v-model="shareReview.newSource" style="padding:6px 8px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;">
+                                    <option value="manual">手动</option>
+                                    <option value="webhook">Webhook</option>
+                                    <option value="telegram">Telegram</option>
+                                </select>
+                                <button class="btn btn-primary btn-small" @click="addShareReviewItem" :disabled="shareReview.saving || !shareReview.newLink.trim()">{{ shareReview.saving ? '添加中...' : '添加' }}</button>
+                            </div>
+                        </div>
+
+                        <!-- 自动审核开关 + 待审核数量 -->
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:8px 0; border-bottom:1px solid #ebeef5;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:13px; color:#303133;">自动审核</span>
+                                <div class="tool-toggle" :class="{ 'toggle-on': shareReview.autoApprove }" @click="toggleShareAutoApprove">
+                                    <span class="toggle-knob"></span>
+                                </div>
+                                <span style="font-size:12px; color:#909399;">开启后新提交的链接自动通过</span>
+                            </div>
+                            <span style="font-size:13px; color:#e6a23c;">待审核：<strong>{{ shareReview.pendingCount }}</strong></span>
+                        </div>
+
+                        <!-- 筛选 + 操作 -->
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; gap:8px; flex-wrap:wrap;">
+                            <select v-model="shareReview.status" @change="loadShareReview" style="padding:5px 8px; border:1px solid #dcdfe6; border-radius:6px; font-size:13px;">
+                                <option value="">全部</option>
+                                <option value="pending">待审核</option>
+                                <option value="approved">已通过</option>
+                                <option value="rejected">已拒绝</option>
+                            </select>
+                            <div style="display:flex; gap:8px;">
+                                <button class="btn btn-default btn-small" @click="loadShareReview" :disabled="shareReview.loading">{{ shareReview.loading ? '加载中...' : '刷新' }}</button>
+                                <button class="btn btn-default btn-small" @click="clearShareReviewed">清除已审核</button>
+                            </div>
+                        </div>
+
+                        <!-- 队列表格 -->
+                        <div v-if="shareReview.loading" style="padding:20px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else-if="shareReview.items.length === 0" style="padding:20px; text-align:center; color:#909399; font-size:13px;">暂无队列项</div>
+                        <div v-else style="max-height:320px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                                <thead>
+                                    <tr style="background:#f5f7fa; position:sticky; top:0;">
+                                        <th style="padding:8px 10px; text-align:left; color:#909399; font-weight:500;">标题</th>
+                                        <th style="padding:8px 10px; text-align:left; color:#909399; font-weight:500;">链接</th>
+                                        <th style="padding:8px 10px; text-align:left; color:#909399; font-weight:500;">状态</th>
+                                        <th style="padding:8px 10px; text-align:left; color:#909399; font-weight:500;">创建时间</th>
+                                        <th style="padding:8px 10px; text-align:left; color:#909399; font-weight:500;">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="item in shareReview.items" :key="item.id || item.link" style="border-top:1px solid #ebeef5;">
+                                        <td style="padding:8px 10px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="item.title">{{ item.title || '未命名' }}</td>
+                                        <td style="padding:8px 10px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="item.link">{{ item.link }}</td>
+                                        <td style="padding:8px 10px;">
+                                            <span v-if="item.status === 'approved'" style="color:#67c23a;">已通过</span>
+                                            <span v-else-if="item.status === 'rejected'" style="color:#f56c6c;">已拒绝</span>
+                                            <span v-else style="color:#e6a23c;">待审核</span>
+                                        </td>
+                                        <td style="padding:8px 10px; color:#909399; white-space:nowrap;">{{ item.created_at || item.create_time || '' }}</td>
+                                        <td style="padding:8px 10px; white-space:nowrap;">
+                                            <button v-if="item.status !== 'approved'" class="btn btn-primary btn-sm" style="padding:2px 8px; margin-right:4px;" @click="approveShareItem(item.id)">通过</button>
+                                            <button v-if="item.status !== 'rejected'" class="btn btn-danger btn-sm" style="padding:2px 8px; margin-right:4px;" @click="rejectShareItem(item.id)">拒绝</button>
+                                            <button class="btn btn-default btn-sm" style="padding:2px 8px;" @click="deleteShareItem(item.id)">删除</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
+                            审核通过后可将链接用于转存；拒绝或删除的链接不再可用。支持手动 / Webhook / Telegram 三种来源提交。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 外部播放器脚本弹窗 -->
+                <div v-if="toolConfig.show === 'player_script'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:520px;">
+                        <div class="modal-header">
+                            <span class="modal-title">外部播放器脚本</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div class="form-group">
+                            <label>播放器</label>
+                            <select v-model="playerScript.player" style="width:100%; min-height:36px; font-size:13px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;">
+                                <option v-for="p in playerScript.players" :key="p.value" :value="p.value">{{ p.label }}</option>
+                            </select>
+                        </div>
+
+                        <!-- 单个生成 -->
+                        <div class="form-group">
+                            <label>视频 URL<span class="help-tip">?<span class="tip-text">115 视频播放直链或 STRM 指向的地址，生成后可复制脚本在本地播放器打开。</span></span></label>
+                            <input type="text" v-model="playerScript.url" placeholder="https://.../xxx.mkv" style="width:100%; min-height:36px; font-size:13px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                        </div>
+                        <div class="form-group">
+                            <label>标题（可选）</label>
+                            <input type="text" v-model="playerScript.title" placeholder="用于生成脚本文件名" style="width:100%; min-height:36px; font-size:13px; padding:6px 10px; border:1px solid #dcdfe6; border-radius:6px;" />
+                        </div>
+                        <div style="display:flex; gap:8px; margin-bottom:8px;">
+                            <button class="btn btn-primary btn-small" @click="generatePlayerScript" :disabled="playerScript.generating || !playerScript.url.trim()">{{ playerScript.generating ? '生成中...' : '生成脚本' }}</button>
+                        </div>
+
+                        <!-- 生成结果 -->
+                        <div v-if="playerScript.result" style="margin-bottom:12px; background:#f8fafc; border:1px solid #ebeef5; border-radius:6px; padding:10px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                                <span style="font-size:13px; font-weight:600; color:#303133;">{{ playerScript.result.filename || '播放脚本' }}</span>
+                                <button class="btn btn-default btn-sm" style="padding:2px 10px;" @click="copyScriptContent(playerScript.result.content)">复制</button>
+                            </div>
+                            <pre style="margin:0; padding:8px; background:#303133; color:#e6e6e6; border-radius:4px; font-size:12px; max-height:160px; overflow:auto; white-space:pre-wrap; word-break:break-all;">{{ playerScript.result.content }}</pre>
+                        </div>
+
+                        <!-- 批量生成 -->
+                        <div style="border-top:1px dashed #dcdfe6; padding-top:10px;">
+                            <div class="form-group" style="margin-bottom:6px;">
+                                <label>批量生成<span class="help-tip">?<span class="tip-text">每行一个 URL，批量生成对应播放脚本。</span></span></label>
+                                <textarea v-model="playerScript.batchText" rows="4" style="width:100%; padding:8px 12px; border:1px solid #dcdfe6; border-radius:6px; font-family:monospace; font-size:12px; resize:vertical;" placeholder="每行一个 URL"></textarea>
+                            </div>
+                            <button class="btn btn-primary btn-small" @click="generateBatchPlayerScripts" :disabled="playerScript.generating || !playerScript.batchText.trim()">{{ playerScript.generating ? '生成中...' : '批量生成' }}</button>
+                        </div>
+
+                        <!-- 批量结果 -->
+                        <div v-if="playerScript.batchResults.length > 0" style="margin-top:10px;">
+                            <div style="font-size:13px; font-weight:600; color:#303133; margin-bottom:6px;">批量结果（{{ playerScript.batchResults.length }} 个）</div>
+                            <div style="max-height:200px; overflow-y:auto; border:1px solid #ebeef5; border-radius:6px;">
+                                <div v-for="(r, idx) in playerScript.batchResults" :key="idx" style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; border-bottom:1px solid #ebeef5; font-size:12px;">
+                                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" :title="r.filename">{{ r.filename || r.url }}</span>
+                                    <button class="btn btn-default btn-sm" style="padding:2px 8px; flex-shrink:0;" @click="copyScriptContent(r.content)">复制</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 多网盘驱动弹窗 -->
+                <div v-if="toolConfig.show === 'drivers'" class="modal-mask" @click.self="toolConfig.show = ''">
+                    <div class="modal-box" style="max-width:480px;">
+                        <div class="modal-header">
+                            <span class="modal-title">多网盘驱动</span>
+                            <button class="modal-close" @click="toolConfig.show = ''">×</button>
+                        </div>
+
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                            <span style="font-size:13px; color:#909399;">已注册的网盘驱动列表，为多网盘支持做准备。</span>
+                            <button class="btn btn-default btn-small" @click="loadDrivers" :disabled="driversState.loading">{{ driversState.loading ? '加载中...' : '刷新' }}</button>
+                        </div>
+
+                        <div v-if="driversState.loading" style="padding:20px; text-align:center; color:#909399; font-size:13px;">加载中...</div>
+                        <div v-else-if="driversState.drivers.length === 0" style="padding:20px; text-align:center; color:#909399; font-size:13px;">暂无已注册驱动</div>
+                        <div v-else>
+                            <div v-for="(d, idx) in driversState.drivers" :key="d.name || idx" style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border:1px solid #ebeef5; border-radius:6px; margin-bottom:6px;">
+                                <div>
+                                    <div style="font-size:14px; font-weight:600; color:#303133;">{{ d.name || d.label || '未命名驱动' }}</div>
+                                    <div style="font-size:12px; color:#909399; margin-top:2px;">{{ d.class_name || d.class || d.implementation || d.desc || '' }}</div>
+                                </div>
+                                <span v-if="d.enabled !== undefined" style="font-size:12px; padding:2px 8px; border-radius:10px; flex-shrink:0;" :style="{ background: d.enabled ? 'rgba(103,194,58,0.12)' : 'rgba(144,147,153,0.12)', color: d.enabled ? '#67c23a' : '#909399' }">{{ d.enabled ? '已启用' : '未启用' }}</span>
+                            </div>
+                        </div>
+
+                        <div style="font-size:12px; color:#909399; margin-top:12px; line-height:1.6;">
+                            说明：驱动列表由后端插件机制注册，当前以 115 驱动为主，未来可扩展其他网盘。
                         </div>
                     </div>
                 </div>
@@ -6647,6 +7002,39 @@ av:
                         organize.savingConfig = false;
                     }
                 };
+
+                // ============ P3 覆盖检查配置 ============
+                const organizeOverwrite = reactive({
+                    loading: false,
+                    saving: false,
+                    overwrite_policy: 'skip',
+                });
+                const loadOrganizeOverwrite = async () => {
+                    organizeOverwrite.loading = true;
+                    try {
+                        const res = await api('/api/settings/organize-overwrite');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const d = data.data;
+                            if (typeof d.overwrite_policy === 'string') organizeOverwrite.overwrite_policy = d.overwrite_policy;
+                        }
+                    } catch (e) { console.warn('加载覆盖检查配置失败:', e); }
+                    organizeOverwrite.loading = false;
+                };
+                const saveOrganizeOverwrite = async () => {
+                    organizeOverwrite.saving = true;
+                    try {
+                        const res = await api('/api/settings/organize-overwrite', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ overwrite_policy: organizeOverwrite.overwrite_policy }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '覆盖检查配置已保存' : (data.message || '保存失败'), 3000);
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    organizeOverwrite.saving = false;
+                };
+
                 // ===== Cron 解析与预览 =====
                 const _parseCronField = (field, min, max) => {
                     field = field.trim();
@@ -7578,6 +7966,9 @@ av:
                     sync_del:    { enabled: localStorage.getItem('strmhub_tool_sync_del') === '1' },
                     automation:  { enabled: localStorage.getItem('strmhub_tool_automation') === '1' },
                     checkin:     { enabled: localStorage.getItem('strmhub_tool_checkin') === '1' },
+                    share_review:{ enabled: localStorage.getItem('strmhub_tool_share_review') === '1' },
+                    player_script:{ enabled: localStorage.getItem('strmhub_tool_player_script') === '1' },
+                    drivers:      { enabled: localStorage.getItem('strmhub_tool_drivers') === '1' },
                 });
 
                 // 特色工具 - 配置弹窗状态
@@ -7775,6 +8166,38 @@ av:
                     cron: '5 0 * * *',
                     nextRun: '',
                     resultMessage: '',
+                });
+
+                // 分享审核队列（P3 特色工具）
+                const shareReview = reactive({
+                    loading: false,
+                    saving: false,
+                    items: [],
+                    status: '',
+                    autoApprove: false,
+                    pendingCount: 0,
+                    newLink: '',
+                    newTitle: '',
+                    newSource: 'manual',
+                });
+
+                // 外部播放器脚本（P3 特色工具）
+                const playerScript = reactive({
+                    loading: false,
+                    players: [],
+                    player: 'potplayer',
+                    url: '',
+                    title: '',
+                    batchText: '',
+                    result: null,
+                    batchResults: [],
+                    generating: false,
+                });
+
+                // 多网盘驱动（P3 特色工具）
+                const driversState = reactive({
+                    loading: false,
+                    drivers: [],
                 });
 
                 // 二维码弹窗状态
@@ -8142,6 +8565,110 @@ av:
                         showToast(data.code === 0 ? '路径映射已保存' : (data.message || '保存失败'));
                     } catch (e) { showToast('保存失败'); }
                     pathMapping.saving = false;
+                };
+
+                // ============ P3 自动更新 ============
+                const updaterCfg = reactive({
+                    loading: false,
+                    saving: false,
+                    enabled: true,
+                    check_interval: 24,
+                    auto_install: false,
+                    pre_release: false,
+                    status: null,
+                });
+                const loadUpdaterConfig = async () => {
+                    updaterCfg.loading = true;
+                    try {
+                        const res = await api('/api/settings/updater');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const d = data.data;
+                            if (typeof d.enabled === 'boolean') updaterCfg.enabled = d.enabled;
+                            if (typeof d.check_interval === 'number') updaterCfg.check_interval = d.check_interval;
+                            if (typeof d.auto_install === 'boolean') updaterCfg.auto_install = d.auto_install;
+                            if (typeof d.pre_release === 'boolean') updaterCfg.pre_release = d.pre_release;
+                            if (d.status) updaterCfg.status = d.status;
+                        }
+                    } catch (e) { console.warn('加载更新配置失败:', e); }
+                    updaterCfg.loading = false;
+                };
+                const saveUpdaterConfig = async () => {
+                    updaterCfg.saving = true;
+                    try {
+                        const res = await api('/api/settings/updater', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                enabled: updaterCfg.enabled,
+                                check_interval: updaterCfg.check_interval || 24,
+                                auto_install: updaterCfg.auto_install,
+                                pre_release: updaterCfg.pre_release,
+                            }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '更新配置已保存' : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) await loadUpdaterConfig();
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    updaterCfg.saving = false;
+                };
+                const checkUpdateNow = async () => {
+                    updaterCfg.saving = true;
+                    try {
+                        const res = await api('/api/settings/updater/check', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            if (data.data) {
+                                updaterCfg.status = data.data;
+                            }
+                            showToast(data.message || '检查完成', 3000);
+                            await loadUpdaterConfig();
+                        } else {
+                            showToast(data.message || '检查失败', 3000);
+                        }
+                    } catch (e) { showToast('检查失败：网络错误', 3000); }
+                    updaterCfg.saving = false;
+                };
+
+                // ============ P3 alist URL 签名 ============
+                const alistSign = reactive({
+                    loading: false,
+                    saving: false,
+                    enabled: false,
+                    secret_key: '',
+                    expire_seconds: 7200,
+                });
+                const loadAlistSign = async () => {
+                    alistSign.loading = true;
+                    try {
+                        const res = await api('/api/settings/alist-sign');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            const d = data.data;
+                            if (typeof d.enabled === 'boolean') alistSign.enabled = d.enabled;
+                            if (typeof d.secret_key === 'string') alistSign.secret_key = d.secret_key;
+                            if (typeof d.expire_seconds === 'number') alistSign.expire_seconds = d.expire_seconds;
+                        }
+                    } catch (e) { console.warn('加载 alist 签名配置失败:', e); }
+                    alistSign.loading = false;
+                };
+                const saveAlistSign = async () => {
+                    alistSign.saving = true;
+                    try {
+                        const res = await api('/api/settings/alist-sign', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                enabled: alistSign.enabled,
+                                secret_key: alistSign.secret_key.trim(),
+                                expire_seconds: alistSign.expire_seconds || 7200,
+                            }),
+                        });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? 'alist 签名配置已保存' : (data.message || '保存失败'), 3000);
+                        if (data.code === 0) await loadAlistSign();
+                    } catch (e) { showToast('保存失败：网络错误', 3000); }
+                    alistSign.saving = false;
                 };
 
                 // 检测账号
@@ -9729,10 +10256,13 @@ av:
                         await loadNotifyCenter();
                         await loadSyncSchedule();
                         await loadOrganizeConfig();
+                        await loadOrganizeOverwrite();
                         await loadClouddownloadConfig();
                         await checkFfprobeStatus();
                         // P1 高级功能加载
                         loadRouteRules(); loadCacheWarmer(); loadTgBot(); loadPathMapping();
+                        // P3 配置加载
+                        loadUpdaterConfig(); loadAlistSign();
                         // 预加载当前所在子标签页的懒加载数据，避免刷新后空白
                         if (tab.value === 'organize') await loadAIConfig();
                     } catch (e) {
@@ -10899,6 +11429,230 @@ av:
                     checkinTool.running = false;
                 };
 
+                // ============ P3 特色工具 - 数据 API ============
+
+                // 加载分享审核队列（列表 + 待审核数 + 自动审核开关）
+                const loadShareReview = async () => {
+                    shareReview.loading = true;
+                    try {
+                        const res = await api(`/api/tools/share-review/list?status=${encodeURIComponent(shareReview.status)}`);
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            const d = data.data || {};
+                            shareReview.items = Array.isArray(d) ? d : (d.items || []);
+                            shareReview.pendingCount = Number(d.pending_count ?? d.pendingCount ?? 0) || 0;
+                        } else {
+                            showToast(data.message || '加载队列失败', 3000);
+                        }
+                    } catch (e) { showToast('加载队列失败：网络错误', 3000); }
+                    try {
+                        const res = await api('/api/tools/share-review/pending-count');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            shareReview.pendingCount = Number(data.data.pending_count ?? data.data.count ?? data.data) || 0;
+                        }
+                    } catch (e) { /* 静默 */ }
+                    try {
+                        const res = await api('/api/tools/share-review/auto-approve');
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            shareReview.autoApprove = !!(data.data.enabled ?? data.data.auto_approve);
+                        }
+                    } catch (e) { /* 静默 */ }
+                    shareReview.loading = false;
+                };
+
+                // 添加分享链接到审核队列
+                const addShareReviewItem = async () => {
+                    const link = shareReview.newLink.trim();
+                    if (!link) return;
+                    shareReview.saving = true;
+                    try {
+                        const res = await api('/api/tools/share-review/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                link: link,
+                                title: shareReview.newTitle.trim(),
+                                source: shareReview.newSource,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || '已加入审核队列', 3000);
+                            shareReview.newLink = '';
+                            shareReview.newTitle = '';
+                            await loadShareReview();
+                        } else {
+                            showToast(data.message || '添加失败', 3000);
+                        }
+                    } catch (e) { showToast('添加失败：网络错误', 3000); }
+                    shareReview.saving = false;
+                };
+
+                // 通过审核
+                const approveShareItem = async (id) => {
+                    try {
+                        const res = await api(`/api/tools/share-review/${id}/approve`, { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已通过' : (data.message || '操作失败'), 3000);
+                        if (data.code === 0) await loadShareReview();
+                    } catch (e) { showToast('操作失败：网络错误', 3000); }
+                };
+
+                // 拒绝审核
+                const rejectShareItem = async (id) => {
+                    try {
+                        const res = await api(`/api/tools/share-review/${id}/reject`, { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已拒绝' : (data.message || '操作失败'), 3000);
+                        if (data.code === 0) await loadShareReview();
+                    } catch (e) { showToast('操作失败：网络错误', 3000); }
+                };
+
+                // 删除队列项
+                const deleteShareItem = async (id) => {
+                    if (!confirm('确定删除该队列项？')) return;
+                    try {
+                        const res = await api(`/api/tools/share-review/${id}`, { method: 'DELETE' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已删除' : (data.message || '删除失败'), 3000);
+                        if (data.code === 0) await loadShareReview();
+                    } catch (e) { showToast('删除失败：网络错误', 3000); }
+                };
+
+                // 清除已审核项
+                const clearShareReviewed = async () => {
+                    if (!confirm('确定清除所有已通过/已拒绝的队列项？')) return;
+                    try {
+                        const res = await api('/api/tools/share-review/clear-reviewed', { method: 'POST' });
+                        const data = await res.json();
+                        showToast(data.code === 0 ? '已清除' : (data.message || '清除失败'), 3000);
+                        if (data.code === 0) await loadShareReview();
+                    } catch (e) { showToast('清除失败：网络错误', 3000); }
+                };
+
+                // 切换自动审核
+                const toggleShareAutoApprove = async () => {
+                    shareReview.autoApprove = !shareReview.autoApprove;
+                    try {
+                        const res = await api('/api/tools/share-review/auto-approve', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ note: String(shareReview.autoApprove) }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            showToast(data.message || (shareReview.autoApprove ? '自动审核已开启' : '自动审核已关闭'), 3000);
+                        } else {
+                            showToast(data.message || '设置失败', 3000);
+                        }
+                    } catch (e) { showToast('设置失败：网络错误', 3000); }
+                    await loadShareReview();
+                };
+
+                // 加载播放器列表
+                const loadPlayerScriptPlayers = async () => {
+                    playerScript.loading = true;
+                    try {
+                        const res = await api('/api/tools/player-script/players');
+                        const data = await res.json();
+                        if (data.code === 0 && Array.isArray(data.data)) {
+                            playerScript.players = data.data;
+                            if (playerScript.players.length > 0 && !playerScript.players.some(p => p.value === playerScript.player)) {
+                                playerScript.player = playerScript.players[0].value;
+                            }
+                        }
+                    } catch (e) { console.warn('加载播放器列表失败:', e); }
+                    playerScript.loading = false;
+                };
+
+                // 生成单个播放脚本
+                const generatePlayerScript = async () => {
+                    if (!playerScript.url.trim()) return;
+                    playerScript.generating = true;
+                    try {
+                        const res = await api('/api/tools/player-script/generate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                player: playerScript.player,
+                                url: playerScript.url.trim(),
+                                title: playerScript.title.trim(),
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0 && data.data) {
+                            playerScript.result = data.data;
+                            showToast('脚本已生成', 2000);
+                        } else {
+                            showToast(data.message || '生成失败', 3000);
+                        }
+                    } catch (e) { showToast('生成失败：网络错误', 3000); }
+                    playerScript.generating = false;
+                };
+
+                // 批量生成播放脚本
+                const generateBatchPlayerScripts = async () => {
+                    const urls = playerScript.batchText.split('\n').map(s => s.trim()).filter(Boolean);
+                    if (urls.length === 0) return;
+                    playerScript.generating = true;
+                    try {
+                        const res = await api('/api/tools/player-script/generate-batch', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                player: playerScript.player,
+                                items: urls.map(url => ({ url: url, title: playerScript.title.trim() })),
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            playerScript.batchResults = Array.isArray(data.data) ? data.data : (data.data?.results || []);
+                            showToast(`已生成 ${playerScript.batchResults.length} 个脚本`, 3000);
+                        } else {
+                            showToast(data.message || '批量生成失败', 3000);
+                        }
+                    } catch (e) { showToast('批量生成失败：网络错误', 3000); }
+                    playerScript.generating = false;
+                };
+
+                // 复制脚本内容
+                const copyScriptContent = (content) => {
+                    if (!content) return;
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(content).then(() => {
+                            showToast('已复制到剪贴板', 2000);
+                        }).catch(() => {
+                            showToast('复制失败', 2000);
+                        });
+                    } else {
+                        // 降级方案
+                        const ta = document.createElement('textarea');
+                        ta.value = content;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand('copy'); showToast('已复制到剪贴板', 2000); } catch (e) { showToast('复制失败', 2000); }
+                        document.body.removeChild(ta);
+                    }
+                };
+
+                // 加载网盘驱动列表
+                const loadDrivers = async () => {
+                    driversState.loading = true;
+                    try {
+                        const res = await api('/api/tools/drivers');
+                        const data = await res.json();
+                        if (data.code === 0) {
+                            const d = data.data;
+                            driversState.drivers = Array.isArray(d) ? d : (d?.drivers || []);
+                        } else {
+                            showToast(data.message || '加载驱动失败', 3000);
+                        }
+                    } catch (e) { showToast('加载驱动失败：网络错误', 3000); }
+                    driversState.loading = false;
+                };
+
                 // ============ 特色工具 - 卡片操作方法 ============
 
                 // 切换工具启用/禁用
@@ -10919,6 +11673,9 @@ av:
                     else if (key === 'sync_del') loadSyncDel();
                     else if (key === 'automation') loadAutoRules();
                     else if (key === 'checkin') loadCheckinSettings();
+                    else if (key === 'share_review') loadShareReview();
+                    else if (key === 'player_script') loadPlayerScriptPlayers();
+                    else if (key === 'drivers') loadDrivers();
                 };
 
                 // 立即运行工具（打开对应配置弹窗）
@@ -11767,6 +12524,10 @@ av:
                     syncDelState, loadSyncDel, toggleSyncDel, clearSyncDelHistory,
                     autoRule, actionLabel, loadAutoRules, autoRuleAdd, autoRuleRun, autoRuleToggle, autoRuleDel,
                     checkinTool, loadCheckinSettings, saveCheckinSettings, runCheckinNow,
+                    // P3 特色工具
+                    shareReview, loadShareReview, addShareReviewItem, approveShareItem, rejectShareItem, deleteShareItem, clearShareReviewed, toggleShareAutoApprove,
+                    playerScript, loadPlayerScriptPlayers, generatePlayerScript, generateBatchPlayerScripts, copyScriptContent,
+                    driversState, loadDrivers,
                     coverGen, coverGenPreviewFirst, coverGenGenerateAll,
                     clearFolder, clearFolderScan, clearFolderRun,
                     clearRecycle, clearRecycleRun,
@@ -11785,6 +12546,10 @@ av:
                     cacheWarmer, loadCacheWarmer, saveCacheWarmer, runCacheWarmer,
                     tgBot, loadTgBot, saveTgBot, testTgBot,
                     pathMapping, loadPathMapping, savePathMapping,
+                    // P3 新增：自动更新 / alist 签名 / 覆盖检查
+                    updaterCfg, loadUpdaterConfig, saveUpdaterConfig, checkUpdateNow,
+                    alistSign, loadAlistSign, saveAlistSign,
+                    organizeOverwrite, loadOrganizeOverwrite, saveOrganizeOverwrite,
                     // 功能模块
                     aiConfig, loadAIConfig, saveAIConfig, testAIConnection,
                     formatTimestamp, formatBytes,

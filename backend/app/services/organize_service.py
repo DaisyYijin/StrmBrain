@@ -7,7 +7,7 @@ import os
 import shutil
 import time as _time
 from typing import Optional
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from app.services.client_115 import Client115Service
 from app.services.tmdb_service import TmdbService
@@ -50,6 +50,104 @@ def _get_organize_method() -> str:
     except Exception:
         pass
     return "move"
+
+
+def _get_overwrite_policy() -> str:
+    """读取整理覆盖策略配置（#34）。
+
+    从 read_setting("organize_dirs") 读取 overwrite_policy 字段：
+    - "skip": 跳过已存在的同名文件（默认）
+    - "replace": 覆盖（先删后移）
+    - "rename": 自动重命名（如 movie(1).mkv）
+    非法值回退为 "skip"。
+    """
+    try:
+        cfg = read_setting("organize_dirs")
+        policy = cfg.get("overwrite_policy", "skip")
+        if policy in ("skip", "replace", "rename"):
+            return policy
+    except Exception:
+        pass
+    return "skip"
+
+
+def _find_target_file_id(cookies: str, target_cid: str, filename: str) -> Optional[str]:
+    """列出目标目录文件，返回同名文件的 file_id（无则 None）。
+
+    分页遍历 Client115Service.list_files 结果，fid 为空表示子目录予以跳过。
+    """
+    if not target_cid or not filename:
+        return None
+    offset = 0
+    limit = 100
+    while True:
+        try:
+            resp = Client115Service.list_files(cookies, target_cid, offset=offset, limit=limit)
+        except Exception as e:
+            logger.warning(f"[organize] 列出目标目录文件失败 cid={target_cid}: {e}")
+            return None
+        if not isinstance(resp, dict) or resp.get("_error"):
+            return None
+        items = resp.get("data", []) or []
+        for it in items:
+            # fid 为空表示子目录，跳过
+            if it.get("fid") and it.get("n", "") == filename:
+                return it.get("fid")
+        if len(items) < limit:
+            return None
+        offset += limit
+
+
+def check_target_exists(cookies: str, target_cid: str, filename: str) -> bool:
+    """检查目标目录中是否已存在同名文件（#34）。
+
+    使用 Client115Service.list_files 列出目标目录文件，分页遍历检查是否有同名项。
+    """
+    return _find_target_file_id(cookies, target_cid, filename) is not None
+
+
+def generate_unique_filename(cookies: str, target_cid: str, filename: str) -> str:
+    """当策略为 "rename" 时，在文件名后添加序号生成唯一文件名（#34）。
+
+    如 movie.mkv -> movie(1).mkv -> movie(2).mkv，直至不与目标目录现有文件冲突。
+    """
+    if not filename:
+        return filename
+    # 拆分扩展名
+    if "." in filename:
+        base, ext = filename.rsplit(".", 1)
+        ext = "." + ext
+    else:
+        base, ext = filename, ""
+    # 收集目标目录已有文件名集合
+    existing_names: set = set()
+    offset = 0
+    limit = 100
+    while True:
+        try:
+            resp = Client115Service.list_files(cookies, target_cid, offset=offset, limit=limit)
+        except Exception as e:
+            logger.warning(f"[organize] 生成唯一文件名失败 cid={target_cid}: {e}")
+            break
+        if not isinstance(resp, dict) or resp.get("_error"):
+            break
+        items = resp.get("data", []) or []
+        for it in items:
+            if it.get("n"):
+                existing_names.add(it["n"])
+        if len(items) < limit:
+            break
+        offset += limit
+    # 依次尝试 movie(1).mkv、movie(2).mkv ...
+    idx = 1
+    while True:
+        candidate = f"{base}({idx}){ext}"
+        if candidate not in existing_names:
+            return candidate
+        idx += 1
+        # 安全上限，避免极端死循环
+        if idx > 9999:
+            return candidate
 
 
 def _organize_file(src: str, dst: str, method: str = "move") -> None:
@@ -258,6 +356,107 @@ def extract_season_episode(name: str) -> tuple[Optional[int], Optional[int]]:
     if season_num is not None or episode_num is not None:
         return season_num or 1, episode_num
     return None, None
+
+
+# #32: 集数标记模式列表 (编译正则, 模式标签) —— 顺序优先，先匹配更具体的模式
+_EP_MARK_PATTERNS = [
+    (re.compile(r'[sS](\d{1,2})[eE](\d{1,3})'), "SxxExx"),   # S01E01
+    (re.compile(r'(\d{1,2})[xX](\d{1,3})'), "xExx"),           # 1x01
+    (re.compile(r'[eE][pP](\d{1,3})'), "EPxx"),               # EP01
+    (re.compile(r'第(\d{1,3})[集话]'), "CNEp"),                 # 第N集
+    (re.compile(r'\[(\d{1,3})\]'), "Bracket"),                 # [01]
+    (re.compile(r'(?<![0-9A-Za-z])[eE](\d{1,3})(?![0-9A-Za-z])'), "Exx"),  # E01
+]
+
+
+def _replace_episode_token(name: str, match, new_token: str) -> str:
+    """将文件名中已匹配到的集数标记替换为 new_token，保留其余部分与扩展名。"""
+    if not match:
+        return name
+    return name[:match.start()] + new_token + name[match.end():]
+
+
+def align_episode_names(video_files_info: list) -> dict:
+    """对齐同一季剧集文件的命名模式（#32）。
+
+    分析文件名中的集数标记（SxxExx、EPxx、Exx、第N集、[N] 等），
+    检测主要命名模式，为不符合 SxxExx 规范模式的文件生成对齐后的名称。
+    统一对齐到系统标准的 SxxExx 格式，保留各文件原有分隔符。
+
+    Args:
+        video_files_info: 同一季的剧集文件信息列表，每项至少含 "name"（文件名），
+                          可选 "season"（季号，用于无 SxxExx 标记时回退）
+
+    Returns:
+        {"original_name": "aligned_name", ...} 需要对齐的重命名映射；
+        无需调整时返回空 dict。
+    """
+    if not video_files_info or len(video_files_info) < 2:
+        return {}
+
+    # 解析每个文件名：(name, 模式标签, 集号, 匹配对象)
+    parsed = []
+    for info in video_files_info:
+        name = (info.get("name") if isinstance(info, dict) else "") or ""
+        label = None
+        ep_num = None
+        match = None
+        for pat, lbl in _EP_MARK_PATTERNS:
+            m = pat.search(name)
+            if m:
+                try:
+                    ep_num = int(m.groups()[-1])
+                except (ValueError, TypeError):
+                    ep_num = None
+                label = lbl
+                match = m
+                break
+        parsed.append({"name": name, "label": label, "ep": ep_num, "match": match})
+
+    # 至少需要两个带集号的文件才能检测模式
+    with_ep = [p for p in parsed if p["ep"] is not None]
+    if len(with_ep) < 2:
+        return {}
+
+    # 检测主要命名模式（多数表决，用于日志与参考）
+    label_counts = Counter(p["label"] for p in with_ep if p["label"])
+    dominant_label = label_counts.most_common(1)[0][0] if label_counts else None
+    logger.info(f"[organize] #32 命名对齐: 检测到主要命名模式 = {dominant_label}")
+
+    # 确定目标季号：优先从 SxxExx 文件提取，其次 info["season"]，默认 "1"
+    season_str = None
+    ep_width = 2
+    for p in with_ep:
+        sm = re.search(r'[sS](\d{1,2})[eE](\d{1,3})', p["name"])
+        if sm:
+            season_str = sm.group(1)
+            ep_width = max(len(sm.group(2)), 2)
+            break
+    if season_str is None:
+        for info in video_files_info:
+            s = info.get("season") if isinstance(info, dict) else None
+            if s is not None:
+                try:
+                    # 零填充至 2 位，与标准 SxxExx 格式（如 S02E01）保持一致
+                    season_str = str(int(s)).zfill(2)
+                except (ValueError, TypeError):
+                    season_str = str(s)
+                break
+    if season_str is None:
+        season_str = "1"
+
+    result = {}
+    for p in parsed:
+        if p["ep"] is None:
+            continue
+        # 已符合 SxxExx 规范模式则跳过
+        if p["label"] == "SxxExx":
+            continue
+        aligned_token = f"S{season_str}E{p['ep']:0{ep_width}d}"
+        new_name = _replace_episode_token(p["name"], p["match"], aligned_token)
+        if new_name and new_name != p["name"]:
+            result[p["name"]] = new_name
+    return result
 
 
 def extract_season_only(name: str) -> Optional[int]:
@@ -1789,6 +1988,52 @@ class OrganizeService:
 
             logger.info(f"[organize] 阶段 1/2 完成：重命名和 ffprobe 探测结束")
 
+            # #32: 文件命名对齐 - Phase 1 识别完成后、Phase 2 移动前，
+            # 对同一电视剧同一季的剧集文件集调用对齐函数，将对齐结果合并到重命名映射
+            _tv_align_groups: dict = defaultdict(list)
+            for _rr in rename_results:
+                if _rr.get("skip_move"):
+                    continue
+                _rr_item = _rr.get("item", {})
+                if _rr_item.get("media_type") != "tv":
+                    continue
+                _show_folder = _rr.get("new_folder", "") or ""
+                _season_folder = _rr.get("season_folder", "") or ""
+                if not _show_folder:
+                    continue
+                _cur_name = _rr.get("renamed_to", "") or _rr_item.get("file", {}).get("name", "")
+                _tv_align_groups[(_show_folder, _season_folder)].append((_rr, _cur_name))
+
+            for (_show_folder, _season_folder), _members in _tv_align_groups.items():
+                if len(_members) < 2:
+                    continue
+                _files_info = [{"name": _n} for (_r, _n) in _members]
+                # 从 season_folder 提取季号供对齐回退使用
+                _season_num = extract_season_only(_season_folder)
+                if _season_num is not None:
+                    for _fi in _files_info:
+                        _fi["season"] = _season_num
+                _align_map = align_episode_names(_files_info)
+                if not _align_map:
+                    continue
+                logger.info(
+                    f"[organize] #32 命名对齐: 剧目「{_show_folder}」季「{_season_folder}」"
+                    f"需对齐 {len(_align_map)} 个文件"
+                )
+                for _rr, _cur_name in _members:
+                    _aligned_name = _align_map.get(_cur_name)
+                    if not _aligned_name or _aligned_name == _cur_name:
+                        continue
+                    _f_info = _rr["item"]["file"]
+                    _ok_align = Client115Service.rename(
+                        cookies, _f_info["file_id"], _aligned_name, context=_cur_name
+                    )
+                    if _ok_align:
+                        logger.info(f"[organize] #32 命名对齐: {_cur_name} -> {_aligned_name}")
+                        _rr["renamed_to"] = _aligned_name
+                    else:
+                        logger.warning(f"[organize] #32 命名对齐重命名失败: {_cur_name} -> {_aligned_name}")
+
             # ===== 阶段 2：统一移动所有文件 =====
             logger.info(f"[organize] 阶段 2/2：开始统一移动文件")
 
@@ -1907,6 +2152,79 @@ class OrganizeService:
                             movie_cid = Client115Service.ensure_path(cookies, [movie_folder_name], sub_cid)
                             if movie_cid:
                                 final_target_cid = movie_cid
+
+                # #34: 整理覆盖检查 - 移动前检查目标目录是否已存在同名文件
+                target_filename = renamed_to or orig_name
+                overwrite_policy = _get_overwrite_policy()
+                if final_target_cid and check_target_exists(cookies, final_target_cid, target_filename):
+                    if dry_run:
+                        # dry_run 模式下只记录不执行
+                        result["errors"].append({
+                            "name": orig_name,
+                            "error": f"[预览] 目标目录已存在同名文件「{target_filename}」，"
+                                     f"按 {overwrite_policy} 策略处理（未执行）",
+                        })
+                        logger.info(
+                            f"[organize] #34 覆盖检查: [预览] 目标已存在「{target_filename}」，"
+                            f"按 {overwrite_policy} 策略处理"
+                        )
+                        continue
+                    if overwrite_policy == "skip":
+                        # skip 策略：跳过已存在的同名文件，记录到错误列表
+                        result["errors"].append({
+                            "name": orig_name,
+                            "error": f"目标目录已存在同名文件「{target_filename}」，按 skip 策略跳过移动",
+                        })
+                        logger.info(f"[organize] #34 覆盖检查: 目标已存在「{target_filename}」，skip 策略跳过")
+                        continue
+                    elif overwrite_policy == "replace":
+                        # replace 策略：先删除目标同名文件再移动
+                        _dup_fid = _find_target_file_id(cookies, final_target_cid, target_filename)
+                        if _dup_fid:
+                            _del_resp = Client115Service.delete_files(cookies, [_dup_fid])
+                            if isinstance(_del_resp, dict) and not _del_resp.get("error"):
+                                logger.info(
+                                    f"[organize] #34 覆盖检查: replace 策略已删除目标同名文件「{target_filename}」"
+                                )
+                            else:
+                                result["errors"].append({
+                                    "name": orig_name,
+                                    "error": f"replace 策略删除目标同名文件「{target_filename}」失败，跳过移动",
+                                })
+                                logger.warning(
+                                    f"[organize] #34 覆盖检查: replace 删除失败「{target_filename}」"
+                                )
+                                continue
+                        else:
+                            # 未找到目标文件 id（可能已被其他流程处理），直接尝试移动
+                            logger.info(
+                                f"[organize] #34 覆盖检查: 未找到目标同名文件 id，继续移动「{target_filename}」"
+                            )
+                    elif overwrite_policy == "rename":
+                        # rename 策略：生成唯一文件名，先重命名源文件再移动
+                        unique_name = generate_unique_filename(cookies, final_target_cid, target_filename)
+                        if unique_name and unique_name != target_filename:
+                            _rn_ok = Client115Service.rename(
+                                cookies, file_info["file_id"], unique_name, context=orig_name
+                            )
+                            if _rn_ok:
+                                logger.info(
+                                    f"[organize] #34 覆盖检查: rename 策略重命名「{target_filename}」->「{unique_name}」"
+                                )
+                                renamed_to = unique_name
+                            else:
+                                result["errors"].append({
+                                    "name": orig_name,
+                                    "error": f"rename 策略重命名「{target_filename}」失败，跳过移动",
+                                })
+                                logger.warning(
+                                    f"[organize] #34 覆盖检查: rename 重命名失败「{target_filename}」"
+                                )
+                                continue
+                        else:
+                            logger.info(
+                                f"[organize] #34 覆盖检查: rename 策略未生成新文件名，继续移动「{target_filename}」"
+                            )
 
                 # 执行移动
                 ok = Client115Service.move(cookies, [file_info["file_id"]], final_target_cid, context=orig_name)
