@@ -57,6 +57,9 @@ embyExternalUrl-main/
 qmediasync-main/
 LitePan-main/
 MoviePilot-Plugins-main/
+AutoFilm-main/
+MediaWarp-main/
+openStrm-main/
 
 # 本地分析文档（可选上传，默认排除）
 strmhub-ref-analysis/

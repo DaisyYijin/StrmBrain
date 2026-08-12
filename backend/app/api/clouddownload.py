@@ -254,7 +254,7 @@ async def instant_upload(payload: InstantUploadRequest):
     cookies = account.get("cookies", "")
     import asyncio
     from app.services.client_115 import _executor
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         _executor,
         lambda: Client115Service.instant_upload_from_url(

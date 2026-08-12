@@ -1014,6 +1014,83 @@ def _fs_files_with_retry(client, params: dict, max_retries: int = _MAX_RETRIES) 
     return {}
 
 
+# ============ LitePan 风格扫描：目录缓存 + 分页递增 + 串行栈 DFS ============
+# 参考 LitePan：
+# - drivers/115_Open/transport.go：分页递增 300/600/1000（第 1 页 300，第 2 页 600，之后 1000 上限）
+# - internal/file/service.go：目录列表缓存 30 分钟 TTL（空结果也缓存，防穿透）
+# - internal/strm/scanner.go walkScope：显式栈 DFS 串行遍历
+
+# 目录列表缓存 TTL：30 分钟（同目录重复扫描零 API 请求，防风控核心）
+_DIR_CACHE_TTL = 30 * 60
+# key: f"{account_id}:{cid}" -> {"items": [...], "expires_at": float}
+_dir_cache: dict[str, dict] = {}
+_dir_cache_lock = threading.Lock()
+
+# LitePan 分页递增上限
+_LITEPAN_PAGE_LIMITS = (300, 600, 1000)
+
+
+def _invalidate_dir_cache():
+    """清空目录列表缓存（整理/写操作后调用，避免读到旧目录结构）"""
+    with _dir_cache_lock:
+        _dir_cache.clear()
+
+
+def _dir_cache_get(account_id: int, cid: str) -> Optional[list]:
+    """读取目录缓存（命中返回条目列表，未命中/过期返回 None）"""
+    key = f"{account_id}:{cid}"
+    with _dir_cache_lock:
+        entry = _dir_cache.get(key)
+        if entry and entry["expires_at"] > _time.time():
+            return entry["items"]
+        if entry:
+            del _dir_cache[key]
+        return None
+
+
+def _dir_cache_put(account_id: int, cid: str, items: list):
+    """写入目录缓存（空结果也缓存，防止穿透）"""
+    key = f"{account_id}:{cid}"
+    with _dir_cache_lock:
+        _dir_cache[key] = {"items": items, "expires_at": _time.time() + _DIR_CACHE_TTL}
+
+
+def _list_dir_litepan(client, cid: str, account_id: int = 0, context: str = "") -> list:
+    """LitePan 式单目录列表：分页递增 300/600/1000 + 30 分钟目录缓存。
+
+    - 第 1 页 limit=300，第 2 页 600，之后 1000（drivers/115_Open/transport.go）
+    - 目录结果按 {account_id}:{cid} 缓存 30 分钟（internal/file/service.go）
+    - 分页间隔复用全局滑动窗口限流（_apply_file_list_interval，跟随用户配置）
+    """
+    cached = _dir_cache_get(account_id, cid)
+    if cached is not None:
+        return cached
+    items: list = []
+    offset = 0
+    total = 0
+    page = 0
+    while True:
+        page += 1
+        limit = _LITEPAN_PAGE_LIMITS[min(page - 1, len(_LITEPAN_PAGE_LIMITS) - 1)]
+        resp = _fs_files_with_retry(client, {
+            "cid": cid, "offset": offset, "limit": limit, "show_dir": 1,
+        })
+        data = resp.get("data", []) or []
+        if not data:
+            break
+        items.extend(data)
+        offset += len(data)
+        count = resp.get("count", 0) or 0
+        if count:
+            total = count
+        # 退出条件：取满（offset >= total）或本页不足一页
+        if (total and offset >= total) or len(data) < limit:
+            break
+        _apply_file_list_interval(context=context)
+    _dir_cache_put(account_id, cid, items)
+    return items
+
+
 def _normalize_fs_item(it: dict) -> dict:
     """将 115 文件列表条目标准化为 web 短字段格式（n/fid/cid/pid/s/sha）。
 
@@ -2269,6 +2346,8 @@ class Client115Service:
                     _path_not_found_cache.pop(cache_key, None)
                 # Q4: 标记父目录进入写后冷却（新目录可能尚未在服务端索引中可见）
                 _mark_dir_written(parent_id)
+                # LitePan: 写操作后失效目录缓存，避免读到旧目录结构
+                _invalidate_dir_cache()
                 return str(cid)
             # 目录已存在：115 返回 errno=20004，需要查找已有目录
             found = cls._find_subdir(client, name, parent_id)
@@ -2375,6 +2454,8 @@ class Client115Service:
             # Q4: 重命名成功，解析源父目录并标记写后冷却（best-effort）
             for pid in _resolve_parent_ids(client, [file_id]):
                 _mark_dir_written(pid)
+            # LitePan: 写操作后失效目录缓存
+            _invalidate_dir_cache()
             return True
         except Exception as e:
             logger.warning(f"[115] rename 失败 {file_id} -> {new_name}: {e}")
@@ -2425,6 +2506,8 @@ class Client115Service:
                     return False
                 # Q4: 移动成功，目标目录内容已变化，标记写后冷却
                 _mark_dir_written(dest_id)
+                # LitePan: 写操作后失效目录缓存
+                _invalidate_dir_cache()
                 return True
             except Exception as e:
                 if "尚未执行完成" in str(e) and attempt < max_retries - 1:
@@ -2453,6 +2536,8 @@ class Client115Service:
             if isinstance(resp, dict) and resp.get("state") is False:
                 logger.warning(f"[115] copy 失败 -> {dest_id}: {resp.get('error', '')}")
                 return False
+            # LitePan: 写操作后失效目录缓存
+            _invalidate_dir_cache()
             return True
         except Exception as e:
             logger.warning(f"[115] copy 失败 -> {dest_id}: {e}")
@@ -2493,6 +2578,7 @@ class Client115Service:
                 # 检查是否秒传成功（文件已存在，跳过实际上传）
                 if resp.get("bak_num") or resp.get("already_exists"):
                     logger.info(f"[115] 秒传成功: {filename}")
+                    _invalidate_dir_cache()  # LitePan: 写操作后失效目录缓存
                     return True
                 if resp.get("state") is False:
                     errno = resp.get("errno", "?")
@@ -2500,6 +2586,7 @@ class Client115Service:
                     logger.warning(f"[115] upload 失败 {filename}: errno={errno}, error={error}")
                     return False
             logger.info(f"[115] upload 成功: {filename}")
+            _invalidate_dir_cache()  # LitePan: 写操作后失效目录缓存
             return True
         except Exception as e:
             # 解包 MultipartUploadAbort 异常，记录原始错误
@@ -2538,6 +2625,8 @@ class Client115Service:
             logger.info(f"[115] upload_file 成功: {filename}")
             # Q4: 上传成功，目标目录内容已变化，标记写后冷却
             _mark_dir_written(dest_id)
+            # LitePan: 写操作后失效目录缓存
+            _invalidate_dir_cache()
             return True
         except Exception as e:
             cause = e.__cause__
@@ -2892,6 +2981,69 @@ class Client115Service:
                         subdirs = fut.result()
                         for sub_cid, sub_path in subdirs:
                             dir_queue.append((sub_cid, sub_path))
+        return results
+
+    @classmethod
+    def list_all_files_with_meta_litepan(cls, cookies: str, cid: str, exts: set,
+                                         min_size: int = 0, excludes: list = None,
+                                         recursive: bool = True, account_id: int = 0) -> list:
+        """
+        LitePan 风格全量扫描：显式栈 DFS + 逐目录分页递增 + 30 分钟目录缓存。
+
+        防风控设计（参考 LitePan）：
+        - 串行扫描（替代原 4 线程并发 BFS），降低 API 瞬时并发与风控风险
+        - 分页递增 300/600/1000（drivers/115_Open/transport.go），避免一次性大请求
+        - 目录列表缓存 30 分钟（internal/file/service.go），同目录重复扫描零 API 请求
+        - 返回字段与 list_all_files_with_meta 完全一致
+        """
+        _check_circuit_breaker()  # Q2: 熔断器检查
+        excludes = excludes or []
+        client = cls.create_client_from_cookies(cookies)
+        video_exts = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".m4v", ".ts", ".m2ts", ".rmvb", ".iso"}
+        results: list = []
+
+        # 显式栈 DFS（LitePan walkScope 同款思路）：LIFO 下钻子目录
+        stack: list[tuple[str, str]] = [(str(cid), "")]
+        while stack:
+            dir_cid, dir_rel_path = stack.pop()
+            try:
+                items = _list_dir_litepan(
+                    client, dir_cid, account_id=account_id,
+                    context=dir_rel_path or "根目录",
+                )
+            except Exception as e:
+                logger.warning(f"[115] litepan 列目录失败 cid={dir_cid}: {e}")
+                continue
+            # 子目录先收集再统一压栈，保证单层内目录/文件扫描顺序稳定
+            subdirs: list[tuple[str, str]] = []
+            for it in items:
+                is_dir = not it.get("fid")
+                name = it.get("n", "")
+                if name and excludes:
+                    n_lower = name.lower()
+                    if any(k in n_lower for k in excludes):
+                        continue
+                if is_dir:
+                    if recursive:
+                        child_path = f"{dir_rel_path}/{name}" if dir_rel_path else name
+                        subdirs.append((str(it.get("cid", "")), child_path))
+                else:
+                    size = it.get("s", 0) or 0
+                    ext = ("." + name.rsplit(".", 1)[-1]).lower() if "." in name else ""
+                    if ext not in exts:
+                        continue
+                    if ext in video_exts and size < min_size:
+                        continue
+                    results.append({
+                        "file_id": str(it.get("fid", "")),
+                        "pickcode": it.get("pc", ""),
+                        "name": name,
+                        "size": size,
+                        "parent_id": str(dir_cid),
+                        "parent_path": dir_rel_path,
+                        "sha1": it.get("sha", ""),
+                    })
+            stack.extend(subdirs)
         return results
 
     @classmethod

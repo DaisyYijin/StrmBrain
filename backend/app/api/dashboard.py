@@ -46,7 +46,7 @@ def _collect_system_info() -> dict:
         info["mem_total"] = mem.total
         info["mem_used"] = mem.used
         info["mem_percent"] = mem.percent
-        info["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+        info["cpu_percent"] = psutil.cpu_percent(interval=None)  # 非阻塞，返回上次调用以来的平均值
     except ImportError:
         pass
 

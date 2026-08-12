@@ -1318,7 +1318,7 @@ async def recycle_info(account_id: int = 0):
         return ApiResponse(code=400, message="未找到有效 115 账号")
     import asyncio
     from app.services.client_115 import _executor
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         _executor, lambda: Client115Service.recycle_bin_info(account.get("cookies", ""))
     )
@@ -1335,7 +1335,7 @@ async def recycle_clean(account_id: int = 0):
         return ApiResponse(code=400, message="未找到有效 115 账号")
     import asyncio
     from app.services.client_115 import _executor
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         _executor, lambda: Client115Service.clean_recycle_bin(account.get("cookies", ""))
     )

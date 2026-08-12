@@ -45,9 +45,9 @@ class NotificationService:
         if not bot_token or not chat_id:
             return False
 
-        # 将 Markdown 粗体/引用转为 HTML
-        html_content = content
-        html_content = html_content.replace("**", "<b>").replace("**", "</b>")
+        # 将 Markdown 粗体 **text** 转为 HTML <b>text</b>（交替匹配开/闭标签）
+        import re
+        html_content = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', content)
         # 企业微信引用符号 > 转为换行
         html_content = html_content.replace("> ", "")
         # 转义 HTML 特殊字符

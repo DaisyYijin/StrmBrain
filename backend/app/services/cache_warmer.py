@@ -235,7 +235,7 @@ class CacheWarmer:
             result["duration"] = round(time.time() - start_ts, 2)
 
             # 更新状态
-            self._last_run = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+            self._last_run = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
             self._total_warmed += warmed
             self._last_error = errors[-1] if errors else ""
 

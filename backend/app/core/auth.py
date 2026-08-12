@@ -58,9 +58,16 @@ def verify_token(token: str) -> dict:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """验证明文密码与 bcrypt 哈希是否匹配"""
+    """验证明文密码与 bcrypt 哈希是否匹配
+
+    bcrypt 限制密码最大 72 字节，需在 UTF-8 编码后截断。
+    此处在字符层面截取，确保不会截断多字节字符的中间字节。
+    """
     try:
-        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
+        encoded = plain.encode("utf-8")
+        if len(encoded) > 72:
+            encoded = encoded[:72]
+        return bcrypt.checkpw(encoded, hashed.encode("utf-8"))
     except Exception as e:
         logger.debug(f"密码验证异常: {e}")
         return False

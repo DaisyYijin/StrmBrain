@@ -17,6 +17,7 @@
 - 计划中携带执行上下文（_context），execute_plan 据此重新执行整理
 """
 import json
+import threading
 from typing import Any, Optional
 
 from app.core.logbuffer import get_logger
@@ -404,11 +405,15 @@ class OrganizePlanner:
 # ===== 全局单例 =====
 
 _global_organize_planner: Optional[OrganizePlanner] = None
+_global_planner_lock = threading.Lock()
 
 
 def get_organize_planner() -> OrganizePlanner:
-    """获取全局媒体整理规划器单例。"""
+    """获取全局媒体整理规划器单例（线程安全双重检查锁）。"""
     global _global_organize_planner
-    if _global_organize_planner is None:
-        _global_organize_planner = OrganizePlanner()
-    return _global_organize_planner
+    if _global_organize_planner is not None:
+        return _global_organize_planner
+    with _global_planner_lock:
+        if _global_organize_planner is None:
+            _global_organize_planner = OrganizePlanner()
+        return _global_organize_planner

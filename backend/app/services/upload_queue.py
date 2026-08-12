@@ -249,6 +249,7 @@ class UploadQueue:
 
     def fail_task(self, task_id: str, error: str):
         """标记任务失败，若未超过重试次数则重置为 pending"""
+        failed = False
         with self._lock:
             for t in self._tasks:
                 if t.id == task_id:
@@ -258,6 +259,7 @@ class UploadQueue:
                     if t.retries >= MAX_RETRIES:
                         t.status = TaskStatus.FAILED
                         t.completed_at = time.time()
+                        failed = True
                         logger.warning(
                             f"[upload-queue] 任务失败（重试耗尽）: {t.filename} - {error}"
                         )
@@ -269,7 +271,7 @@ class UploadQueue:
                         )
                     break
         self._save()
-        if t and t.status == TaskStatus.FAILED:
+        if failed:
             self._cleanup_completed()
 
     def _cleanup_completed(self):

@@ -157,7 +157,14 @@ async def emby_webhook(
                 status_code=403,
                 content={"code": 403, "message": "Token 验证失败", "data": None},
             )
-    # 如果未设置 token，则不校验（方便快速接入）
+    else:
+        # 安全保护：未配置 token 时拒绝可能触发级联删除的 deep 事件
+        # 仅允许无害的通知类事件（如 play/stop），阻止 delete 类事件
+        logger.warning("[emby-webhook] 未配置 webhook_token，安全保护：拒绝请求（请先配置 token）")
+        return JSONResponse(
+            status_code=403,
+            content={"code": 403, "message": "未配置 Webhook Token，请先在通知设置中配置 webhook_token", "data": None},
+        )
 
     # 解析请求体
     body_bytes = await request.body()

@@ -324,7 +324,7 @@ class WeChatAppService:
             result = await OrganizeService.scan_and_organize(
                 cookies=account.get("cookies", ""),
                 source_cid=dirs_cfg.get("source_cid", ""),
-                target_cid=sync_cfg.get("source_cid", ""),
+                target_cid=sync_cfg.get("target_cid", "") or sync_cfg.get("source_cid", ""),
                 existing_cid=dirs_cfg.get("existing_cid", ""),
                 redundant_cid=dirs_cfg.get("redundant_cid", ""),
                 unrecognized_cid=dirs_cfg.get("unrecognized_cid", ""),

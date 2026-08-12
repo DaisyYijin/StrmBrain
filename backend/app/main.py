@@ -78,6 +78,13 @@ async def lifespan(app: FastAPI):
 
     try:
         from app.services.folder_watcher import global_watcher_manager
+        import os
+        watch_paths = []
+        for path in watch_paths:
+            try:
+                global_watcher_manager.add_watch(path)
+            except Exception:
+                pass
         logger.info("文件监控管理器已就绪")
     except Exception as e:
         logger.warning(f"文件监控管理器初始化失败: {e}")
@@ -121,6 +128,14 @@ async def lifespan(app: FastAPI):
         logger.info("上传队列已初始化")
     except Exception as e:
         logger.warning(f"上传队列初始化失败: {e}")
+
+    # 初始化任务队列管理器（STRM_SYNC/SCRAPE/UPLOAD/DOWNLOAD 后台处理循环）
+    try:
+        from app.core.task_queue import init_task_queue_manager
+        init_task_queue_manager()
+        logger.info("任务队列管理器已初始化")
+    except Exception as e:
+        logger.warning(f"任务队列管理器初始化失败: {e}")
 
     # 启动版本检查后台任务
     try:

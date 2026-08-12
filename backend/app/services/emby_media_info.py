@@ -238,9 +238,9 @@ class EmbyMediaInfoService:
         except Exception as e:
             logger.warning(f"[emby-media-info] 从 115 下载失败: {e}")
 
-        # 未找到 -> 记录缓存未命中
-        self._stats["cache_misses"] += 1
-        self._save_stats()
+        # 未找到 -> 记录缓存未命中（仅在 API 实现后才有意义，当前不计数以避免状态失真）
+        # self._stats["cache_misses"] += 1  # TODO: API 实现后启用
+        # self._save_stats()
 
         return None
 

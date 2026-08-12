@@ -180,6 +180,34 @@ class SyncService:
             logger.warning("[sync] 已有同步任务正在运行，跳过本次全量同步")
             return {"total": 0, "synced": [], "skipped": 0, "errors": [], "skipped_concurrent": True}
 
+        try:
+            return cls._full_sync_impl(
+                cookies, source_cid, local_media_dir, video_exts,
+                image_exts, data_exts, min_video_size_mb, account_id, loop,
+            )
+        except Exception as e:
+            logger.error(f"[sync] 全量同步异常（锁已安全释放）: {e}", exc_info=True)
+            return {"total": 0, "synced": [], "skipped": 0,
+                    "errors": [{"name": "", "error": f"同步异常: {e}"}]}
+        finally:
+            _sync_lock.release()
+
+    @classmethod
+    def _full_sync_impl(
+        cls,
+        cookies: str,
+        source_cid: str,
+        local_media_dir: str,
+        video_exts: set[str],
+        image_exts: Optional[set] = None,
+        data_exts: Optional[set] = None,
+        min_video_size_mb: int = 0,
+        account_id: int = 0,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> dict:
+        """全量同步内部实现（由 full_sync 在持锁状态下调用）"""
+        from app.core.progress import progress_manager
+
         image_exts = image_exts or set()
         data_exts = data_exts or set()
         all_exts = video_exts | image_exts | data_exts
@@ -202,9 +230,9 @@ class SyncService:
         # 预加载 STRM 设置，避免每个文件都读 JSON
         strm_settings = cls._load_strm_settings()
 
-        # 扫描源目录所有文件
-        all_files = Client115Service.list_all_files_with_meta(
-            cookies, source_cid, all_exts, min_size=0, recursive=True
+        # 扫描源目录所有文件（LitePan 式：串行栈 DFS + 分页递增 300/600/1000 + 30 分钟目录缓存）
+        all_files = Client115Service.list_all_files_with_meta_litepan(
+            cookies, source_cid, all_exts, min_size=0, recursive=True, account_id=account_id
         )
         logger.info(f"[sync] 扫描到 {len(all_files)} 个匹配文件")
 
@@ -322,7 +350,6 @@ class SyncService:
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "全量", loop)
 
-        _sync_lock.release()
         return result
 
     # ============ 增量同步 ============
@@ -353,6 +380,34 @@ class SyncService:
         if not _sync_lock.acquire(blocking=False):
             logger.warning("[sync] 已有同步任务正在运行，跳过本次增量同步")
             return {"total": 0, "synced": [], "skipped": 0, "errors": [], "skipped_concurrent": True}
+
+        try:
+            return cls._incremental_sync_impl(
+                cookies, source_cid, local_media_dir, video_exts,
+                image_exts, data_exts, min_video_size_mb, account_id, loop,
+            )
+        except Exception as e:
+            logger.error(f"[sync] 增量同步异常（锁已安全释放）: {e}", exc_info=True)
+            return {"total": 0, "synced": [], "skipped": 0,
+                    "errors": [{"name": "", "error": f"同步异常: {e}"}]}
+        finally:
+            _sync_lock.release()
+
+    @classmethod
+    def _incremental_sync_impl(
+        cls,
+        cookies: str,
+        source_cid: str,
+        local_media_dir: str,
+        video_exts: Optional[set] = None,
+        image_exts: Optional[set] = None,
+        data_exts: Optional[set] = None,
+        min_video_size_mb: int = 0,
+        account_id: int = 0,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+    ) -> dict:
+        """增量同步内部实现（由 incremental_sync 在持锁状态下调用）"""
+        from app.core.progress import progress_manager
 
         video_exts = video_exts or DEFAULT_VIDEO_EXTS
         image_exts = image_exts or set()
@@ -430,9 +485,9 @@ class SyncService:
                 })
             logger.info(f"[sync] 使用 export_dir 树快速扫描，{len(all_files)} 个文件")
         if not all_files:
-            # 回退：递归扫描（与原有逻辑一致）
-            all_files = Client115Service.list_all_files_with_meta(
-                cookies, source_cid, all_exts, min_size=0, recursive=True
+            # 回退：递归扫描（LitePan 式，防风控；与原有逻辑一致）
+            all_files = Client115Service.list_all_files_with_meta_litepan(
+                cookies, source_cid, all_exts, min_size=0, recursive=True, account_id=account_id
             )
             logger.info(f"[sync] 扫描到 {len(all_files)} 个匹配文件")
         result["total"] = len(all_files)
@@ -585,7 +640,6 @@ class SyncService:
         if result["errors"]:
             cls._notify_sync_failures(result["errors"], "增量", loop)
 
-        _sync_lock.release()
         return result
 
     # ============ 同步计划管理 ============
