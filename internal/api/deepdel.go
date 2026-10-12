@@ -140,7 +140,7 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 	// 空目录清理放在删除之后：目录要空了才判得出来，而目录本身不会因为删文件消失，
 	// 逐级按名字查 cid 这条路删完照样走得通
 	if cfg.prunePanDirs() {
-		res.PanDirs = h.pruneDeepDelDirs(ops, h.loadFullSyncCfg().Cid, rows)
+		res.PanDirs = h.pruneDeepDelDirsByLib(ops, rows)
 	}
 
 	log.Printf("[深度删除] ✓ %s：删除网盘文件 %d 个（视频 %d / 附属 %d），空目录 %d 个",
@@ -313,6 +313,64 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 		}
 	}
 	return removed
+}
+
+// pruneDeepDelDirsByLib 多个媒体库时按台账路径的第一段（库名）分组，各从各的库根往下找目录。
+// 不分组的话 B 库的「电影/某片」会从主库根按名字去找，撞上主库里同名的目录（libroots.go）。
+// 只有一个库时照旧整批交给主库（老台账可能不带库名、或库改过名）
+func (h *Handler) pruneDeepDelDirsByLib(ops dirIO, rows []model.SyncedFile) int {
+	cids := h.loadFullSyncCfg().libCids()
+	if len(cids) <= 1 {
+		return h.pruneDeepDelDirs(ops, firstNonEmpty(cids...), rows)
+	}
+	cookie, _ := h.get115Cookie()
+	roots, err := h.resolveConfiguredLibRoots(cookie)
+	if err != nil {
+		log.Printf("[深度删除] ○ 认不出各媒体库的位置，跳过网盘空目录清理: %v", err)
+		return 0
+	}
+	groups, unknown := groupRowsByLib(roots, rows)
+	for _, name := range unknown {
+		log.Printf("[深度删除] ○ 「%s」不是任何一个媒体库的目录名，跳过它下面的网盘空目录清理", name)
+	}
+	removed := 0
+	for _, g := range groups {
+		removed += h.pruneDeepDelDirs(ops, g.cid, g.rows)
+	}
+	return removed
+}
+
+// libRowGroup 同一个媒体库里的台账行
+type libRowGroup struct {
+	cid  string
+	rows []model.SyncedFile
+}
+
+// groupRowsByLib 按台账路径第一段（库名）把行分给各媒体库（纯函数）。
+// 认不出库名的那些段名放进 unknown，它们的行不交给任何库
+func groupRowsByLib(roots []libRoot, rows []model.SyncedFile) (groups []libRowGroup, unknown []string) {
+	idx := map[string]int{}
+	seenUnknown := map[string]bool{}
+	for _, r := range rows {
+		name, _ := splitLibRel(filepath.ToSlash(r.RelPath))
+		root, ok := libRootNamed(roots, name)
+		if !ok {
+			if !seenUnknown[name] {
+				seenUnknown[name] = true
+				unknown = append(unknown, name)
+			}
+			continue
+		}
+		i, ok := idx[root.Cid]
+		if !ok {
+			i = len(groups)
+			idx[root.Cid] = i
+			groups = append(groups, libRowGroup{cid: root.Cid})
+		}
+		groups[i].rows = append(groups[i].rows, r)
+	}
+	sort.Strings(unknown)
+	return groups, unknown
 }
 
 // pruneDeepDelEmptyDir 祖先目录（分类目录那一层）专用：只删**自己一个子项都没有**的目录，

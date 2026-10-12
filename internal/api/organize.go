@@ -51,6 +51,20 @@ type OrgConfig struct {
 	NoTwinHold bool `json:"no_twin_hold"`
 	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
 	ShareCid      string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
+	// OtherLibs 附加媒体库（full.extra_libs，libroots.go）。第 1 期整理还只往主库放，
+	// 它们和工作区根一样只当保护子树：不被当条目整理、不被空目录清理删掉
+	OtherLibs []string `json:"-"`
+}
+
+// workspaceRootCids 整理引擎永不当条目处理的根：媒体库（全部）、待整理、已存在、冗余、转存
+func (cfg *OrgConfig) workspaceRootCids() map[string]bool {
+	out := map[string]bool{}
+	for _, cid := range append([]string{cfg.Library, cfg.Existing, cfg.Redundant, cfg.Pending, cfg.ShareCid}, cfg.OtherLibs...) {
+		if cid != "" {
+			out[cid] = true
+		}
+	}
+	return out
 }
 
 // orgCtx 一次整理运行的上下文：引擎各函数共用的只读配置 + 落盘出口。
@@ -193,16 +207,12 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	if cfg.Redundant == "" {
 		return nil, fmt.Errorf("未配置冗余文件夹")
 	}
-	// 影视库 = 全量同步配置的媒体库 cid；全量未配置时兼容旧的 org-basic.library
-	var fullCfg struct {
-		Cid string `json:"cid"`
-	}
-	if v := h.getSettingValue("full"); v != "" {
-		json.Unmarshal([]byte(v), &fullCfg)
-	}
+	// 影视库 = 全量同步配置的主媒体库 cid；全量未配置时兼容旧的 org-basic.library
+	fullCfg := h.loadFullSyncCfg()
 	if fullCfg.Cid != "" {
 		cfg.Library = fullCfg.Cid
 	}
+	cfg.OtherLibs = fullCfg.otherLibCids()
 	if cfg.Library == "" {
 		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
 	}
@@ -1457,7 +1467,7 @@ func newOrgGuards(cookie, scanCid string, cfg *OrgConfig) *orgGuards {
 	if cookie == "" {
 		return g
 	}
-	for _, cid := range []string{cfg.Library, cfg.Existing, cfg.Redundant} {
+	for _, cid := range append([]string{cfg.Library, cfg.Existing, cfg.Redundant}, cfg.OtherLibs...) {
 		if cid == "" {
 			continue
 		}
@@ -1557,10 +1567,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 	// 五个工作区根目录（媒体库/待整理/已存在/冗余/转存目录）永不被移动：
 	// 引擎只往它们里面放内容，目录自身绝不能被当作影视条目处理
 	// （否则会出现"已经存在文件夹移进自己"、转存目录被当容器壳搬进冗余等事故）
-	excluded := map[string]bool{cfg.Library: true, cfg.Existing: true, cfg.Redundant: true, cfg.Pending: true}
-	if cfg.ShareCid != "" {
-		excluded[cfg.ShareCid] = true
-	}
+	excluded := cfg.workspaceRootCids()
 	filtered := topEntries[:0]
 	for _, e := range topEntries {
 		if e.IsDir && excluded[e.Cid] {
@@ -1659,7 +1666,7 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 	// 列直接子条目判断是否为容器目录
 	direct, err := listPendingTopLevel(ops, entry.Cid)
 	if err == nil && depth < 3 {
-		excluded := map[string]bool{cfg.Library: true, cfg.Existing: true, cfg.Redundant: true, cfg.Pending: true}
+		excluded := cfg.workspaceRootCids()
 		hasDirectVideo := false
 		var subDirs []dirEntry
 		for _, c := range direct {
@@ -3296,10 +3303,7 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		held: loadAwaiting(), handled: map[string]bool{}}
 
 	// 五个工作区根目录自身永不被当作条目处理（与 runOrganizeEngine 一致）
-	excluded := map[string]bool{cfg.Library: true, cfg.Existing: true, cfg.Redundant: true, cfg.Pending: true}
-	if cfg.ShareCid != "" && cfg.ShareCid != cfg.Pending {
-		excluded[cfg.ShareCid] = true
-	}
+	excluded := cfg.workspaceRootCids()
 	filtered := topEntries[:0]
 	for _, e := range topEntries {
 		if e.IsDir && excluded[e.Cid] {

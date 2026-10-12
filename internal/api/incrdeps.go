@@ -2,9 +2,11 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -196,4 +198,107 @@ func (d *realIncrDeps) notifyDeleted(pan bool, paths ...string) {
 
 func (d *realIncrDeps) autoScrape(strmRels []string, refresh string) bool {
 	return enqueueSyncScrape(d.h.DB, strmRels, refresh)
+}
+
+// ==================== 增量同步的媒体库集合（多个 115 媒体库，libroots.go） ====================
+
+// incrLib 一个媒体库：cid、库名（STRM 路径第一层）、网盘绝对路径（不带结尾斜杠）
+type incrLib struct {
+	cid, name, abs string
+}
+
+// incrLibSet 本轮要管的全部媒体库，主库在前。库之间互不包含（保存时 checkWorkspaceSlots 拦）
+type incrLibSet []incrLib
+
+// resolveIncrLibs 主库 + 配置里的附加库，逐个解析名字与路径。
+// 任何一个解析不出都报错：它里面的事件会被当成库外吞掉、标成已消费
+func resolveIncrLibs(d incrDeps, primary string) (incrLibSet, error) {
+	cids := libCidsOf(primary, parseFullCfg(d.setting("full")).ExtraLibs)
+	if len(cids) == 0 {
+		return nil, fmt.Errorf("媒体库 cid 无效（%s）", primary)
+	}
+	if cids[0] != primary {
+		// 主库是 "0" / 空：沿用老口径报主库无效，不拿附加库顶上（整理的落点还是主库）
+		return nil, fmt.Errorf("媒体库 cid 无效（%s）", primary)
+	}
+	out := make(incrLibSet, 0, len(cids))
+	seen := map[string]string{}
+	for _, cid := range cids {
+		abs := strings.TrimSuffix(d.absPath(cid), "/")
+		if abs == "" {
+			return nil, fmt.Errorf("媒体库 cid=%s 解析不出绝对路径（未配置或已失效）", cid)
+		}
+		l := incrLib{cid: cid, name: d.dirName(cid), abs: abs}
+		if len(cids) > 1 {
+			if l.name == "" {
+				return nil, fmt.Errorf("媒体库 %s 读不出目录名", abs)
+			}
+			if prev, ok := seen[l.name]; ok {
+				return nil, fmt.Errorf("媒体库 %s 与 %s 同名，本地会落进同一个目录（请在 115 上把其中一个改名）", prev, abs)
+			}
+			seen[l.name] = abs
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// at 网盘绝对路径落在哪个库里，返回库与库内相对路径
+func (ls incrLibSet) at(panAbs string) (incrLib, string, bool) {
+	panAbs = strings.TrimSuffix(panAbs, "/")
+	for _, l := range ls {
+		if l.abs == "" {
+			continue
+		}
+		if panAbs == l.abs {
+			return l, "", true
+		}
+		if strings.HasPrefix(panAbs, l.abs+"/") {
+			return l, strings.TrimPrefix(panAbs, l.abs+"/"), true
+		}
+	}
+	return incrLib{}, "", false
+}
+
+// localRelOf 网盘绝对路径 → 本地相对路径（含库名前缀）；不在任何库内返回 false
+func (ls incrLibSet) localRelOf(panAbs string) (string, bool) {
+	l, rest, ok := ls.at(panAbs)
+	if !ok {
+		return "", false
+	}
+	return path.Join(l.name, rest), true
+}
+
+// isRoot 本地相对路径是不是某个库的根（库根本身不跟删，见删除事件那段）
+func (ls incrLibSet) isRoot(rel string) bool {
+	for _, l := range ls {
+		if rel == l.name {
+			return true
+		}
+	}
+	return false
+}
+
+// dirRel 目录相对它所在媒体库的路径。逐个库问 d.relPath：
+// 临时失败 / 目录已删（errDirGone）原样返回，调用方按原来的分类处理；都不在库内返回 ok=false
+func (ls incrLibSet) dirRel(d incrDeps, cid string) (incrLib, string, bool, error) {
+	for _, l := range ls {
+		base, ok, err := d.relPath(cid, l.cid)
+		if err != nil {
+			return incrLib{}, "", false, err
+		}
+		if ok {
+			return l, base, true, nil
+		}
+	}
+	return incrLib{}, "", false, nil
+}
+
+// absList 日志用：全部库的网盘路径
+func (ls incrLibSet) absList() string {
+	parts := make([]string, 0, len(ls))
+	for _, l := range ls {
+		parts = append(parts, l.abs)
+	}
+	return strings.Join(parts, "、")
 }

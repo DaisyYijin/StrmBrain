@@ -80,7 +80,9 @@ async function resetFullOptions() {
   const cid = cfg.value.cid
   const cidPath = cfg.value.cid_path
   const localPath = cfg.value.local_path
-  Object.assign(cfg.value, defaultFull(), { cid, cid_path: cidPath, local_path: localPath })
+  // 媒体库位置（含附加媒体库）归「账号与媒体库」管，这里重置的只是同步选项
+  const extraLibs = cfg.value.extra_libs
+  Object.assign(cfg.value, defaultFull(), { cid, cid_path: cidPath, local_path: localPath, extra_libs: extraLibs })
   await props.full.save()
 }
 
@@ -91,6 +93,10 @@ const offFinished = queue.onFinished((j) => {
 onUnmounted(offFinished)
 
 const busy = computed(() => props.runs.busyFull.value)
+/** 附加媒体库：全量同步逐个库跑（后端 libroots.go） */
+const extraLibs = computed(() => (cfg.value.extra_libs ?? []).filter((e) => e.cid && e.cid !== cfg.value.cid))
+const extraLibCount = computed(() => extraLibs.value.length)
+const extraLibTitle = computed(() => extraLibs.value.map((e) => e.path || `cid ${e.cid}`).join('\n'))
 const helpVisible = ref(false)
 
 const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
@@ -107,6 +113,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
         <FolderTree :size="15" />
         <span class="loc-label">115</span>
         <span class="loc-path" :class="{ 'is-empty': !cfg.cid }">{{ cfg.cid_path || cfg.cid || '未配置' }}</span>
+        <span v-if="extraLibCount" class="loc-more" :title="extraLibTitle">+{{ extraLibCount }} 个附加库</span>
       </span>
       <ArrowRight :size="15" class="loc-arrow" />
       <span class="loc-item" :title="cfg.local_path">
@@ -294,6 +301,11 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.loc-more {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 .loc-path.is-empty {
   font-family: inherit;

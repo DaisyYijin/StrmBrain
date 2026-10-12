@@ -311,9 +311,13 @@ func (h *Handler) prepareEpisodeContext(chain []browseCrumb, items []fileJobItem
 		return nil, fmt.Errorf("一次最多指定 %d 集；整季都错了请对整部片目「重新整理」", fileEpisodeMax)
 	}
 	layout := loadLibCategoryLayout()
-	t, ok := libTitleAround(chain, h.workspaceRoles(), layout)
+	roles := h.workspaceRoles()
+	t, ok := libTitleAround(chain, roles, layout)
 	if !ok {
 		return nil, errors.New("只能给媒体库片目里的视频指定季集")
+	}
+	if why := otherLibBlock(chain, roles); why != "" {
+		return nil, errors.New(why)
 	}
 	for _, it := range items {
 		if why := episodeRowAction(t, layout, it.Name, it.IsDir); why != "" {

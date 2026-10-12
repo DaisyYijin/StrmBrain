@@ -15,10 +15,23 @@ export interface SyncExtConfig {
 }
 
 /** setting「full」的持久化结构（与后端 fullSyncCfg 同构） */
+/** 附加媒体库的一项（后端 libroots.go 的 libRootEntry） */
+export interface ExtraLib {
+  cid: string
+  /** 仅用于配置页回显；同步仍以 cid 为准 */
+  path?: string
+}
+
 export interface FullSyncConfig {
+  /** 主媒体库：整理只往这里放（第 2 期按分类规则分库） */
   cid: string
   /** 仅用于配置页回显；同步仍以 cid 为准 */
   cid_path?: string
+  /**
+   * 附加媒体库：全量 / 增量同步、海报墙、深度删除和主库一样管。
+   * 本地 STRM 第一层就是库目录名，所以各库目录名不能重名（后端保存时校验）
+   */
+  extra_libs?: ExtraLib[]
   local_path: string
   video_ext: string[]
   image_ext: string[]

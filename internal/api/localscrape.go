@@ -598,7 +598,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求，没配账号也能刮
 	var cloud cloudMetaOps
-	libCid := ""
+	var libRoots []libRoot // 上传时按片目的库名找网盘媒体库（libroots.go）
 	if o.Upload {
 		ops, err := h.newPan115Ops()
 		if err != nil {
@@ -607,13 +607,12 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		// 覆盖模式会删网盘上的旧元数据：登记抑制，别让增量同步回头把本地刚写的那份也删掉
 		ops.suppress = true
 		cloud = panCloudMetaOps{pan115Ops: ops, h: h}
-		for cid, r := range h.workspaceRoles() {
-			if r == "library" {
-				libCid = cid
-			}
-		}
-		if libCid == "" {
+		cookie, _ := h.get115Cookie()
+		if h.loadFullSyncCfg().Cid == "" {
 			return jobOutcome{}, errors.New("没有配置网盘媒体库目录，无法上传")
+		}
+		if libRoots, err = h.resolveConfiguredLibRoots(cookie); err != nil {
+			return jobOutcome{}, fmt.Errorf("认不出网盘媒体库的位置，无法上传：%w", err)
 		}
 		defer resetFileListCache()
 	}
@@ -652,6 +651,15 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		e := *tg.e
 		if tg.hint != nil {
 			e.MediaType, e.Title, e.Year, e.TmdbID = tg.hint.Kind, tg.hint.Title, tg.hint.Year, tg.hint.TmdbID
+		}
+		libCid := ""
+		if o.Upload {
+			root, ok := libRootNamed(libRoots, e.LibName)
+			if !ok {
+				problems = append(problems, fmt.Sprintf("%s：认不出它在哪个网盘媒体库（库目录「%s」），没有刮削", name, e.LibName))
+				continue
+			}
+			libCid = root.Cid
 		}
 		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick, lp.strict())
 		if err != nil {

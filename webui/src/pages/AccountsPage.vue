@@ -5,14 +5,14 @@ import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
-import { Info, QrCode, ShieldCheck } from '@lucide/vue'
+import { Info, Plus, QrCode, ShieldCheck, X } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
-import Cid115Input from '@/components/Cid115Input.vue'
+import Cid115Input, { type CidValue } from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
 import { configApi, organizeApi, storageApi } from '@/api'
 import { useFullSetting } from '@/pages/strm/fullSetting'
@@ -53,6 +53,27 @@ watch(
 )
 
 /**
+ * 附加媒体库（full.extra_libs）。主库以外再挂几个 115 目录，同步、海报墙、深度删除和主库一样管；
+ * 整理目前只往主库放。编辑时只改这份副本，点「保存媒体库位置」才写回 media.model。
+ */
+const extraLibs = ref<CidValue[]>([])
+const extraInputs = ref<(InstanceType<typeof Cid115Input> | null)[]>([])
+watch(
+  () => media.model.value.extra_libs,
+  (v) => {
+    extraLibs.value = (v ?? []).map((e) => ({ cid: e.cid, path: e.path || e.cid }))
+  },
+  { immediate: true },
+)
+function addExtraLib() {
+  extraLibs.value.push({ cid: '', path: '' })
+}
+function removeExtraLib(i: number) {
+  extraLibs.value.splice(i, 1)
+  extraInputs.value.splice(i, 1)
+}
+
+/**
  * 工作目录（转存/待整理、已存在、冗余）的现状，连同媒体库一起在「工作目录」卡里列出来。
  * 路径只为显示而存（*_path / folder_path）；没存路径的老配置退回显示 cid。
  */
@@ -84,6 +105,7 @@ const wsSlots = computed<WsSlot[]>(() => {
   })
   return [
     slot('library', lib.cid, lib.cid_path),
+    ...(lib.extra_libs ?? []).filter((e) => e.cid && e.cid !== lib.cid).map((e) => ({ ...slot('library', e.cid, e.path), extra: true })),
     slot('share', share.folder, share.folder_path),
     slot('existing', org.existing, org.existing_path),
     slot('redundant', org.redundant, org.redundant_path),
@@ -240,6 +262,32 @@ async function saveMedia() {
     }
   }
   media.model.value.cid_path = readablePath
+
+  // 附加媒体库：空行丢掉；填了却解析不出 cid 的拦下来，别静默丢掉用户要加的库
+  const extras: { cid: string; path: string }[] = []
+  for (let i = 0; i < extraLibs.value.length; i++) {
+    const row = extraLibs.value[i]
+    if (!row.path.trim() && !row.cid) continue
+    const ecid = (await extraInputs.value[i]?.ensureCid()) ?? row.cid
+    if (!ecid || ecid === '0') {
+      message.error(`第 ${i + 1} 个附加媒体库的路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid`)
+      return
+    }
+    if (ecid === cid || extras.some((e) => e.cid === ecid)) {
+      message.error(`第 ${i + 1} 个附加媒体库和前面的媒体库是同一个目录`)
+      return
+    }
+    let p = row.path.trim()
+    if (!p || /^\d+$/.test(p)) {
+      try {
+        p = (await storageApi.path115(ecid)).path
+      } catch {
+        p = ''
+      }
+    }
+    extras.push({ cid: ecid, path: p })
+  }
+  media.model.value.extra_libs = extras
   await media.save()
 }
 
@@ -342,9 +390,32 @@ onMounted(() => {
           <FieldRow
             label="115 媒体库目录"
             required
-            tip="全量同步、增量同步、整理入库与洗版判定共同锚定此目录。"
+            tip="主媒体库。全量同步、增量同步、整理入库与洗版判定共同锚定此目录；整理目前只往这里放。"
           >
             <Cid115Input ref="cidInput" v-model="cidValue" />
+          </FieldRow>
+
+          <FieldRow
+            label="附加媒体库"
+            tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。整理入库目前只往主媒体库放。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
+          >
+            <div class="extra-libs">
+              <div v-for="(_row, i) in extraLibs" :key="i" class="extra-lib">
+                <Cid115Input
+                  :ref="(el) => (extraInputs[i] = el as InstanceType<typeof Cid115Input> | null)"
+                  v-model="extraLibs[i]"
+                  placeholder="选择另一个 115 媒体库目录"
+                  class="extra-lib-input"
+                />
+                <HButton variant="ghost" icon-only :aria-label="`移除第 ${i + 1} 个附加媒体库`" @click="removeExtraLib(i)">
+                  <template #icon><X :size="15" /></template>
+                </HButton>
+              </div>
+              <HButton variant="secondary" size="sm" @click="addExtraLib">
+                <template #icon><Plus :size="15" /></template>
+                添加媒体库
+              </HButton>
+            </div>
           </FieldRow>
 
           <FieldRow
@@ -416,6 +487,22 @@ onMounted(() => {
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+.extra-libs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.extra-lib {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.extra-lib-input {
+  flex: 1;
+  min-width: 0;
 }
 .media-note :deep(svg) {
   flex-shrink: 0;

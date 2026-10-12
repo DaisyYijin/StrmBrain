@@ -340,5 +340,5 @@ func pruneOrMoveSettled(ops dirIO, cid string, protected map[string]bool, fallba
 
 // orgProtectedCids 整理工作区的全部根目录：清理空目录时永不触碰
 func orgProtectedCids(cfg *OrgConfig) []string {
-	return []string{cfg.Library, cfg.Pending, cfg.Existing, cfg.Redundant, cfg.ShareCid}
+	return append([]string{cfg.Library, cfg.Pending, cfg.Existing, cfg.Redundant, cfg.ShareCid}, cfg.OtherLibs...)
 }

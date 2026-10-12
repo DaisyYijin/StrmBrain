@@ -98,6 +98,10 @@ func (h *Handler) enqueueLibRedo(c *gin.Context, req fileJobRequest, roles map[s
 		c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库里只有分类目录下的片目目录能整理"})
 		return
 	}
+	if why := otherLibBlock(req.Chain, roles); why != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": why})
+		return
+	}
 	if _, err := loadTmdbClient(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -145,9 +149,13 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, err
 	}
 	layout := loadLibCategoryLayout()
-	_, rel, ok := libTitleOf(chain, h.workspaceRoles(), layout, it)
+	roles := h.workspaceRoles()
+	_, rel, ok := libTitleOf(chain, roles, layout, it)
 	if !ok {
 		return jobOutcome{}, errors.New("它已经不是媒体库里的片目目录了（被挪走，或分类策略改过），请刷新后重选")
+	}
+	if why := otherLibBlock(chain, roles); why != "" {
+		return jobOutcome{}, errors.New(why)
 	}
 
 	// 片目里的文件以网盘为准现场列一遍：台账可能过时，fid / pickcode / sha1 都要最新的

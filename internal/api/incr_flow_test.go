@@ -28,6 +28,7 @@ type stubIncrDeps struct {
 	names     map[string]string // cid → 目录名
 	abs       map[string]string // cid → 网盘绝对路径
 	rel       map[string]string // cid → 相对媒体库根的路径
+	relRoot   map[string]string // cid → 它所在的媒体库 cid（多库用例；没登记的不看库）
 	cachedAbs map[string]string // file_id → 目录当前的网盘绝对路径（模拟 PathCache）
 	goneDirs  []string          // 被判定为「已消失」的目录
 	rbParent  map[string]string // 目录名 → 回收站里记的原父目录 id
@@ -54,6 +55,7 @@ func newStubDeps() *stubIncrDeps {
 		names:     map[string]string{},
 		abs:       map[string]string{},
 		rel:       map[string]string{},
+		relRoot:   map[string]string{},
 		cachedAbs: map[string]string{},
 		rbParent:  map[string]string{},
 		settings:  map[string]string{"org-basic": "{}", "share": "{}"},
@@ -105,6 +107,9 @@ func (s *stubIncrDeps) absPath(cid string) string { return s.abs[cid] }
 func (s *stubIncrDeps) relPath(cid, rootCid string) (string, bool, error) {
 	if cid == rootCid {
 		return "", true, nil
+	}
+	if root, ok := s.relRoot[cid]; ok && root != rootCid {
+		return "", false, nil
 	}
 	r, ok := s.rel[cid]
 	return r, ok, nil

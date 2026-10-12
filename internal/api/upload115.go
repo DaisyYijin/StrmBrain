@@ -549,30 +549,21 @@ func monitorOnce(h *Handler) {
 		return
 	}
 
-	// 目标库根 cid 与绝对路径
-	rootCid := cfg.Target
-	var fullCfg struct {
-		Cid       string `json:"cid"`
-		LocalPath string `json:"local_path"`
-	}
-	if err := json.Unmarshal([]byte(h.getSettingValue("full")), &fullCfg); err != nil {
+	// 目标库根：本地媒体树第一层是库名（云端库根目录名，如「俱乐部」），
+	// 按它找对应的 115 媒体库再拼云端路径（panDirOfLocal），否则出现 /俱乐部/俱乐部/... 查不到目录。
+	// 几个媒体库各对各的（libroots.go）；老配置残留的 target 只有它一个库
+	var roots []libRoot
+	if cfg.Target != "" {
+		roots = []libRoot{{Cid: cfg.Target, Abs: absPathOf(cookie, cfg.Target)}}
+		if info, err := get115DirInfo(cookie, cfg.Target); err == nil {
+			roots[0].Name = info.n
+		}
+	} else if roots, err = h.resolveConfiguredLibRoots(cookie); err != nil {
+		vlog("[上传] ○ 认不出媒体库位置，本轮跳过: %v", err)
 		return
 	}
-	if rootCid == "" {
-		rootCid = fullCfg.Cid
-	}
-	if rootCid == "" {
+	if len(roots) == 0 || roots[0].Abs == "" {
 		return
-	}
-	libAbs := absPathOf(cookie, rootCid)
-	if libAbs == "" {
-		return
-	}
-	// 库名（云端库根目录名，如「俱乐部」）：本地媒体树第一层是库名，
-	// 拼云端绝对路径前要剥掉，否则出现 /俱乐部/俱乐部/... 查不到目录
-	libName := ""
-	if info, err := get115DirInfo(cookie, rootCid); err == nil {
-		libName = info.n
 	}
 
 	// 扫描监控目录：Emby 刮削产物（标准图片命名 + NFO），只处理最近 24h 内的新文件
@@ -612,16 +603,8 @@ func monitorOnce(h *Handler) {
 		if err != nil {
 			continue
 		}
-		relDir := filepath.ToSlash(filepath.Dir(rel))
-		// 剥掉本地路径的库名第一层（监控目录=本地媒体根时存在），与云端库根对齐
-		if libName != "" {
-			relDir = strings.TrimPrefix(strings.TrimPrefix(relDir, libName), "/")
-		}
-		// 定位 115 目标目录：媒体库绝对路径 + 相对目录（files/getid 查询）
-		targetAbs := strings.TrimSuffix(libAbs, "/")
-		if relDir != "" && relDir != "." {
-			targetAbs += "/" + relDir
-		}
+		// 定位 115 目标目录：本地第一层库名对应的媒体库 + 库内相对目录（files/getid 查询）
+		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
 		cid, ok := cloudPathCid(cookie, targetAbs)
 		if !ok {
 			// 115 无对应目录（多为播放器自建的 <集名>.mkv/ 本地元数据目录）：
@@ -701,11 +684,8 @@ func (h *Handler) uploadMetadataOnce() {
 	}
 	defer metadataRunning.Store(false)
 	local := defaultLocalPath
-	var fullCfg struct {
-		LocalPath string `json:"local_path"`
-		Cid       string `json:"cid"`
-	}
-	if json.Unmarshal([]byte(h.getSettingValue("full")), &fullCfg) == nil && fullCfg.LocalPath != "" {
+	fullCfg := h.loadFullSyncCfg()
+	if fullCfg.LocalPath != "" {
 		local = fullCfg.LocalPath
 	}
 	if fullCfg.Cid == "" {
@@ -716,16 +696,16 @@ func (h *Handler) uploadMetadataOnce() {
 		return
 	}
 
-	// 库根绝对路径与库名（云端目录定位用）。
-	// 本地路径第一层是库名（STRM 结构特性），拼接云端绝对路径前要剥掉，
+	// 各媒体库的根目录与库名（云端目录定位用）。
+	// 本地路径第一层是库名（STRM 结构特性），按它找对应的库再拼云端绝对路径（panDirOfLocal），
 	// 否则出现 /俱乐部/俱乐部/... 查不到目录（全部跳过）
-	libAbs := absPathOf(cookie, fullCfg.Cid)
-	if libAbs == "" {
+	roots, err := h.resolveConfiguredLibRoots(cookie)
+	if err != nil {
+		vlog("[元数据回传] ○ 认不出媒体库位置，本轮跳过: %v", err)
 		return
 	}
-	libName := ""
-	if info, err := get115DirInfo(cookie, fullCfg.Cid); err == nil {
-		libName = info.n
+	if len(roots) == 0 || roots[0].Abs == "" {
+		return
 	}
 
 	// 扫描媒体树里的元数据文件（跳过已上传标记；用台账判定是否已在云端）
@@ -761,15 +741,8 @@ func (h *Handler) uploadMetadataOnce() {
 		if err != nil {
 			continue
 		}
-		relDir := filepath.ToSlash(filepath.Dir(rel))
-		// 剥掉本地路径的库名第一层，与云端库根对齐
-		if libName != "" {
-			relDir = strings.TrimPrefix(strings.TrimPrefix(relDir, libName), "/")
-		}
-		targetAbs := strings.TrimSuffix(libAbs, "/")
-		if relDir != "" && relDir != "." {
-			targetAbs += "/" + relDir
-		}
+		// 本地第一层库名对应的媒体库 + 库内相对目录
+		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
 		cid, found := cloudPathCid(cookie, targetAbs)
 		if !found {
 			// 同一文件连续多轮查不到云端目录就停止重试（防每 5 分钟刷屏）

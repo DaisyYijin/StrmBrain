@@ -133,15 +133,17 @@ func (h *Handler) loadIncrInterval() time.Duration {
 
 // fullSyncCfg 全量同步的持久化配置（setting "full"，与前端「全量同步」页签同构）
 type fullSyncCfg struct {
-	Cid           string   `json:"cid"`
-	LocalPath     string   `json:"local_path"`
-	VideoExt      []string `json:"video_ext"`
-	ImageExt      []string `json:"image_ext"`
-	DataExt       []string `json:"data_ext"`
-	Mode          string   `json:"mode"`
-	DetectOrphans bool     `json:"detect_orphans"`
-	CronEnabled   bool     `json:"cron_enabled"`
-	Cron          string   `json:"cron"`
+	Cid string `json:"cid"` // 主媒体库
+	// ExtraLibs 附加媒体库（libroots.go）。读库清单用 libCids()，别只读 Cid
+	ExtraLibs     []libRootEntry `json:"extra_libs"`
+	LocalPath     string         `json:"local_path"`
+	VideoExt      []string       `json:"video_ext"`
+	ImageExt      []string       `json:"image_ext"`
+	DataExt       []string       `json:"data_ext"`
+	Mode          string         `json:"mode"`
+	DetectOrphans bool           `json:"detect_orphans"`
+	CronEnabled   bool           `json:"cron_enabled"`
+	Cron          string         `json:"cron"`
 }
 
 // loadFullSyncCfg 读取 full 配置（解析失败返回零值，调用方按「没配」处理）。

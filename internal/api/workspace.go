@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -27,10 +28,17 @@ import (
 
 // wsSlot 一个工作区目录槽位
 type wsSlot struct {
-	key   string // library / share / existing / redundant
+	key   string // library / share / existing / redundant；附加媒体库是 library:<cid>
 	label string
 	cid   string
 }
+
+// wsLibKeyPrefix 附加媒体库的槽位 key 前缀（主库是 library）。
+// 按 cid 起 key：库的个数不固定，按下标比「改没改」会把删掉一个库算成后面的都改了
+const wsLibKeyPrefix = "library:"
+
+// isLibSlot 是不是媒体库槽位（主库或附加库）
+func isLibSlot(key string) bool { return key == "library" || strings.HasPrefix(key, wsLibKeyPrefix) }
 
 // wsRootName 一键创建的顶层目录，建在网盘根下
 const wsRootName = "StrmStation"
@@ -68,12 +76,25 @@ func jsonStrField(raw, field string) string {
 	return strings.TrimSpace(s)
 }
 
-// workspaceSlots 按 setting 原文拼出四个槽位。getter 是「key → JSON 原文」
+// workspaceSlots 按 setting 原文拼出四个固定槽位，后面接附加媒体库（full.extra_libs）。
+// getter 是「key → JSON 原文」
 func workspaceSlots(getter func(key string) string) []wsSlot {
 	out := make([]wsSlot, 0, len(wsSlotOrder))
 	for _, s := range wsSlotOrder {
 		loc := wsSettingOf[s.key]
 		out = append(out, wsSlot{key: s.key, label: s.label, cid: jsonStrField(getter(loc[0]), loc[1])})
+	}
+	full := parseFullCfg(getter("full"))
+	shown := map[string]string{}
+	for _, e := range full.ExtraLibs {
+		shown[strings.TrimSpace(e.Cid)] = strings.TrimSpace(e.Path)
+	}
+	for _, cid := range full.otherLibCids() {
+		label := "附加媒体库"
+		if p := shown[cid]; p != "" {
+			label += "「" + p + "」"
+		}
+		out = append(out, wsSlot{key: wsLibKeyPrefix + cid, label: label, cid: cid})
 	}
 	return out
 }
@@ -127,6 +148,9 @@ func checkWorkspaceSlots(slots []wsSlot, changed map[string]bool, resolve func(c
 	for i := range set {
 		for j := i + 1; j < len(set); j++ {
 			if involved(set[i], set[j]) && set[i].cid == set[j].cid {
+				if isLibSlot(set[i].key) && isLibSlot(set[j].key) {
+					return fmt.Errorf("%s 与 %s 选的是同一个目录", set[i].label, set[j].label)
+				}
 				return fmt.Errorf("%s 与 %s 选的是同一个目录，这几个目录必须各自独立、互不包含", set[i].label, set[j].label)
 			}
 		}
@@ -166,6 +190,11 @@ func checkWorkspaceSlots(slots []wsSlot, changed map[string]bool, resolve func(c
 			if wsContains(pb, pa) {
 				return fmt.Errorf("%s（%s）位于 %s（%s）之内，这几个目录必须互不包含", a.label, pa, b.label, pb)
 			}
+			// 媒体库的目录名就是本地 STRM 的第一层：同名的两个库会落进同一个本地目录（libroots.go）
+			if i < j && isLibSlot(a.key) && isLibSlot(b.key) && path.Base(pa) == path.Base(pb) {
+				return fmt.Errorf("%s（%s）与 %s（%s）同名：本地 STRM 第一层就是库目录名，同名会混进同一个本地目录，请在 115 上把其中一个改名",
+					a.label, pa, b.label, pb)
+			}
 		}
 	}
 	return nil
@@ -176,6 +205,14 @@ func (h *Handler) guardWorkspaceSetting(key, value string) error {
 	if key != "full" && key != "share" && key != "org-basic" {
 		return nil
 	}
+	if key == "full" {
+		// libCidsOf 会把网盘根悄悄滤掉，槽位里就看不到它了：在这里明确拒收
+		for _, e := range parseFullCfg(value).ExtraLibs {
+			if strings.TrimSpace(e.Cid) == "0" {
+				return fmt.Errorf("附加媒体库不能选网盘根目录，请选一个具体的文件夹")
+			}
+		}
+	}
 	stored := workspaceSlots(h.getSettingValue)
 	next := workspaceSlots(func(k string) string {
 		if k == key {
@@ -183,10 +220,15 @@ func (h *Handler) guardWorkspaceSetting(key, value string) error {
 		}
 		return h.getSettingValue(k)
 	})
+	// 按 key 比：附加媒体库的个数会变（key 带 cid，新加的库在旧表里没有 = 改动过）
+	old := map[string]string{}
+	for _, s := range stored {
+		old[s.key] = s.cid
+	}
 	changed := map[string]bool{}
-	for i := range next {
-		if next[i].cid != stored[i].cid {
-			changed[next[i].key] = true
+	for _, s := range next {
+		if prev, ok := old[s.key]; !ok || prev != s.cid {
+			changed[s.key] = true
 		}
 	}
 	if len(changed) == 0 {
@@ -238,7 +280,7 @@ func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
 	}
 	var missing []wsSlot
 	for _, s := range slots[1:] {
-		if s.cid == "" {
+		if s.cid == "" && !isLibSlot(s.key) {
 			missing = append(missing, s)
 		}
 	}
@@ -253,17 +295,22 @@ func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
 	}
 	cookie, _ := h.get115Cookie()
 
-	// 先核媒体库不在 /StrmStation 里，再动网盘：建完才发现冲突就白建了
+	// 先核媒体库（每一个）不在 /StrmStation 里，再动网盘：建完才发现冲突就白建了
 	rootAbs := "/" + wsRootName
 	if cookie != "" {
-		libAbs, err := resolveDirAbsFresh(cookie, lib.cid)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "解析媒体库目录失败: " + err.Error()})
-			return
-		}
-		if wsContains(rootAbs, libAbs) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("媒体库目录（%s）就在 %s 里，一键创建会与它重叠，请手动配置工作目录", libAbs, rootAbs)})
-			return
+		for _, s := range slots {
+			if !isLibSlot(s.key) || s.cid == "" {
+				continue
+			}
+			libAbs, err := resolveDirAbsFresh(cookie, s.cid)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "解析" + s.label + "失败: " + err.Error()})
+				return
+			}
+			if wsContains(rootAbs, libAbs) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("%s（%s）就在 %s 里，一键创建会与它重叠，请手动配置工作目录", s.label, libAbs, rootAbs)})
+				return
+			}
 		}
 	}
 

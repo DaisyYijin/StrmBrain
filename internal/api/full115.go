@@ -177,6 +177,8 @@ type fullSummary struct {
 	AssetsDownloaded int
 	AssetsSkipped    int
 	AssetsFailed     int
+	Libs             int      // 同步了几个媒体库
+	Failed           []string // 没同步成功的库（多个库时一个失败不拦别的）
 }
 
 // fullConfigErr 配置类失败（拿不到可用的 115 通道等）。HTTP 入口据此回 400 而不是 502——
@@ -244,55 +246,51 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	}
 	filter.assetExts[".nfo"] = true
 
-	// 获取媒体库根目录名（如"俱乐部"），作为 STRM 路径的第一层
-	libName := ""
+	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置。
+	// 一个库失败不拦别的库；有库失败时不标记事件窗口（见下），那个库的变化留给增量补
+	cids := libCidsOf(p.Cid, h.loadFullSyncCfg().ExtraLibs)
 	cookie, _ := h.get115Cookie()
-	if cookie != "" {
-		if info, err := get115DirInfo(cookie, p.Cid); err == nil {
-			libName = info.n
-		}
-	}
-
-	log.Printf("[同步] ▶ 全量同步开始（媒体库 cid=%s → %s）", p.Cid, p.LocalPath)
-	// 整理工作区不参与同步（见 orgSkipCids）；打印各槽位配置情况，配错配漏一眼可见
-	skipCids, slots := h.orgSkipCids(p.Cid)
-	vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
-
-	// 取清单（模式见 collectSyncFiles）；libName 作为 STRM 路径第一层
-	var videos, assets []remoteFile
-	modeUsed, complete, err := h.collectSyncFiles(ops, cookie, p.Mode, p.Cid, libName, &videos, &assets, filter, skipCids, SetTaskProgress)
-	if err != nil {
-		return nil, fmt.Errorf("遍历 115 目录失败: %w", err)
-	}
-
-	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
-	st := applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
-
-	// 失效 STRM 标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
-	// 三个前提缺一不可——用户开了开关、清单完整、拿得到库名（台账按库名前缀分区）。
-	// 只打标不删，删除由用户在 Strm 管理页看过预览后手动触发
+	var videos, assets int
+	var st applyStats
+	modeUsed, complete := p.Mode, true
 	orphanTotal := 0
-	if h.orphanDetectEnabled() {
-		switch {
-		case !complete:
-			log.Printf("[同步] ○ 本次清单不完整，跳过失效 STRM 标记（避免把没取全的文件误判成已删除）")
-		case libName == "":
-			log.Printf("[同步] ○ 取不到媒体库根目录名，跳过失效 STRM 标记（台账按库名前缀区分不同媒体库）")
-		default:
-			seen := make(map[string]bool, len(videos)+len(assets))
-			for _, f := range videos {
-				seen[f.Fid] = true
-			}
-			for _, f := range assets {
-				seen[f.Fid] = true
-			}
-			marked, cleared, total := markOrphans(h.DB, libName, seen)
-			orphanTotal = total
-			if marked+cleared+total > 0 {
-				log.Printf("[同步] ○ 失效 STRM 标记：新增 %d，恢复 %d，当前共 %d 个待清理（Strm 管理页确认后删除）",
-					marked, cleared, total)
-			}
+	var failed []string
+	seenName := map[string]string{}
+	for i, cid := range cids {
+		if len(cids) > 1 {
+			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(cids)))
 		}
+		r, err := h.fullSyncLib(ops, cookie, p, cid, len(cids) > 1, filter, seenName, domain, format, keepExt, skipExist)
+		if err != nil {
+			if len(cids) == 1 {
+				return nil, err
+			}
+			log.Printf("[同步] ✗ 媒体库 cid=%s 同步失败，继续同步附加库: %v", cid, err)
+			failed = append(failed, fmt.Sprintf("%s：%v", firstNonEmpty(r.name, "cid="+cid), err))
+			continue
+		}
+		videos += r.videos
+		assets += r.assets
+		st.StrmCreated += r.st.StrmCreated
+		st.StrmExisting += r.st.StrmExisting
+		st.StrmFailed += r.st.StrmFailed
+		st.AssetsDownloaded += r.st.AssetsDownloaded
+		st.AssetsSkipped += r.st.AssetsSkipped
+		st.AssetsFailed += r.st.AssetsFailed
+		if r.modeUsed == "normal" {
+			modeUsed = "normal" // 有一个库降级就按降级报
+		}
+		complete = complete && r.complete
+		orphanTotal += r.orphans
+	}
+	if len(cids) == 0 {
+		return nil, fullConfigErr{fmt.Errorf("未配置 115 媒体库目录")}
+	}
+	if len(failed) == len(cids) {
+		return nil, fmt.Errorf("%d 个媒体库全部同步失败：%s", len(failed), strings.Join(failed, "；"))
+	}
+	if modeUsed != "fast" {
+		modeUsed = "normal"
 	}
 
 	totalNew := st.StrmCreated + st.AssetsDownloaded
@@ -307,8 +305,11 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		}
 	}
 	// 全量已覆盖一切：把事件窗口内的生活事件标记为已处理，
-	// 之后的增量同步只处理此后发生的新事件
-	if cookieOnly, err := h.get115Cookie(); err == nil {
+	// 之后的增量同步只处理此后发生的新事件。
+	// 有库没同步成功时不标：那个库窗口内的变化还得靠增量补上
+	if len(failed) > 0 {
+		log.Printf("[同步] ○ 有 %d 个媒体库没同步成功，生活事件窗口不标记为已覆盖（留给增量处理）", len(failed))
+	} else if cookieOnly, err := h.get115Cookie(); err == nil {
 		if n, err := h.markEventsCoveredByFullSync(cookieOnly); err != nil {
 			log.Printf("[同步] 标记生活事件已覆盖失败: %v", err)
 		} else if n > 0 {
@@ -318,7 +319,7 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	SetTaskProgress("")
 	log.Printf("[同步] 全量同步完成（%s模式）：视频 %d 个（新增 STRM %d，已存在 %d，失败 %d），附属文件下载 %d 个，用时 %s",
 		map[string]string{"fast": "快速", "normal": "标准"}[modeUsed],
-		len(videos), st.StrmCreated, st.StrmExisting, st.StrmFailed, st.AssetsDownloaded,
+		videos, st.StrmCreated, st.StrmExisting, st.StrmFailed, st.AssetsDownloaded,
 		time.Since(fullStart).Truncate(time.Second))
 
 	return &fullSummary{
@@ -326,14 +327,92 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		ScanComplete:     complete,
 		Orphans:          orphanTotal,
 		Elapsed:          time.Since(fullStart).Truncate(time.Second).String(),
-		Total:            len(videos),
+		Total:            videos,
 		Created:          st.StrmCreated,
 		Existing:         st.StrmExisting,
-		AssetsTotal:      len(assets),
+		AssetsTotal:      assets,
 		AssetsDownloaded: st.AssetsDownloaded,
 		AssetsSkipped:    st.AssetsSkipped,
 		AssetsFailed:     st.AssetsFailed,
+		Libs:             len(cids),
+		Failed:           failed,
 	}, nil
+}
+
+// fullLibResult 一个媒体库的全量结果
+type fullLibResult struct {
+	name           string
+	modeUsed       string
+	complete       bool
+	videos, assets int
+	st             applyStats
+	orphans        int
+}
+
+// fullSyncLib 同步一个媒体库：取清单 → 落盘 → 失效 STRM 标记（只标这个库的台账）。
+// seenName 记已经同步过的库名：同名的两个库会落进同一棵本地目录树，后一个拒绝
+func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid string, multi bool, filter *syncFilter,
+	seenName map[string]string, domain, format string, keepExt, skipExist bool) (fullLibResult, error) {
+	var r fullLibResult
+	// 媒体库根目录名（如"俱乐部"），作为 STRM 路径的第一层
+	if cookie != "" {
+		if info, err := get115DirInfo(cookie, cid); err == nil {
+			r.name = info.n
+		}
+	}
+	if multi {
+		if r.name == "" {
+			return r, fmt.Errorf("读不出媒体库目录名（可能已删除，或暂时连不上 115）")
+		}
+		if prev, ok := seenName[r.name]; ok {
+			return r, fmt.Errorf("与媒体库 cid=%s 同名「%s」，本地会落进同一个目录，请在 115 上把其中一个改名", prev, r.name)
+		}
+		seenName[r.name] = cid
+	}
+
+	log.Printf("[同步] ▶ 全量同步开始（媒体库 %s cid=%s → %s）", firstNonEmpty(r.name, "?"), cid, p.LocalPath)
+	// 整理工作区不参与同步（见 orgSkipCids）；打印各槽位配置情况，配错配漏一眼可见
+	skipCids, slots := h.orgSkipCids(cid)
+	vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
+
+	// 取清单（模式见 collectSyncFiles）；库名作为 STRM 路径第一层
+	var videos, assets []remoteFile
+	modeUsed, complete, err := h.collectSyncFiles(ops, cookie, p.Mode, cid, r.name, &videos, &assets, filter, skipCids, SetTaskProgress)
+	if err != nil {
+		return r, fmt.Errorf("遍历 115 目录失败: %w", err)
+	}
+	r.modeUsed, r.complete, r.videos, r.assets = modeUsed, complete, len(videos), len(assets)
+
+	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
+	r.st = applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
+
+	// 失效 STRM 标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
+	// 三个前提缺一不可——用户开了开关、清单完整、拿得到库名（台账按库名前缀分区，
+	// 多个库时正是这个前缀让 A 库的全量不去碰 B 库的台账）。
+	// 只打标不删，删除由用户在 Strm 管理页看过预览后手动触发
+	if h.orphanDetectEnabled() {
+		switch {
+		case !complete:
+			log.Printf("[同步] ○ 本次清单不完整，跳过失效 STRM 标记（避免把没取全的文件误判成已删除）")
+		case r.name == "":
+			log.Printf("[同步] ○ 取不到媒体库根目录名，跳过失效 STRM 标记（台账按库名前缀区分不同媒体库）")
+		default:
+			seen := make(map[string]bool, len(videos)+len(assets))
+			for _, f := range videos {
+				seen[f.Fid] = true
+			}
+			for _, f := range assets {
+				seen[f.Fid] = true
+			}
+			marked, cleared, total := markOrphans(h.DB, r.name, seen)
+			r.orphans = total
+			if marked+cleared+total > 0 {
+				log.Printf("[同步] ○ 失效 STRM 标记（%s）：新增 %d，恢复 %d，当前共 %d 个待清理（Strm 管理页确认后删除）",
+					r.name, marked, cleared, total)
+			}
+		}
+	}
+	return r, nil
 }
 
 // ---- 日志分级：simple 模式静默过程性日志（目录遍历/搜索/302/播放改写），只留关键节点与异常 ----

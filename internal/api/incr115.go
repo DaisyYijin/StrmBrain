@@ -278,15 +278,15 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	incrStart := time.Now()
 
 	// ---- 作用域计算与配置体检（先于事件拉取：配置错误时熔断，不消费任何事件）----
-	// 媒体库根目录名（STRM 路径第一层）
-	libName := d.dirName(p.Cid)
-	libAbs := d.absPath(p.Cid)
-	if libAbs == "" {
+	// 媒体库：p.Cid 是主库，其余库取自配置（libroots.go）。每个库的根目录名是它的 STRM 路径第一层
+	libs, err := resolveIncrLibs(d, p.Cid)
+	if err != nil {
 		// 媒体库 cid 无效/未配置（如全量同步配置缺 cid 时默认 "0"）：
 		// 所有事件都会被判为 other 静默吞掉并标已消费 → STRM 永久缺失。
+		// 多个库时任何一个解析不出都一样：它里面的变化会被当成库外吞掉。
 		// 熔断本轮，事件原样留待配置修正
-		lg.infof("⚠⚠ 媒体库 cid=%s 解析不出绝对路径（未配置或已失效），增量同步中止（事件未消费）。请到「账号与媒体库」确认媒体库目录配置", p.Cid)
-		return sum, fmt.Errorf("媒体库 cid 无效（%s），增量同步中止（事件未消费，修正配置后重试即可补上）", p.Cid)
+		lg.infof("⚠⚠ %v，增量同步中止（事件未消费）。请到「账号与媒体库」确认媒体库目录配置", err)
+		return sum, fmt.Errorf("%v，增量同步中止（事件未消费，修正配置后重试即可补上）", err)
 	}
 	var excludedAbs []string
 	var orgCfgRaw struct {
@@ -311,9 +311,11 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	//（如待整理选在库根或库的上层），排除区判定会吞掉所有库内事件。
 	// 直接中止本次增量——事件一条都不拉取消费，修正配置后原样补上
 	for _, ex := range excludedAbs {
-		if libAbs != "" && strings.HasPrefix(strings.TrimSuffix(libAbs, "/")+"/", ex+"/") {
-			lg.infof("⚠ 整理目录（%s）把整个媒体库都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把转存/待整理、已存在、冗余目录改到媒体库外面", ex)
-			return sum, fmt.Errorf("配置错误：工作区目录 %s 覆盖了整个媒体库 %s，增量同步中止（事件未消费，修正配置后重试即可补上）", ex, libAbs)
+		for _, l := range libs {
+			if strings.HasPrefix(l.abs+"/", ex+"/") {
+				lg.infof("⚠ 整理目录（%s）把整个媒体库（%s）都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把转存/待整理、已存在、冗余目录改到媒体库外面", ex, l.abs)
+				return sum, fmt.Errorf("配置错误：工作区目录 %s 覆盖了整个媒体库 %s，增量同步中止（事件未消费，修正配置后重试即可补上）", ex, l.abs)
+			}
 		}
 	}
 
@@ -411,7 +413,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				return "excluded"
 			}
 		}
-		if libAbs != "" && strings.HasPrefix(abs+"/", strings.TrimSuffix(libAbs, "/")+"/") {
+		if _, _, ok := libs.at(abs); ok {
 			return "library"
 		}
 		return "other"
@@ -423,17 +425,8 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		return scopeOfAbs(d.absPath(cid))
 	}
 
-	// localRelOf 网盘绝对路径 → 本地相对路径（含库名前缀）；不在库内返回 false
-	localRelOf := func(panAbs string) (string, bool) {
-		base := strings.TrimSuffix(libAbs, "/")
-		if panAbs == base {
-			return libName, true
-		}
-		if base == "" || !strings.HasPrefix(panAbs, base+"/") {
-			return "", false
-		}
-		return path.Join(libName, strings.TrimPrefix(panAbs, base+"/")), true
-	}
+	// localRelOf 网盘绝对路径 → 本地相对路径（含库名前缀）；不在任何库内返回 false
+	localRelOf := libs.localRelOf
 
 	// 删除与移动旧路径单独收集，避免新增目录或同步根覆盖实际清理范围。
 	// 网盘上真删掉的（panDeleted）与改名 / 移动清掉的旧位置（deletedPaths）分开：
@@ -473,14 +466,16 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 
 	// 本轮受影响的最浅目录（Emby 定向刷新用，传库根=全刷）。
 	// 各处传入的都必须是【含库名前缀】的本地相对路径，
-	// 否则刷新路径会少一层、指到一个不存在的目录上
-	shallowest := ""
+	// 否则刷新路径会少一层、指到一个不存在的目录上。
+	// 按库各记一个：几个 115 媒体库常常对应 Emby 里不同的库，只刷其中最浅的那个会漏掉别的库
+	shallowest := map[string]string{} // 库名 → 最浅目录
 	noteShallow := func(rel string) {
 		if rel == "" {
 			return
 		}
-		if shallowest == "" || len(rel) < len(shallowest) {
-			shallowest = rel
+		lib, _ := splitLibRel(rel)
+		if cur, ok := shallowest[lib]; !ok || len(rel) < len(cur) {
+			shallowest[lib] = rel
 		}
 	}
 
@@ -657,7 +652,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					continue
 				case "library":
 					// 媒体库根本身不跟：本地整库删掉的代价太大，交给失效 STRM 检测
-					if rel, ok := localRelOf(strings.TrimSuffix(goneAbs, "/")); ok && rel != libName {
+					if rel, ok := localRelOf(strings.TrimSuffix(goneAbs, "/")); ok && !libs.isRoot(rel) {
 						if removed, done := h.removeSyncedDir(p.LocalPath, rel); done {
 							if removed != "" {
 								panDeleted = append(panDeleted, removed)
@@ -676,12 +671,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				continue
 			case "library":
 				// 精确删除：台账 → 路径推导（支持整目录删除与无台账的旧文件）
-				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, false, false); removed != "" {
+				if removed := h.removeSyncedItemIn(d, ev, libs, p.LocalPath, false, false); removed != "" {
 					panDeleted = append(panDeleted, removed)
 					sum.Deleted++
 				}
 			default: // unknown（cid=0 等）：仅按台账名称匹配，静默处理
-				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, false); removed != "" {
+				if removed := h.removeSyncedItemIn(d, ev, libs, p.LocalPath, true, false); removed != "" {
 					panDeleted = append(panDeleted, removed)
 					sum.Deleted++
 				} else {
@@ -710,7 +705,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			}
 			// 移动/改名：清理旧位置只按台账精确匹配（事件的 Cid/FileName 均为
 			// 新位置信息，模糊删除会误删库内同名字幕树），新位置精确重建或回退遍历
-			if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, true); removed != "" {
+			if removed := h.removeSyncedItemIn(d, ev, libs, p.LocalPath, true, true); removed != "" {
 				deletedPaths = append(deletedPaths, removed)
 				sum.Moved++
 				// 旧位置在台账里 = 这个文件本来就在库内，只是改了名/挪了地方。
@@ -720,8 +715,8 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				}
 				// 新位置能当场推出来就先标上：直推落盘在下面还会标一次（幂等），
 				// 但事件没带 pick_code 而落到回退遍历时，那里就没人标了
-				if base, ok, err := d.relPath(ev.Cid, p.Cid); err == nil && ok && ev.FileName != "" {
-					newRel := path.Join(libName, base, ev.FileName)
+				if l, base, ok, err := libs.dirRel(d, ev.Cid); err == nil && ok && ev.FileName != "" {
+					newRel := path.Join(l.name, base, ev.FileName)
 					if ev.FileCat != "0" && isMedia(ev.FileName) {
 						newRel = strmRelOf(newRel)
 					}
@@ -780,11 +775,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				break
 			}
 			ev := pf.ev
-			base, ok, err := d.relPath(ev.Cid, p.Cid)
+			lib, base, ok, err := libs.dirRel(d, ev.Cid)
 			if err != nil || !ok {
 				addFallback(ev.Cid, false, ev, "（直推时推导不出路径）") // 回退目录遍历
 				continue
 			}
+			libName := lib.name
 			rel := path.Join(libName, base, ev.FileName)
 			f := remoteFile{
 				Fid:      ev.FileID,
@@ -843,8 +839,16 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 这里的分类是整条链路的正确性关键：定位失败分**临时**与**永久**两种，
 	// 只有临时失败才该让整轮不消费、下轮重来（见 incrSummary 上的注释）
 	type targetDir struct {
+		lib               incrLib
 		cid, base, reason string
 		deep              bool
+	}
+	// label 日志里的目录：多个库时带上库名，否则两个库的「剧集/X」分不清
+	label := func(t targetDir) string {
+		if len(libs) > 1 {
+			return path.Join(t.lib.name, t.base)
+		}
+		return orRootLabel(t.base)
 	}
 	var targets []targetDir
 	for cid, ft := range dirSet {
@@ -852,7 +856,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if sum.Interrupted || yieldNow("定位受影响目录") {
 			break
 		}
-		base, ok, err := d.relPath(cid, p.Cid)
+		lib, base, ok, err := libs.dirRel(d, cid)
 		switch {
 		case errors.Is(err, errDirGone):
 			// 永久：目录被删掉之后残留的定位请求，重试永远不会成功。
@@ -873,13 +877,16 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			// 直到 7 天后被 pruneSyncEvents 强杀。现在它只记账、不阻塞消费
 			sum.DirsOutside++
 			lg.infof("○ 目录不在媒体库内，不处理（cid=%s 网盘路径=%s 媒体库=%s 来源=%s）",
-				cid, orUnknownPath(d.absPath(cid)), libAbs, ft.reason)
+				cid, orUnknownPath(d.absPath(cid)), libs.absList(), ft.reason)
 			continue
 		}
-		targets = append(targets, targetDir{cid: cid, base: base, deep: ft.deep, reason: ft.reason})
+		targets = append(targets, targetDir{lib: lib, cid: cid, base: base, deep: ft.deep, reason: ft.reason})
 	}
 	// 浅路径在前；同一路径上深遍历在前（深的能覆盖浅的，反过来不行）
 	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].lib.name != targets[j].lib.name {
+			return targets[i].lib.name < targets[j].lib.name
+		}
 		if targets[i].base != targets[j].base {
 			return targets[i].base < targets[j].base
 		}
@@ -889,6 +896,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	for _, t := range targets {
 		covered := false
 		for _, u := range uniqTargets {
+			if u.lib.cid != t.lib.cid {
+				continue // 不同库的库根都是 base==""，不能互相覆盖
+			}
 			switch {
 			case u.deep && (u.base == "" || t.base == u.base || strings.HasPrefix(t.base, u.base+"/")):
 				covered = true // 上层在做深遍历，子目录不必再单独跑一趟
@@ -926,7 +936,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	switch {
 	case len(uniqTargets) == 1:
 		t := uniqTargets[0]
-		lg.infof("回退遍历 1 个目录：[%s] %s ← %s", walkKind(t.deep), orRootLabel(t.base), t.reason)
+		lg.infof("回退遍历 1 个目录：[%s] %s ← %s", walkKind(t.deep), label(t), t.reason)
 	case len(uniqTargets) > 1:
 		lg.infof("回退遍历 %d 个目录（深 %d / 浅 %d，另有 %d 个被上层目标覆盖）：",
 			len(uniqTargets), sum.DirsDeep, sum.DirsShallow, sum.DirsMerged)
@@ -935,7 +945,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				lg.infof("    …另有 %d 个目录未逐一列出", len(uniqTargets)-incrTargetLogMax)
 				break
 			}
-			lg.infof("    [%s] %s ← %s", walkKind(t.deep), orRootLabel(t.base), t.reason)
+			lg.infof("    [%s] %s ← %s", walkKind(t.deep), label(t), t.reason)
 		}
 	}
 
@@ -948,8 +958,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if sum.Interrupted || yieldNow("目录遍历前") {
 			break
 		}
+		libName := t.lib.name
 		noteShallow(path.Join(libName, t.base)) // 必须带库名，与零遍历那条保持一致
-		ctl := &walkCtl{tag: lg.tag, abort: yieldReason, panAbs: path.Join(libAbs, t.base)}
+		ctl := &walkCtl{tag: lg.tag, abort: yieldReason, panAbs: path.Join(t.lib.abs, t.base)}
 		if !t.deep {
 			ctl.maxDepth = 1 // 浅遍历：只列这一层，不下钻
 		}
@@ -964,7 +975,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		// errDirGone 是永久失败（遍历途中目录被删了），重试与「下轮重来」都没有意义，
 		// 按临时失败处理会把整批事件永久钉死（见 incrSummary 上的分类注释）
 		if err != nil && !errors.As(err, &aborted) && !errors.Is(err, errDirGone) {
-			lg.infof("遍历目录失败 %s: %v，%v 后重试一次", orRootLabel(t.base), err, incrRetryDelay)
+			lg.infof("遍历目录失败 %s: %v，%v 后重试一次", label(t), err, incrRetryDelay)
 			time.Sleep(incrRetryDelay)
 			err = walkOnce()
 		}
@@ -977,10 +988,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				aborted.reason, aborted.dir, ctl.pages)
 		case errors.Is(err, errDirGone):
 			sum.DirsGone++
-			lg.infof("○ 遍历途中目录已被删除，跳过 %s（cid=%s 来源=%s）", orRootLabel(t.base), t.cid, t.reason)
+			lg.infof("○ 遍历途中目录已被删除，跳过 %s（cid=%s 来源=%s）", label(t), t.cid, t.reason)
 			continue
 		case err != nil:
-			lg.infof("⚠ 遍历目录重试仍失败 %s: %v —— 本轮事件保留，下轮自动重试", orRootLabel(t.base), err)
+			lg.infof("⚠ 遍历目录重试仍失败 %s: %v —— 本轮事件保留，下轮自动重试", label(t), err)
 			sum.DirsSkipped++
 			continue
 		}
@@ -1007,7 +1018,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			partial = "（中断，未扫完）"
 		}
 		lg.infof("%s%s：扫到视频 %d 个（新增 STRM %d，已存在 %d），附属下载 %d 个｜列目录 %d 次，耗时 %s",
-			orRootLabel(t.base), partial, len(videos), st.StrmCreated, st.StrmExisting, st.AssetsDownloaded,
+			label(t), partial, len(videos), st.StrmCreated, st.StrmExisting, st.AssetsDownloaded,
 			ctl.pages, time.Since(tStart).Truncate(time.Second))
 		if ctl.depthCut > 0 {
 			lg.vlogf("    （浅遍历：没有下钻的子目录 %d 个）", ctl.depthCut)
@@ -1062,21 +1073,28 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）。
 	// 刷新与通知跟消费判定无关 —— 已经落盘的内容要让 Emby 看见，
 	// 哪怕这一轮是被让路中断的
-	refreshBase := p.LocalPath
-	if shallowest != "" {
-		refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
+	var refreshBases []string
+	for _, rel := range shallowest {
+		refreshBases = append(refreshBases, filepath.Join(p.LocalPath, filepath.FromSlash(rel)))
 	}
-	// 同步后自动刮削开着时，刷新尽量交给刮削任务：刮完只刷一次（与整理后刮削同一套交接）
+	sort.Strings(refreshBases)
+	if len(refreshBases) == 0 {
+		refreshBases = []string{p.LocalPath}
+	}
+	// 同步后自动刮削开着时，刷新尽量交给刮削任务：刮完只刷一次（与整理后刮削同一套交接）。
+	// 刮削任务只接一个刷新目录：这一轮动了几个库时自己刷
 	handedOff := false
 	if len(newStrms) > 0 {
 		rb := ""
-		if sum.StrmCreated+sum.AssetsDownloaded > 0 {
-			rb = refreshBase
+		if sum.StrmCreated+sum.AssetsDownloaded > 0 && len(refreshBases) == 1 {
+			rb = refreshBases[0]
 		}
 		handedOff = d.autoScrape(dedupeStrings(newStrms), rb) && rb != ""
 	}
 	if sum.StrmCreated+sum.AssetsDownloaded > 0 && !handedOff {
-		d.notifyRefresh(refreshBase)
+		for _, rb := range refreshBases {
+			d.notifyRefresh(rb)
+		}
 	}
 	// 目录整体搬迁没有重新生成 STRM，也需要让 Emby 发现新位置。
 	for _, movedPath := range dedupeStrings(relocatedPaths) {
@@ -1296,6 +1314,11 @@ func (h *Handler) removeSyncedDir(localRoot, rel string) (removed string, done b
 // delete 事件（Cid=被删位置）才允许全级联
 // 返回实际清理路径，保留台账/兜底定位的结果，避免通知时重新猜测目录。
 func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libName, localRoot string, quiet, ledgerOnly bool) string {
+	return h.removeSyncedItemIn(d, ev, incrLibSet{{cid: rootCid, name: libName}}, localRoot, quiet, ledgerOnly)
+}
+
+// removeSyncedItemIn 同 removeSyncedItem，事件目录按几个媒体库逐个认（libs.dirRel）
+func (h *Handler) removeSyncedItemIn(d incrDeps, ev model.SyncEvent, libs incrLibSet, localRoot string, quiet, ledgerOnly bool) string {
 	// 1) 台账精确匹配
 	if removed := h.removeSyncedFile(ev.FileID, localRoot); removed != "" {
 		return removed
@@ -1312,8 +1335,8 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 	// 改造前第 2 级就是这么废掉的，活儿全落到了第 4 级的全库按名搜索上
 	dirRel, dirOK := "", false
 	if ev.Cid != "" {
-		if base, ok, err := d.relPath(ev.Cid, rootCid); err == nil && ok {
-			dirRel, dirOK = path.Join(libName, base), true
+		if l, base, ok, err := libs.dirRel(d, ev.Cid); err == nil && ok {
+			dirRel, dirOK = path.Join(l.name, base), true
 		}
 	}
 

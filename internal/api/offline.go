@@ -205,7 +205,7 @@ func (h *Handler) runTransferOrganize() (int, *incrSummary, error) {
 	organized := 0 // 本轮整理处理了几个条目（0 且增量也没产出 = 空转，任务历史里不留）
 	if orgCfg, err := h.loadOrgConfig(); err != nil {
 		log.Printf("[上传] ○ 整理跳过（配置缺失）: %v", err)
-	} else if h.dirOverlapWithLibrary(orgCfg.Pending, orgCfg.Library) {
+	} else if h.pendingOverlapsLibraries(orgCfg) {
 		// 转存/待整理目录与媒体库存在包含关系（建在了库里，或覆盖整个库）：
 		// 扫描会波及库内容，直接放弃本次自动整理（引擎层守卫之外的第二道防线）
 		log.Printf("[上传] ⚠ 转存/待整理目录与媒体库存在包含关系，跳过自动整理以防误搬库内容，请到「自动整理 → 基础配置」修正")
@@ -752,6 +752,16 @@ func (h *Handler) dirOverlapWithLibrary(shareCid, libCid string) bool {
 	return shareAbs == libAbs ||
 		strings.HasPrefix(shareAbs+"/", libAbs+"/") || // 转存目录在媒体库内
 		strings.HasPrefix(libAbs+"/", shareAbs+"/") // 转存目录覆盖媒体库
+}
+
+// pendingOverlapsLibraries 扫描根与任何一个媒体库（主库 + 附加库）有包含关系
+func (h *Handler) pendingOverlapsLibraries(cfg *OrgConfig) bool {
+	for _, lib := range append([]string{cfg.Library}, cfg.OtherLibs...) {
+		if h.dirOverlapWithLibrary(cfg.Pending, lib) {
+			return true
+		}
+	}
+	return false
 }
 
 // countUnheld 目录列表里不在等人工确认的条目数（目录自身 id 在 cid 字段，文件在 fid）

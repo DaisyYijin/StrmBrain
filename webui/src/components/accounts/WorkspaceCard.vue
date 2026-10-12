@@ -17,6 +17,8 @@ export interface WsSlot {
   /** 已配置时的显示路径（没存路径的老配置退回 cid） */
   path: string
   configured: boolean
+  /** 附加媒体库（full.extra_libs）：key 也是 library，一个库一行 */
+  extra?: boolean
 }
 
 /** legacy：合并时被弃用的旧待整理目录（后端 stagingdir.go 记的），用户点「知道了」之前一直提示 */
@@ -34,10 +36,14 @@ const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component
   existing: { label: '已存在', desc: '洗版判输或重复的文件搬到这里', icon: Copy, to: { name: 'organize', query: { tab: 'basic' } } },
   redundant: { label: '冗余', desc: '被新版本替换下来的旧文件', icon: Archive, to: { name: 'organize', query: { tab: 'basic' } } },
 }
+/** 附加媒体库那几行的文案（图标、去向同主库） */
+const EXTRA_LIB = { label: '附加媒体库', desc: '同步、海报墙与主库一样管；整理目前只往主库放' }
+const labelOf = (s: WsSlot) => (s.extra ? EXTRA_LIB.label : META[s.key].label)
+const descOf = (s: WsSlot) => (s.extra ? EXTRA_LIB.desc : META[s.key].desc)
 </script>
 
 <template>
-  <SectionCard title="工作目录" hint="四个目录必须互不包含；整理在它们之间搬运文件">
+  <SectionCard title="工作目录" hint="这些目录必须互不包含；整理在它们之间搬运文件">
     <template v-if="canCreate" #extra>
       <HButton variant="secondary" size="sm" :loading="creating" @click="emit('create')">
         <template #icon><FolderPlus :size="15" /></template>
@@ -53,17 +59,17 @@ const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component
     </HAlert>
 
     <ul class="ws">
-      <li v-for="s in slots" :key="s.key" class="ws-item" :class="{ 'is-missing': !s.configured }">
+      <li v-for="(s, i) in slots" :key="`${s.key}-${i}`" class="ws-item" :class="{ 'is-missing': !s.configured }">
         <span class="ws-icon"><component :is="META[s.key].icon" :size="17" :stroke-width="1.8" /></span>
         <div class="ws-body">
           <div class="ws-head">
-            <span class="ws-label">{{ META[s.key].label }}</span>
+            <span class="ws-label">{{ labelOf(s) }}</span>
             <span v-if="!s.configured" class="ws-missing">未配置</span>
           </div>
           <div v-if="s.configured" class="ws-path" :title="s.path">{{ s.path }}</div>
-          <div class="ws-desc">{{ META[s.key].desc }}</div>
+          <div class="ws-desc">{{ descOf(s) }}</div>
         </div>
-        <RouterLink v-if="META[s.key].to" :to="META[s.key].to!" class="ws-go" :aria-label="`去设置${META[s.key].label}目录`">
+        <RouterLink v-if="META[s.key].to" :to="META[s.key].to!" class="ws-go" :aria-label="`去设置${labelOf(s)}目录`">
           {{ s.configured ? '修改' : '去设置' }}<ChevronRight :size="14" />
         </RouterLink>
         <span v-else class="ws-here">见「媒体库位置」</span>

@@ -112,8 +112,15 @@ func execFullJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if sum.Orphans > 0 {
 		parts = append(parts, fmt.Sprintf("失效 STRM %d 个待清理", sum.Orphans))
 	}
-	return jobOutcome{Message: strings.Join(parts, "；"), Result: map[string]any{
+	if sum.Libs > 1 {
+		parts = append([]string{fmt.Sprintf("%d 个媒体库", sum.Libs)}, parts...)
+	}
+	if len(sum.Failed) > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个库没同步成功（%s）", len(sum.Failed), strings.Join(sum.Failed, "；")))
+	}
+	return jobOutcome{Message: strings.Join(parts, "；"), Partial: len(sum.Failed) > 0, Result: map[string]any{
 		"mode_used": sum.ModeUsed, "scan_complete": sum.ScanComplete, "orphans": sum.Orphans,
+		"libs": sum.Libs, "failed": sum.Failed,
 	}}, nil
 }
 
