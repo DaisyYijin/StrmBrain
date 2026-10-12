@@ -27,6 +27,75 @@ type ledgerTitleEntry struct {
 	LastAt time.Time
 }
 
+// dirKey 片目所在目录（含库名前缀）：普通片目就是 Key，平铺片目是它所在的分类目录
+func (e *ledgerTitleEntry) dirKey() string { return titleDirKey(e.Key) }
+
+// solo 平铺片目（一个视频一部）
+func (e *ledgerTitleEntry) solo() bool { return isSoloTitleKey(e.Key) }
+
+// ---- 平铺片目 ----
+//
+// 有的用户不给每部电影单独建目录，视频直接放在分类目录里（2026-10-12 用户反馈：
+// 影视/LGNB电影/LGNB中国香港电影/*.mkv）。Emby 把这样的每个文件当成一部电影，
+// 海报墙此前要求「分类/标题目录/视频」，这些一部都不认，两边数量差出一大截。
+//
+// 现在电影分类目录里直接放着的视频，每个算一部：片目 key 就是这个 STRM 的相对路径
+// （以 .strm 结尾，和目录形态的 key 撞不上）。这样的片目没有自己的目录，产物一律按视频名
+// 写在它旁边（<视频名>.nfo、<视频名>-poster.jpg、<视频名>-fanart.jpg），这也是 Emby 在
+// 一个目录放多部电影时认的写法；目录里的 poster.jpg / movie.nfo 是整个分类目录的，不算这一部的，
+// 刮削也绝不写、不收它们。只认电影：剧集平铺 Emby 自己也认不成剧。
+// 整理不往平铺目录里放（落盘仍是「分类/标题目录」），这里只管把已有的认出来。
+
+// isSoloTitleKey key（或路径最后一段）是平铺片目
+func isSoloTitleKey(key string) bool { return strings.HasSuffix(strings.ToLower(key), ".strm") }
+
+// titleDirKey 片目 key → 所在目录：平铺片目取上一层，其余原样
+func titleDirKey(key string) string {
+	if isSoloTitleKey(key) {
+		if d := path.Dir(key); d != "." {
+			return d
+		}
+		return ""
+	}
+	return key
+}
+
+// soloTitleStem 平铺片目的视频名（STRM 去掉 .strm）
+func soloTitleStem(key string) string {
+	b := path.Base(key)
+	return b[:len(b)-len(".strm")]
+}
+
+// titleKeyName 片目 key 的名字部分：目录名，或平铺片目的视频名
+func titleKeyName(key string) string {
+	if isSoloTitleKey(key) {
+		return soloTitleStem(key)
+	}
+	return path.Base(key)
+}
+
+// soloAllowed 分类目录里直接放着的这个视频能不能单独算一部：电影分类可以，剧集分类不行；
+// 电影 / 剧集同名的分类按文件名判断，带集号的不算
+func soloAllowed(mediaType, strmName string) bool {
+	switch mediaType {
+	case "movie":
+		return true
+	case "tv":
+		return false
+	}
+	return parseFileName(soloTitleStem(strmName)).Episode == 0
+}
+
+// soloTitleParse 平铺片目的片名 / 年份 / TMDB 编号（从视频名解析）
+func soloTitleParse(stem string) (title, year string, tmdb int) {
+	p := parseFileName(stem)
+	title, year, tmdb = p.Title, p.Year, p.TmdbID
+	if title == "" {
+		title = stem
+	}
+	return
+}
+
 // 台账扫描缓存：刮削共享同一份结果（30 秒 TTL），
 // 避免每次请求都全表扫描 SyncedFile。缓存条目视为只读，调用方不得修改。
 var (
@@ -100,9 +169,20 @@ func buildLibCategoryLayout(rules []model.CategoryRule) libCategoryLayout {
 // 路径首段一般是库名；老台账有不带库名的，先按带库名算，对不上再按不带算。
 // 分类有多级且互相嵌套时（电视剧 与 电视剧/日番 都是分类）取最长匹配。
 // 返回标题目录的相对路径（台账口径，含库名前缀）、标题目录名、分类目录与其媒体类型
+//
+// 视频直接放在电影分类目录里（平铺，见 isSoloTitleKey）时，这个视频自己就是一部：
+// key 是它的相对路径，titleDir 是去掉 .strm 的视频名
 func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, mediaType string, ok bool) {
 	segs := strings.Split(strings.Trim(relPath, "/"), "/")
+	last := segs[len(segs)-1]
 	for _, off := range []int{1, 0} {
+		// 平铺：分类段一直到文件的上一层，比任何「分类/标题目录」都长，先看它
+		if n := len(segs) - 1 - off; n >= 1 && isSoloTitleKey(last) {
+			cat := strings.Join(segs[off:off+n], "/")
+			if mt, hit := l[cat]; hit && soloAllowed(mt, last) {
+				return strings.Join(segs, "/"), soloTitleStem(last), cat, "movie", true
+			}
+		}
 		best := -1
 		// 标题目录之下至少还有一个文件：分类段最多到 len-2
 		for n := 1; off+n <= len(segs)-2; n++ {
@@ -135,6 +215,10 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 		e, seen := out[key]
 		if !seen {
 			title, year, tmdb := parseTitleDir(titleDir)
+			if isSoloTitleKey(key) {
+				// 平铺的是视频文件名（常带画质、压制组），按文件名解析，目录名那套会把画质串当成片名
+				title, year, tmdb = soloTitleParse(titleDir)
+			}
 			e = &ledgerTitleEntry{
 				Key: key, Title: title, Year: year, TmdbID: tmdb,
 				MediaType: mediaType, Category: category,

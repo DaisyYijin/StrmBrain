@@ -292,7 +292,11 @@ func localEmbyTitleKeyOf(local, rootSlash string, ledger map[string]*ledgerTitle
 	if rootSlash == "" || !strings.HasPrefix(local, rootSlash+"/") {
 		return ""
 	}
-	segs := strings.Split(strings.TrimPrefix(local, rootSlash+"/"), "/")
+	rel := strings.TrimPrefix(local, rootSlash+"/")
+	if isSoloTitleKey(rel) && ledger[rel] != nil {
+		return rel // 平铺片目：key 就是这个 STRM 自己
+	}
+	segs := strings.Split(rel, "/")
 	last := len(segs) - 1
 	if dir {
 		last = len(segs)

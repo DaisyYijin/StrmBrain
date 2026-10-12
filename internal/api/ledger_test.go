@@ -76,12 +76,15 @@ func TestScanLedgerTitles(t *testing.T) {
 		{FileID: "invalid", Kind: "video", RelPath: "电影.mkv"},
 		{FileID: "other", Kind: "video", RelPath: "媒体库/其他/分类/未知/电影.mkv"},
 		{FileID: "asset", Kind: "asset", RelPath: "媒体库/电影/动作/海报-2024-[tmdb=999]/poster.jpg"},
-		// 视频直接放在分类目录里、没有标题目录：不是片目
-		{FileID: "loose", Kind: "video", RelPath: "媒体库/电影/动作/散落.mkv.strm"},
+		// 视频直接放在电影分类目录里（平铺）：它自己就是一部，key 是 STRM 本身（flattitle_test.go）
+		{FileID: "loose", Kind: "video", RelPath: "媒体库/电影/动作/散落.2010.mkv.strm"},
+		// 剧集分类里平铺的集不算
+		{FileID: "loose-ep", Kind: "video", RelPath: "媒体库/剧集/国产剧/散落.S01E01.mkv.strm"},
 	})
 	checkLedgerTitles(t, scanLedgerTitles(), []wantTitle{
 		{"媒体库/电影/动作/Z-测试电影-2024-[tmdb=123]", "测试电影", "2024", "movie", 123},
 		{"媒体库/剧集/国产剧/C-测试剧集-2025-[tmdb=456]", "测试剧集", "2025", "tv", 456},
+		{"媒体库/电影/动作/散落.2010.mkv.strm", "散落", "2010", "movie", 0},
 	})
 }
 

@@ -155,8 +155,10 @@ var movieArtNames = map[string]bool{"poster.jpg": true, "fanart.jpg": true, "cle
 // 视频名不以目录名开头时（我们的重命名模板正是如此），Emby 把同目录的几个视频当成几部独立的电影，
 // 目录级的 poster.jpg / fanart.jpg 不知道归谁、一律不用，只认按视频名配对的 <视频名>-poster.jpg。
 // 2026-09-30《夏洛特烦恼》两个版本现场：NFO 按视频名写所以生效，图全是目录级的，Emby 里一张都没有
+//
+// 平铺片目（视频直接放在分类目录里）同样按视频名写：目录里放着几十部电影，目录级的图归谁都不对
 func (r *titleRun) multiVersion() bool {
-	return r.t.Kind != "tv" && len(r.t.Videos) >= 2
+	return r.t.Kind != "tv" && (len(r.t.Videos) >= 2 || r.t.Solo)
 }
 
 // skipPerVideo 电影的片目级图：Emby 已按视频名另存了一份（<视频名>-poster.jpg）就算有。
@@ -187,7 +189,10 @@ func (r *titleRun) localArt(name string) (data []byte, from string) {
 	}
 	kind, ext := strings.TrimSuffix(name, filepath.Ext(name)), filepath.Ext(name)
 	type cand struct{ dir, name string }
-	cands := []cand{{r.t.Dir.Local, name}}
+	var cands []cand
+	if !r.t.Solo { // 平铺片目的「目录级」是整个分类目录的，不是这一部的图
+		cands = append(cands, cand{r.t.Dir.Local, name})
+	}
 	for _, v := range r.t.Videos {
 		cands = append(cands, cand{v.Dir.Local, v.Name + "-" + kind + ext})
 	}
@@ -206,7 +211,7 @@ func (r *titleRun) localArt(name string) (data []byte, from string) {
 // 还会把它当成「已刮过」挡住只补缺失）。交给 writer 收掉：它知道哪些是网盘镜像、不能删
 func (r *titleRun) retireDirArt(name string) {
 	rt, ok := r.s.w.(metaRetirer)
-	if !ok || r.t.Dir.Local == "" {
+	if !ok || r.t.Dir.Local == "" || r.t.Solo { // 平铺片目：分类目录里的图不归它管
 		return
 	}
 	kind, ext := strings.TrimSuffix(name, filepath.Ext(name)), filepath.Ext(name)

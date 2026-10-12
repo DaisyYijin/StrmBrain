@@ -110,10 +110,15 @@ func subHaveOf(db *gorm.DB, titles map[string]*ledgerTitleEntry, tmdbID int, med
 
 	for _, key := range h.TitleKeys {
 		var sfs []model.SyncedFile
-		// 前缀查询不用 LIKE（片名里的 % _ 要转义）：'/' 的下一个字符是 '0'，
-		// [key/, key0) 正好是 key 目录下的全部路径
-		db.Where("kind = ? AND orphan_at IS NULL AND rel_path >= ? AND rel_path < ?",
-			"video", key+"/", key+"0").Find(&sfs)
+		if isSoloTitleKey(key) {
+			// 平铺片目就是这一个文件
+			db.Where("kind = ? AND orphan_at IS NULL AND rel_path = ?", "video", key).Find(&sfs)
+		} else {
+			// 前缀查询不用 LIKE（片名里的 % _ 要转义）：'/' 的下一个字符是 '0'，
+			// [key/, key0) 正好是 key 目录下的全部路径
+			db.Where("kind = ? AND orphan_at IS NULL AND rel_path >= ? AND rel_path < ?",
+				"video", key+"/", key+"0").Find(&sfs)
+		}
 		for _, sf := range sfs {
 			h.Found = true
 			if mediaType != "tv" {

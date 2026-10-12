@@ -188,7 +188,7 @@ func normalizeTitleKeys(in []string) []string {
 
 // localScrapeJobTitle 任务标题：「《片名》」或「《片名》等 N 部」
 func localScrapeJobTitle(ledger map[string]*ledgerTitleEntry, keys []string) string {
-	name := path.Base(keys[0])
+	name := titleKeyName(keys[0])
 	if e := ledger[keys[0]]; e != nil && e.Title != "" {
 		name = e.Title
 	}
@@ -208,7 +208,7 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 	case pick != nil:
 		t.Kind, t.TmdbID, t.Title, t.Year = pick.MediaType, pick.TmdbID, pick.Title, pick.Year
 	case t.TmdbID <= 0 && strict:
-		parsed := parseFileName(path.Base(e.Key))
+		parsed := parseFileName(titleKeyName(e.Key))
 		parsed.IsTV = parsed.IsTV || e.MediaType == "tv"
 		kind := e.MediaType
 		if kind != "tv" && kind != "movie" {
@@ -227,7 +227,7 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 		}
 	case t.TmdbID <= 0:
 		// 目录名里没有 {tmdbid=…}：用户点名要刮的，按目录名识别一次
-		parsed := parseFileName(path.Base(e.Key))
+		parsed := parseFileName(titleKeyName(e.Key))
 		parsed.IsTV = parsed.IsTV || e.MediaType == "tv"
 		media, err := tc.recognize(parsed)
 		if err != nil || media == nil {
@@ -256,13 +256,19 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 		}
 		return strings.TrimPrefix(rel, e.LibName+"/")
 	}
-	t.Dir = metaDest{Local: filepath.Join(localRoot, filepath.FromSlash(e.Key)), CloudBase: libCid, CloudRel: cloudRel(e.Key)}
+	dirKey := e.dirKey()
+	t.Dir = metaDest{Local: filepath.Join(localRoot, filepath.FromSlash(dirKey)), CloudBase: libCid, CloudRel: cloudRel(dirKey)}
+	t.Solo = e.solo()
 	for _, sf := range scrapeDirVideoRows(e.Key) {
 		dir := path.Dir(sf.RelPath)
 		t.Videos = append(t.Videos, scrapeVideo{
 			Name: strings.TrimSuffix(path.Base(sf.RelPath), ".strm"),
 			Dir:  metaDest{Local: filepath.Join(localRoot, filepath.FromSlash(dir)), CloudBase: libCid, CloudRel: cloudRel(dir)},
 		})
+	}
+	if t.Solo && len(t.Videos) == 0 {
+		// 没有视频时电影 NFO 会兜底写 movie.nfo 到片目目录，平铺片目的目录是整个分类目录
+		return t, errors.New("台账里已经没有这个视频（被移走或删除了）")
 	}
 	return t, nil
 }
@@ -653,7 +659,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 			log.Printf("[影视刮削] ✗ %s：%v", name, err)
 			continue
 		}
-		if !localHasStrm(t.Dir.Local) {
+		if !t.alive() {
 			problems = append(problems, name+"：本地片目目录里已经没有 STRM（被移走或删除了）")
 			log.Printf("[影视刮削] ○ %s：本地片目目录里已经没有 STRM，跳过 → %s", name, t.Dir.Local)
 			continue
@@ -664,7 +670,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		st := sess.scrapeTitleMeta(t)
 		if o.Probe && !isAutoScrapeKey(job.DedupeKey) {
 			if cfg, ok := loadEmbyRefreshCfg(); ok {
-				extract = append(extract, embyPathOf(cfg, t.Dir.Local))
+				extract = append(extract, embyPathOf(cfg, t.localPath()))
 			}
 		}
 		if t.TmdbID > 0 && !st.Gone && (len(st.Wrote) > 0 || !isAutoScrapeKey(job.DedupeKey)) {
@@ -805,7 +811,7 @@ func scrapeCompensate(t scrapeTitle, written []string, localRoot string) int {
 	if len(written) == 0 {
 		return 0
 	}
-	titleAlive := localHasStrm(t.Dir.Local)
+	titleAlive := t.alive()
 	owner := map[string]scrapeVideo{} // 集级产物的本地路径 → 所属视频
 	for _, v := range t.Videos {
 		if v.Dir.Local == "" {
@@ -1049,7 +1055,10 @@ func autoScrapeTitle(p *localScrapeParams) string {
 		return prefix
 	}
 	// 同步后的没有 Hints：片名从目录名里摘（去掉 {tmdbid=…} 与年份）
-	name, _, _ := parseTitleDir(path.Base(p.Keys[0]))
+	name, _, _ := parseTitleDir(titleKeyName(p.Keys[0]))
+	if isSoloTitleKey(p.Keys[0]) {
+		name, _, _ = soloTitleParse(titleKeyName(p.Keys[0]))
+	}
 	if h, ok := p.Hints[p.Keys[0]]; ok && h.Title != "" {
 		name = h.Title
 	}

@@ -96,7 +96,8 @@ func (h *Handler) DupScan(c *gin.Context) {
 	titleRels := map[string]bool{}
 	for _, d := range dups {
 		it := dupScanItem{Dir: d.dir, Kind: d.kind}
-		if _, titleDir, category, _, ok := layout.titleOf(d.rows[0].RelPath); ok {
+		// 平铺片目没有片目目录，整理记录也不会落到那里，不去配
+		if key, titleDir, category, _, ok := layout.titleOf(d.rows[0].RelPath); ok && !isSoloTitleKey(key) {
 			it.TitleRel, it.Title = category+"/"+titleDir, titleDir
 			titleRels[it.TitleRel] = true
 		}

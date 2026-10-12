@@ -372,7 +372,7 @@ func TestExtractTitleTargets(t *testing.T) {
 		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm", // 同一部：并进同一个任务
 		"/strm/媒体库/剧集/国产剧/老剧 (2010)/Season 02",                // 季目录、没登记新集：不探（此前整部探）
 		"/strm/媒体库/电影/某片 (2020)/某片.strm",                      // 没登记：只探确认到的这一个
-		"/strm/媒体库/电影/散文件.strm",                               // 不属于任何片目：只探它自己
+		"/strm/媒体库/电影/散文件.strm",                               // 电影分类里平铺的视频自己就是一部：只探它自己
 		"/strm",                                               // 同步根
 		"/strm/媒体库",                                           // 媒体库
 		"/strm/媒体库/剧集/国产剧",                                    // 分类
@@ -385,7 +385,7 @@ func TestExtractTitleTargets(t *testing.T) {
 			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E03.strm",
 		}},
 		{name: "某片 (2020)", key: "/strm/媒体库/电影/某片 (2020)", paths: []string{"/strm/媒体库/电影/某片 (2020)/某片.strm"}},
-		{name: "散文件.strm", key: "/strm/媒体库/电影/散文件.strm", paths: []string{"/strm/媒体库/电影/散文件.strm"}},
+		{name: "散文件", key: "/strm/媒体库/电影/散文件.strm", paths: []string{"/strm/媒体库/电影/散文件.strm"}},
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("得到 %v，预期 %v", got, want)

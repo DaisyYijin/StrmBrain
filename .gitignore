@@ -49,3 +49,6 @@ StrmAssistant-main/
 
 # 本地文档
 /docs/
+
+# claude
+.claude

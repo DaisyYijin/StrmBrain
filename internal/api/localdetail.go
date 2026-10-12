@@ -141,35 +141,53 @@ func (x localDirIndex) findImage(dir, label, kind string, names ...string) local
 
 // inspectLocalTitleDetail 读片目目录，列出每个刮削产物在不在。rows 是台账里这个片目的视频行
 func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.SyncedFile) localTitleDetail {
-	idx := localDirIndex{}
+	return inspectLocalTitleDetailIn(root, e, rows, localDirIndex{})
+}
+
+// inspectLocalTitleDetailIn 同 inspectLocalTitleDetail，目录从 idx 读（卡片墙让平铺片目共用一份）
+func inspectLocalTitleDetailIn(root string, e *ledgerTitleEntry, rows []model.SyncedFile, idx localDirIndex) localTitleDetail {
 	it := inspectLocalTitleIn(root, e, idx) // 标题目录与下面共用一份目录索引，只读一遍
-	titleAbs := filepath.Join(root, filepath.FromSlash(e.Key))
+	dirKey := e.dirKey()
+	titleAbs := filepath.Join(root, filepath.FromSlash(dirKey))
 	d := localTitleDetail{localTitle: it.localTitle, Dir: titleAbs, Files: []localFile{}, Entries: []localEntry{}, posterV: it.posterV}
 	tv := e.MediaType == "tv"
+	solo := e.solo()
 
 	// ---- 片目级 ----
-	if tv {
-		d.Files = append(d.Files, idx.find(titleAbs, "剧集 NFO", false, "tvshow.nfo"))
+	if solo {
+		// 平铺片目：片目级的图按视频名配对（Emby 在一个目录放多部电影时只认这种）
+		stem := soloTitleStem(e.Key)
+		d.Files = append(d.Files,
+			idx.find(titleAbs, "海报", false, soloImageNames(stem, "poster")...),
+			idx.find(titleAbs, "背景图", false, soloImageNames(stem, "fanart")...),
+			idx.find(titleAbs, "透明 Logo", true, stem+"-clearlogo.png"),
+			idx.find(titleAbs, "横版图", true, stem+"-landscape.jpg"),
+		)
+	} else {
+		if tv {
+			d.Files = append(d.Files, idx.find(titleAbs, "剧集 NFO", false, "tvshow.nfo"))
+		}
+		d.Files = append(d.Files,
+			idx.findImage(titleAbs, "海报", "poster", localPosterNames...),
+			idx.findImage(titleAbs, "背景图", "fanart", "fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png"),
+			idx.find(titleAbs, "透明 Logo", true, "clearlogo.png", "logo.png"),
+			idx.find(titleAbs, "横版图", true, "landscape.jpg"),
+		)
 	}
-	d.Files = append(d.Files,
-		idx.findImage(titleAbs, "海报", "poster", localPosterNames...),
-		idx.findImage(titleAbs, "背景图", "fanart", "fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png"),
-		idx.find(titleAbs, "透明 Logo", true, "clearlogo.png", "logo.png"),
-		idx.find(titleAbs, "横版图", true, "landscape.jpg"),
-	)
 
 	// ---- 视频 ----
 	var videos []scrapeVideo
 	for _, sf := range rows {
 		rel := sf.RelPath
-		if i := strings.Index(rel, e.Key+"/"); i >= 0 {
-			rel = rel[i+len(e.Key)+1:]
+		if i := strings.Index(rel, dirKey+"/"); i >= 0 {
+			rel = rel[i+len(dirKey)+1:]
 		}
 		name := strings.TrimSuffix(path.Base(rel), ".strm")
 		dirAbs := filepath.Join(titleAbs, filepath.FromSlash(path.Dir(rel)))
 		en := localEntry{Name: name, Rel: rel, Size: sf.Size, Orphan: sf.OrphanAt != nil}
 		en.StrmMissing = !d.Missing && idx.files(dirAbs)[strings.ToLower(path.Base(rel))] == nil
-		if tv {
+		if tv || solo {
+			// 平铺片目旁边的 movie.nfo 是整个分类目录的，不算这一部
 			en.NFO = idx.find(dirAbs, "NFO", false, name+".nfo")
 		} else {
 			// 电影的 NFO 我们写成与视频同基名，别的刮削器常写 movie.nfo：Emby 两种都认
@@ -666,11 +684,15 @@ func (out *embyDetailItem) setTracks(streams []embyStream) {
 // embyTitleLookup 在 Emby 里找片目的条目。先按标题目录找（剧集的 Series、电影所在目录的 Folder），
 // 找不到再逐个按 .strm 找（有的 Emby 版本电影目录本身不是条目）。
 // paths 是真正找到条目的路径：提前探测排队就排它们
-func embyTitleLookup(cfg embyRefreshCfg, titleLocal string, entries []localEntry) (paths []string, items []embyExtractItem, err error) {
-	dirPath := embyPathOf(cfg, titleLocal)
-	found, items, err := embyMediaItemsAt(cfg, dirPath)
-	if err != nil || found {
-		return []string{dirPath}, items, err
+//
+// solo = 平铺片目：titleLocal 是整个分类目录，按目录查会把同目录的几十部都算进来，只逐个视频查
+func embyTitleLookup(cfg embyRefreshCfg, titleLocal string, entries []localEntry, solo bool) (paths []string, items []embyExtractItem, err error) {
+	if !solo {
+		dirPath := embyPathOf(cfg, titleLocal)
+		found, items, err := embyMediaItemsAt(cfg, dirPath)
+		if err != nil || found {
+			return []string{dirPath}, items, err
+		}
 	}
 	seen := map[string]bool{}
 	for i, en := range entries {
@@ -725,9 +747,9 @@ type embyTitleProbe struct {
 }
 
 func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (embyTitleProbe, error) {
-	titleLocal := filepath.Join(root, filepath.FromSlash(e.Key))
+	titleLocal := filepath.Join(root, filepath.FromSlash(e.dirKey()))
 	entries := inspectLocalTitleDetail(root, e, scrapeDirVideoRows(e.Key)).Entries
-	paths, raw, err := embyTitleLookup(cfg, titleLocal, entries)
+	paths, raw, err := embyTitleLookup(cfg, titleLocal, entries, e.solo())
 	out := embyTitleProbe{paths: paths, items: []embyDetailItem{}, counts: map[string]int{}}
 	if err != nil {
 		return out, err

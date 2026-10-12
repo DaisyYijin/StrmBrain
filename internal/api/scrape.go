@@ -509,6 +509,25 @@ type scrapeTitle struct {
 	TmdbID int
 	Dir    metaDest // 标题目录：tvshow.nfo、海报、季海报
 	Videos []scrapeVideo
+	// Solo 平铺片目（视频直接放在分类目录里，见 isSoloTitleKey）：Dir 是分类目录，
+	// 片目级产物一律按视频名写，Dir 里的东西不属于这一部，不读、不写、不收
+	Solo bool
+}
+
+// alive 片目还在原位吗（本地还有它的 STRM）
+func (t scrapeTitle) alive() bool {
+	if t.Solo {
+		return len(t.Videos) > 0 && fileExists(filepath.Join(t.Videos[0].Dir.Local, t.Videos[0].Name+".strm"))
+	}
+	return localHasStrm(t.Dir.Local)
+}
+
+// localPath 片目在本地的位置：目录，平铺片目是它的 STRM（交给 Emby 探测时用，别把整个分类目录交出去）
+func (t scrapeTitle) localPath() string {
+	if t.Solo && len(t.Videos) > 0 {
+		return filepath.Join(t.Videos[0].Dir.Local, t.Videos[0].Name+".strm")
+	}
+	return t.Dir.Local
 }
 
 // metaWriter 产物出口。返回 wrote=false 表示按「只补缺失」跳过了；
@@ -710,6 +729,21 @@ func scrapeDirVideoRows(key string) []model.SyncedFile {
 	base := strings.Trim(key, "/")
 	if base == "" {
 		return nil
+	}
+	if isSoloTitleKey(base) {
+		// 平铺片目就是这一个 STRM
+		var sfs []model.SyncedFile
+		model.DB.Where("rel_path = ?", base).Find(&sfs)
+		if len(sfs) == 0 {
+			model.DB.Where(`rel_path LIKE ? ESCAPE '\'`, "%/"+likeEscape(base)).Find(&sfs)
+		}
+		var out []model.SyncedFile
+		for _, sf := range sfs {
+			if scrapeVideoRow(sf) {
+				out = append(out, sf)
+			}
+		}
+		return out
 	}
 	strmRows := func(pattern string) []model.SyncedFile {
 		var sfs []model.SyncedFile

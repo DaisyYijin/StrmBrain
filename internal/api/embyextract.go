@@ -1058,7 +1058,7 @@ func extractTitleTargets(embyPaths []string, localRoot string, layout libCategor
 					}
 					continue
 				}
-				add(path.Base(key), titleEmby, paths...)
+				add(titleKeyName(key), titleEmby, paths...)
 				continue
 			}
 		}

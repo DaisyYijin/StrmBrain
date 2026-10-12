@@ -122,11 +122,18 @@ func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 	}
 	rows := ledgerVideoRowsByTitle()
 	out := make([]localTitle, 0, len(ledger))
+	// 平铺片目（几十上百部共用一个分类目录）共用一份目录索引：每部各读一遍的话，
+	// 一个放了一千部的目录要读一千遍。普通片目各用各的，读完就放掉，不把整库的目录都压在内存里
+	shared := localDirIndex{}
 	for _, e := range ledger {
 		if e.Key == "" {
 			continue
 		}
-		d := inspectLocalTitleDetail(root, e, rows[e.Key])
+		idx := localDirIndex{}
+		if e.solo() {
+			idx = shared
+		}
+		d := inspectLocalTitleDetailIn(root, e, rows[e.Key], idx)
 		t := d.localTitle
 		if t.HasPoster {
 			t.Poster = h.localPosterQuery(e.Key, d.posterV)
@@ -180,14 +187,30 @@ func inspectLocalTitleIn(root string, e *ledgerTitleEntry, idx localDirIndex) in
 		Category: e.Category, Videos: e.Videos, LastAt: e.LastAt,
 	}}
 	if t.Title == "" {
-		t.Title = filepath.Base(e.Key)
+		t.Title = titleKeyName(e.Key)
 	}
 	var names map[string]os.FileInfo
 	if root != "" {
-		names = idx.files(filepath.Join(root, filepath.FromSlash(e.Key)))
+		names = idx.files(filepath.Join(root, filepath.FromSlash(e.dirKey())))
 	}
 	if names == nil {
 		t.Missing = true
+	}
+	if e.solo() {
+		// 平铺片目：只认按视频名的那几个文件，分类目录里别的都是别的片的
+		stem := strings.ToLower(soloTitleStem(e.Key))
+		if _, ok := names[stem+".strm"]; !ok {
+			t.Missing = true
+		}
+		_, t.HasNFO = names[stem+".nfo"]
+		for _, n := range soloImageNames(stem, "poster") {
+			if info, ok := names[n]; ok && info.Size() > 0 {
+				t.HasPoster = true
+				t.posterV = info.ModTime().Unix()
+				break
+			}
+		}
+		return t
 	}
 	if e.MediaType == "tv" {
 		_, t.HasNFO = names["tvshow.nfo"]
@@ -467,7 +490,14 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 	if c.Query("img") == "fanart" {
 		names, kind, width = localFanartNames, "fanart", localFanartThumbW
 	}
-	file, info := findLocalImage(dir, names, kind)
+	var file string
+	var info os.FileInfo
+	if isSoloTitleKey(key) {
+		// 平铺片目：只认 <视频名>-poster.jpg 这类，目录里的 poster.jpg 与别的视频的图都不是它的
+		file, info = findSoloImage(filepath.Dir(dir), soloImageNames(soloTitleStem(key), kind))
+	} else {
+		file, info = findLocalImage(dir, names, kind)
+	}
 	if file == "" {
 		c.Status(http.StatusNotFound)
 		return
@@ -522,6 +552,27 @@ func underRoot(root, key string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+// soloImageNames 平铺片目的某种图（poster / fanart）认哪些文件名；stem 传小写就得到小写名
+func soloImageNames(stem, kind string) []string {
+	out := []string{stem + "-" + kind + ".jpg", stem + "-" + kind + ".png"}
+	if kind == "fanart" {
+		out = append(out, stem+"-backdrop.jpg", stem+"-backdrop.png")
+	}
+	return out
+}
+
+// findSoloImage 按候选名逐个 stat，取第一个非空文件。不读整个目录：平铺目录里常有上千个文件，
+// 海报墙一屏几十张缩略图，每张都把目录读一遍太浪费。名字与视频名同大小写（刮削与 Emby 都这么写）
+func findSoloImage(dir string, names []string) (string, os.FileInfo) {
+	for _, n := range names {
+		p := filepath.Join(dir, n)
+		if info, err := os.Stat(p); err == nil && !info.IsDir() && info.Size() > 0 {
+			return p, info
+		}
+	}
+	return "", nil
 }
 
 func findLocalImage(dir string, names []string, kind string) (string, os.FileInfo) {
