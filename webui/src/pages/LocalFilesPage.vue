@@ -145,12 +145,12 @@ const typeOptions = computed(() => [
   { label: `电影 ${stats.value.movie}`, value: 'movie' as const },
   { label: `剧集 ${stats.value.tv}`, value: 'tv' as const },
 ])
-/** 目录下拉：按层级用全角空格缩进成一棵树，只写最后一段。只有一个目录时没得选，不显示 */
+/** 目录下拉：列表里按层级缩进成一棵树、带片目数；收起时只显示目录名。只有一个目录时没得选，不显示 */
 const dirOptions = computed(() => [
   { label: '全部目录', value: '' },
   ...dirs.value.map((d) => {
     const segs = d.path.split('/')
-    return { label: `${'　'.repeat(segs.length - 1)}${segs[segs.length - 1]}  ${d.count}`, value: d.path }
+    return { label: segs[segs.length - 1], value: d.path, indent: segs.length - 1, hint: String(d.count) }
   }),
 ])
 const showDirs = computed(() => dirs.value.filter((d) => !dirs.value.some((o) => o.path.startsWith(`${d.path}/`))).length > 1)

@@ -23,6 +23,10 @@ export interface SelectOption<T> {
   label: string
   value: T
   disabled?: boolean
+  /** 列表里缩进几级（树形选项用）；收起时显示的只有 label，不带缩进 */
+  indent?: number
+  /** 列表里排在 label 后面的淡色补充（如计数）；收起时不显示 */
+  hint?: string
 }
 
 const props = withDefaults(
@@ -77,8 +81,11 @@ const inner = computed({
             :disabled="o.disabled"
             class="list-box-item list-box-item--default"
             data-slot="list-box-item"
+            :style="o.indent ? { paddingInlineStart: `calc(0.5rem + ${o.indent * 1.1}em)` } : undefined"
           >
+            <!-- 收起时 Reka 只拿 SelectItemText 的内容去显示，缩进与 hint 都放在它外面 -->
             <SelectItemText data-slot="label">{{ o.label }}</SelectItemText>
+            <span v-if="o.hint" class="h-select-hint">{{ o.hint }}</span>
             <SelectItemIndicator class="list-box-item__indicator" data-slot="list-box-item-indicator">
               <Check :size="14" :stroke-width="2.5" />
             </SelectItemIndicator>
@@ -88,6 +95,15 @@ const inner = computed({
     </SelectPortal>
   </SelectRoot>
 </template>
+
+<style>
+/* 弹层在 Portal 里，scoped 选不中；与 label 的间距由 list-box-item 的 gap 给 */
+.h-select-hint {
+  color: var(--muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+</style>
 
 <style scoped>
 .h-select-trigger {
