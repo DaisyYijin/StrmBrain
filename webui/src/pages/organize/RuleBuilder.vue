@@ -66,13 +66,22 @@ interface CategoryPreset {
   genres?: string[]
   countries?: string[]
   langs?: string[]
+  regex?: string
 }
+
+/**
+ * 演唱会在 TMDB 上没有专门的类型，只能认片名。
+ * 别加 genre_ids 10402：正则与其他条件是「或」，加上就把音乐传记片、歌舞片一起收进来；
+ * 剧集则连「音乐」类型都没有。
+ */
+const CONCERT_REGEX = '(?i)演唱会|音乐会|巡演|concert|live tour'
 
 /** 常见配方：点一下把表单填好，再按自己的库改名字 */
 const CATEGORY_PRESETS: CategoryPreset[] = [
   { label: '动画电影', media: 'movie', name: '电影/动画电影', genres: ['16'] },
   { label: '华语电影', media: 'movie', name: '电影/华语电影', langs: ['zh', 'cn'] },
   { label: '纪录片', media: 'movie', name: '电影/纪录片', genres: ['99'] },
+  { label: '演唱会', media: 'movie', name: '电影/演唱会', regex: CONCERT_REGEX },
   { label: '外语电影', media: 'movie', name: '电影/外语电影' },
   { label: '全放电影/（兜底）', media: 'movie', name: '电影' },
   { label: '国漫', media: 'tv', name: '电视剧/国漫', genres: ['16'], countries: ['CN', 'TW', 'HK'] },
@@ -85,6 +94,7 @@ const CATEGORY_PRESETS: CategoryPreset[] = [
   { label: '全放剧集/（兜底）', media: 'tv', name: '剧集' },
   { label: '动漫番剧（平铺）', media: 'tv', name: '动漫番剧', genres: ['16'] },
   { label: '综艺（平铺）', media: 'tv', name: '综艺', genres: ['10764', '10767'] },
+  { label: '演唱会', media: 'tv', name: '电视剧/演唱会', regex: CONCERT_REGEX },
 ]
 
 const catPresets = computed(() => CATEGORY_PRESETS.filter(p => p.media === media.value))
@@ -96,7 +106,7 @@ function applyCategoryPreset(p: CategoryPreset) {
   prodCountries.value = []
   langs.value = p.langs ?? []
   years.value = ''
-  regex.value = ''
+  regex.value = p.regex ?? ''
 }
 
 const catConds = computed<DraftCond[]>(() =>
@@ -264,8 +274,8 @@ watch(show, v => {
           <HInput v-model="catName" placeholder="电影/动画电影" />
         </FieldRow>
 
-        <FieldRow label="类型" tip="TMDB genre_ids，多选之间是「或」" wide>
-          <HMultiSelect v-model="genres" :options="genreOptions" placeholder="不限，可输入搜索" />
+        <FieldRow label="类型" tip="TMDB genre_ids，多选之间是「或」；列表里没有的可直接输入数字 ID" wide>
+          <HMultiSelect v-model="genres" creatable :options="genreOptions" placeholder="不限，可输入搜索或数字 ID" />
         </FieldRow>
 
         <FieldRow label="国家 / 地区" tip="origin_country，多选之间是「或」" wide>
