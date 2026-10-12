@@ -376,6 +376,10 @@ export interface ReconBucket {
 }
 export interface ReconDir {
   dir: string
+  /** 加进「其他媒体库目录」的写法（去掉库名）；片目直接在库根下时没有 */
+  extra?: string
+  /** 平铺：电影视频直接放在这个目录里 */
+  flat?: boolean
   count: number
   samples: string[]
 }

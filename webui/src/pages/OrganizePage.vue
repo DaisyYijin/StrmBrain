@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import BasicTab from './organize/BasicTab.vue'
 import ScrapeSummary from './organize/ScrapeSummary.vue'
@@ -9,11 +9,45 @@ import RenameTab from './organize/RenameTab.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
+import ExtraDirsCard from '@/components/organize/ExtraDirsCard.vue'
+import CategoryDropDialog from '@/components/organize/CategoryDropDialog.vue'
+import type { CategoryDrop } from '@/api/organize'
+import type { ExtraDir } from '@/api/library'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('basic')
 // 整理记录已搬到任务中心（/tasks?tab=records）：这一页只剩配置。
 // 旧地址 /organize?tab=records 由路由重定向过去，见 router/index.ts
+
+// ---- 保存分类规则：去掉的分类目录里还有片子时，先问要不要留作其他媒体库目录 ----
+const drops = ref<CategoryDrop[] | null>(null)
+let answer: ((v: ExtraDir[] | null) => void) | null = null
+// 其他媒体库目录被这里改过：卡片重读
+const extraVer = ref(0)
+
+function askKeep(list: CategoryDrop[]) {
+  return new Promise<ExtraDir[] | null>((resolve) => {
+    answer = resolve
+    drops.value = list
+  })
+}
+function onDropDone(v: ExtraDir[] | null) {
+  drops.value = null
+  answer?.(v)
+  answer = null
+}
+
+async function persistCategories(yaml: string) {
+  const { dropped } = await organizeApi.previewCategories(yaml)
+  let keep: ExtraDir[] = []
+  if (dropped?.length) {
+    const v = await askKeep(dropped)
+    if (v === null) return false
+    keep = v
+  }
+  await organizeApi.saveCategories(yaml, keep)
+  if (keep.length) extraVer.value++
+}
 
 const tabs = computed(() => [
   { value: 'basic', label: '基础配置' },
@@ -38,17 +72,19 @@ const tabs = computed(() => [
       <RecognizeTab v-else-if="tab === 'recognize'" />
       <AiTab v-else-if="tab === 'ai'" />
       <RenameTab v-else-if="tab === 'rename'" />
-      <YamlRuleTab
-        v-else-if="tab === 'category'"
-        key="category"
-        kind="category"
-        title="二级分类策略"
-        hint="分类名即 115 目录名"
-        note="分类名即 115 目录名，整理时目录不存在会自动创建。规则从上往下匹配，先命中的先停；不想手写 YAML 就用右上角的「添加分类规则」。"
-        :load="organizeApi.getCategories"
-        :persist="organizeApi.saveCategories"
-        :fallback="DEFAULT_CATEGORY_YAML"
-      />
+      <template v-else-if="tab === 'category'">
+        <YamlRuleTab
+          key="category"
+          kind="category"
+          title="二级分类策略"
+          hint="分类名即 115 目录名"
+          note="分类名即 115 目录名，整理时目录不存在会自动创建。规则从上往下匹配，先命中的先停；不想手写 YAML 就用右上角的「添加分类规则」。"
+          :load="organizeApi.getCategories"
+          :persist="persistCategories"
+          :fallback="DEFAULT_CATEGORY_YAML"
+        />
+        <ExtraDirsCard :ver="extraVer" class="extra" />
+      </template>
       <YamlRuleTab
         v-else-if="tab === 'wash'"
         key="wash"
@@ -60,6 +96,7 @@ const tabs = computed(() => [
         :persist="organizeApi.saveWash"
       />
     </div>
+    <CategoryDropDialog :drops="drops" @done="onDropDone" />
   </div>
 </template>
 
@@ -72,5 +109,8 @@ const tabs = computed(() => [
 }
 .panel {
   min-width: 0;
+}
+.extra {
+  margin-top: 16px;
 }
 </style>

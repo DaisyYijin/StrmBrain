@@ -115,6 +115,13 @@ func scanLedgerTitlesCached() map[string]*ledgerTitleEntry {
 	return ledgerTitlesCache
 }
 
+// forgetLedgerTitles 分类目录变了，台账要按新布局重新聚合
+func forgetLedgerTitles() {
+	ledgerTitlesMu.Lock()
+	ledgerTitlesCache = nil
+	ledgerTitlesMu.Unlock()
+}
+
 // ---- 库内目录布局：分类目录的下一层是标题目录 ----
 //
 // 整理落盘是 库名/<分类名>/<标题目录>/…（organize.go 的 categoryDir + 重命名模板第一段），
@@ -123,19 +130,17 @@ func scanLedgerTitlesCached() map[string]*ledgerTitleEntry {
 // 此前写死成 库名/电影|剧集/分类/标题，平铺配置（电影/*、动漫番剧/*）下
 // 片目全认错：电影的标题目录被当成分类、文件被当成标题目录，动漫番剧 / 综艺整类被跳过。
 //
-// 只认当前配置：改过分类策略之后，旧分类目录下的片不再被当成片目（与网盘文件页口径一致）。
+// 只认当前配置：分类规则 + 「其他媒体库目录」（extradirs.go：用户手动建的目录、改规则后留下的旧分类目录，
+// 只用于识别，整理不往里放）。两处都没有的目录，里面的片不算片目（与网盘文件页口径一致）。
+// 别改成按目录结构自动推断：平铺与多级分类混在一起时认不准。
 
-// libCategoryLayout 分类目录（库内相对路径）→ 媒体类型（movie / tv；两边都有同名分类时为空）
+// libCategoryLayout 分类目录（库内相对路径）→ 媒体类型（movie / tv；两边都有同名分类、或其他目录设为自动时为空）
 type libCategoryLayout map[string]string
 
-// loadLibCategoryLayout 按当前分类规则算出所有分类目录。
+// loadLibCategoryLayout 按当前分类规则与其他媒体库目录算出所有分类目录。
 // 直接读表不走 classifyRules 的缓存：调用方（台账扫描）自己有 30 秒缓存
 func loadLibCategoryLayout() libCategoryLayout {
-	var rules []model.CategoryRule
-	if model.DB != nil {
-		model.DB.Where("media_type IN ?", []string{"movie", "tv"}).Find(&rules)
-	}
-	return buildLibCategoryLayout(rules)
+	return loadRuleLayout().withExtraDirs(loadLibExtraDirs())
 }
 
 // buildLibCategoryLayout 纯函数部分：规则 → 分类目录表。

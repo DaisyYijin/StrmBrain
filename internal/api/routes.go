@@ -271,6 +271,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/scrape/rules", h.SaveScrapeRules)
 		protected.GET("/scrape/categories", h.ListCategories)
 		protected.POST("/scrape/categories", h.SaveCategories)
+		protected.POST("/scrape/categories/preview", h.PreviewCategories)
+		// 其他媒体库目录：只用于识别片目，不参与整理分类（extradirs.go）
+		protected.GET("/library/extra-dirs", h.GetLibExtraDirs)
+		protected.POST("/library/extra-dirs", h.SaveLibExtraDirs)
+		protected.POST("/library/extra-dirs/add", h.AddLibExtraDirs)
 
 		// 版本号、更新检测（update.go，只提示不自更新）与日志级别
 		protected.GET("/version", func(c *gin.Context) {
@@ -1196,6 +1201,8 @@ func (h *Handler) ListCategories(c *gin.Context) {
 func (h *Handler) SaveCategories(c *gin.Context) {
 	var req struct {
 		Yaml string `json:"yaml"`
+		// Keep 这次规则里去掉了、用户选择留作「其他媒体库目录」的分类目录（见 PreviewCategories）
+		Keep []libExtraDir `json:"keep"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -1227,6 +1234,16 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	if err := replaceCategoryRules(h.DB, rows); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重建规则失败: " + err.Error()})
 		return
+	}
+	// 分类目录变了：海报墙、网盘文件页按新布局认片目
+	forgetLibLayoutCaches()
+	if len(req.Keep) > 0 {
+		// 规则已经生效，这一步失败不回滚，只告诉用户去「其他媒体库目录」里手动加
+		if _, _, err := h.addLibExtraDirs(req.Keep); err != nil {
+			c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("分类规则已保存，但保留为其他媒体库目录失败：%v", err)})
+			return
+		}
+		log.Printf("[配置] 去掉的分类目录保留为其他媒体库目录：%d 个", len(req.Keep))
 	}
 	movieN, tvN := 0, 0
 	for _, r := range rows {

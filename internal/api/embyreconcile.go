@@ -45,7 +45,12 @@ type embyReconEntry struct {
 
 // embyReconDir 分类规则外的条目按所在目录聚合：用户要做的是「把这个目录加进分类规则」
 type embyReconDir struct {
-	Dir     string   `json:"dir"` // 本地根下的相对路径
+	Dir string `json:"dir"` // 本地根下的相对路径
+	// Extra 加进「其他媒体库目录」时的写法：去掉第一段库名（本地根下第一层是 115 库目录名）；
+	// 片目直接放在库根下时为空，加不进去
+	Extra string `json:"extra,omitempty"`
+	// Flat 平铺：电影视频直接放在这个目录里（一个视频一部），Dir 就是放视频的目录
+	Flat    bool     `json:"flat,omitempty"`
 	Count   int      `json:"count"`
 	Samples []string `json:"samples"`
 }
@@ -126,7 +131,11 @@ func reconcileEmby(items []embyReconItem, ledger map[string]*ledgerTitleEntry, l
 
 	type hit struct{ items []embyReconItem }
 	hits := map[string]map[string]*hit{"Movie": {}, "Series": {}} // 类型 → 片目 key → 条目
-	uncatDirs := map[string]map[string]*embyReconDir{"Movie": {}, "Series": {}}
+	// 分类规则外的条目先攒着：要等全部看完才知道哪些电影目录是平铺的
+	type uncat struct {
+		typ, titleDir, name string
+	}
+	var uncats []uncat
 	for _, it := range items {
 		if it.Type != "Movie" && it.Type != "Series" {
 			continue
@@ -172,23 +181,47 @@ func reconcileEmby(items []embyReconItem, ledger map[string]*ledgerTitleEntry, l
 			continue
 		}
 		s.Uncategorized.add(entry)
-		// 归到「标题目录的上一层」：那一层就是该加进分类规则的目录
 		titleDir := rel
 		if !dir {
 			titleDir = path.Dir(rel)
 		}
-		parent := path.Dir(titleDir)
+		uncats = append(uncats, uncat{typ: it.Type, titleDir: titleDir, name: it.Name})
+	}
+
+	// 一个目录里有两部以上不同名的电影 = 平铺（视频直接放在分类目录里），这个目录本身就是该加的分类目录；
+	// 同名的几个是多版本（Emby 一个版本一个 Movie 条目），仍按「标题目录的上一层」算
+	movieNames := map[string]map[string]bool{}
+	for _, u := range uncats {
+		if u.typ != "Movie" {
+			continue
+		}
+		if movieNames[u.titleDir] == nil {
+			movieNames[u.titleDir] = map[string]bool{}
+		}
+		movieNames[u.titleDir][u.name] = true
+	}
+	uncatDirs := map[string]map[string]*embyReconDir{"Movie": {}, "Series": {}}
+	for _, u := range uncats {
+		flat := u.typ == "Movie" && len(movieNames[u.titleDir]) > 1
+		// 归到「标题目录的上一层」：那一层就是该加进分类规则的目录
+		parent, sample := path.Dir(u.titleDir), path.Base(u.titleDir)
+		if flat {
+			parent, sample = u.titleDir, u.name
+		}
 		if parent == "." {
 			parent = ""
 		}
-		d := uncatDirs[it.Type][parent]
+		d := uncatDirs[u.typ][parent]
 		if d == nil {
-			d = &embyReconDir{Dir: parent}
-			uncatDirs[it.Type][parent] = d
+			d = &embyReconDir{Dir: parent, Flat: flat}
+			if _, rest, ok := strings.Cut(parent, "/"); ok {
+				d.Extra = rest
+			}
+			uncatDirs[u.typ][parent] = d
 		}
 		d.Count++
 		if len(d.Samples) < 5 {
-			d.Samples = append(d.Samples, path.Base(titleDir))
+			d.Samples = append(d.Samples, sample)
 		}
 	}
 

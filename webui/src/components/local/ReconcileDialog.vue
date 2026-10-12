@@ -6,8 +6,9 @@ import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
-import { localApi } from '@/api'
-import type { ReconBucket, ReconcileResult, ReconSide } from '@/api/local'
+import { libraryApi, localApi } from '@/api'
+import type { ReconBucket, ReconcileResult, ReconDir, ReconSide } from '@/api/local'
+import { toastError, useFeedback } from '@/composables/useFeedback'
 import { num } from '@/utils/format'
 
 /**
@@ -15,12 +16,14 @@ import { num } from '@/utils/format'
  *
  * 总览的电影 / 剧集数读 Emby（全服务器），海报墙数台账片目（只认当前分类规则下的标题目录），
  * 两个口径天然可能不一致。这里把差值拆成几类原因、各自列出条目，让用户知道该去哪儿改，
- * 而不是对着两个数字干猜。只读：后端只打 Emby，零 115 请求。
+ * 而不是对着两个数字干猜。后端只打 Emby，零 115 请求；唯一会改配置的是「分类规则外」目录的
+ * 「加入其他媒体库目录」（只用于识别，见后端 extradirs.go）。
  * 路径映射对不上时分类没有意义，只给映射建议，跳去 Emby 设置由用户确认保存。
  */
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ 'update:show': [boolean] }>()
 const router = useRouter()
+const { message } = useFeedback()
 
 const loading = ref(false)
 const failed = ref('')
@@ -82,7 +85,7 @@ const reasons = computed<Reason[]>(() => {
       sign: 1,
       title: '不在当前分类规则里',
       advice:
-        '这些片子的目录在本地媒体库里，但上一层目录不是「自动整理 → 二级分类策略」里的任何一个分类，海报墙不把它们当片目。把下面这些目录名加进分类策略（或把片子挪进已有分类）就能对上。',
+        '这些片子在本地媒体库里，但所在目录既不是「自动整理 → 二级分类策略」里的分类，也不在「其他媒体库目录」里，海报墙不把它们当片目。点「加入」把目录记进其他媒体库目录（只用于识别，整理不会往里放新片），或者把片子挪进已有分类。',
       bucket: s.uncategorized,
     },
     {
@@ -136,6 +139,23 @@ const reasons = computed<Reason[]>(() => {
 
 const mapping = computed(() => data.value?.mapping)
 
+// 规则外目录一键加进「其他媒体库目录」，加完重新对账
+const adding = ref('')
+async function addExtra(d: ReconDir) {
+  if (!d.extra) return
+  adding.value = d.dir
+  try {
+    const r = await libraryApi.addExtraDirs([{ dir: d.extra, type: side.value === 'tv' ? 'tv' : 'movie' }])
+    if (r.skipped?.length) message.warning(r.skipped.join('；'))
+    else message.success(`已加入其他媒体库目录：${d.extra}`)
+    await load()
+  } catch (e) {
+    toastError(e, '加入失败')
+  } finally {
+    adding.value = ''
+  }
+}
+
 function goSettings() {
   emit('update:show', false)
   const m = mapping.value
@@ -150,8 +170,8 @@ function goSettings() {
   <HModal :show="show" title="Emby 与海报墙对账" width="720px" @update:show="emit('update:show', $event)">
     <div class="body">
       <p class="intro">
-        总览的数量读的是 Emby（全服务器），海报墙数的是本站台账里、当前分类规则下的片目。这里把 Emby 的每个电影 / 剧集换算回本地路径，
-        逐个说明两边为什么对不上。只读，不改任何东西。
+        总览的数量读的是 Emby（全服务器），海报墙数的是本站台账里、分类规则与其他媒体库目录下的片目。这里把 Emby 的每个电影 / 剧集换算回本地路径，
+        逐个说明两边为什么对不上。除了「加入其他媒体库目录」，不改任何东西。
       </p>
 
       <div v-if="loading" class="center"><HSpinner size="sm" /><span>正在读取 Emby 条目…</span></div>
@@ -220,7 +240,19 @@ function goSettings() {
           <ul v-if="r.id === 'uncategorized' && cur.uncategorized_dirs?.length" class="dirs">
             <li v-for="d in cur.uncategorized_dirs" :key="d.dir">
               <code>{{ d.dir || '（媒体库根）' }}</code>
-              <span class="cnt">{{ num(d.count) }} 部</span>
+              <span class="cnt">{{ num(d.count) }} 部{{ d.flat ? ' · 视频直接放在目录里' : '' }}</span>
+              <HButton
+                v-if="d.extra"
+                variant="tertiary"
+                size="sm"
+                class="add"
+                :loading="adding === d.dir"
+                :disabled="!!adding"
+                @click="addExtra(d)"
+              >
+                加入
+              </HButton>
+              <span v-else class="cnt">片目直接在库根下，加不了，请挪进某个目录</span>
               <span class="samples">{{ d.samples.join('、') }}{{ d.count > d.samples.length ? ' …' : '' }}</span>
             </li>
           </ul>
@@ -414,6 +446,9 @@ code.hl {
 }
 .more {
   color: var(--muted);
+}
+.dirs .add {
+  margin-left: auto;
 }
 
 .footer {
