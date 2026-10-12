@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -177,10 +178,10 @@ func TestLocalEmbyTitleKey(t *testing.T) {
 	}
 	cases := map[string]string{
 		"/media/影视/剧集/国产剧/狂飙 (2023)/Season 01/狂飙.S01E01.strm": "影视/剧集/国产剧/狂飙 (2023)",
-		"/media/影视/电影/流浪地球 (2019)/流浪地球.strm":                   "影视/电影/流浪地球 (2019)",
-		"/media/影视/电影/别的 (2020)/别的.strm":                         "",
-		"/other/影视/电影/流浪地球 (2019)/流浪地球.strm":                   "",
-		"/media2/影视/电影/流浪地球 (2019)/流浪地球.strm":                  "",
+		"/media/影视/电影/流浪地球 (2019)/流浪地球.strm":                  "影视/电影/流浪地球 (2019)",
+		"/media/影视/电影/别的 (2020)/别的.strm":                      "",
+		"/other/影视/电影/流浪地球 (2019)/流浪地球.strm":                  "",
+		"/media2/影视/电影/流浪地球 (2019)/流浪地球.strm":                 "",
 	}
 	for in, want := range cases {
 		if got := localEmbyTitleKey(in, "/media", ledger); got != want {
@@ -246,5 +247,46 @@ func TestLocalPosterWidth(t *testing.T) {
 		if got := localPosterWidth(q); got != want {
 			t.Errorf("localPosterWidth(%q) = %d, want %d", q, got, want)
 		}
+	}
+}
+
+// 目录筛选：按 库名/分类 前缀收窄，多级分类的上一层也能选；平铺片目归它所在的分类目录；
+// 前缀要按整段比，「电视剧」不能把「电视剧集」也带进来
+func TestLocalTitleDirFilter(t *testing.T) {
+	all := []localTitle{
+		{Key: "Movies/电影/流浪地球 (2019)", MediaType: "movie"},
+		{Key: "Movies/华语电影/英雄本色.strm", MediaType: "movie"},
+		{Key: "TV/电视剧/国产剧/繁花 (2023)", MediaType: "tv"},
+		{Key: "TV/电视剧/日剧/东京爱情故事 (1991)", MediaType: "tv"},
+		{Key: "TV/电视剧集/狂飙 (2023)", MediaType: "tv"},
+	}
+	keys := func(ts []localTitle) []string {
+		var out []string
+		for _, t := range ts {
+			out = append(out, t.Key)
+		}
+		sort.Strings(out)
+		return out
+	}
+	cases := map[string][]string{
+		"TV/电视剧":      {"TV/电视剧/国产剧/繁花 (2023)", "TV/电视剧/日剧/东京爱情故事 (1991)"},
+		"/TV/电视剧/日剧/": {"TV/电视剧/日剧/东京爱情故事 (1991)"},
+		"Movies/华语电影": {"Movies/华语电影/英雄本色.strm"},
+		"Movies":      {"Movies/华语电影/英雄本色.strm", "Movies/电影/流浪地球 (2019)"},
+	}
+	for dir, want := range cases {
+		got, st := filterLocalTitles(all, localTitleQuery{Dir: dir})
+		if !reflect.DeepEqual(keys(got), want) || st.All != len(want) {
+			t.Errorf("dir=%q: %v %+v", dir, keys(got), st)
+		}
+	}
+
+	dirs := localTitleDirs(all)
+	want := []localTitleDir{
+		{"Movies", 2}, {"Movies/华语电影", 1}, {"Movies/电影", 1},
+		{"TV", 3}, {"TV/电视剧", 2}, {"TV/电视剧/国产剧", 1}, {"TV/电视剧/日剧", 1}, {"TV/电视剧集", 1},
+	}
+	if !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("dirs = %+v", dirs)
 	}
 }

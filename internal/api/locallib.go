@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -278,7 +280,9 @@ type localTitleStats struct {
 
 // localTitleQuery 列表筛选
 type localTitleQuery struct {
-	Keyword   string
+	Keyword string
+	// Dir 只看这个目录（含库名前缀，如 Movies/电影、Movies/电视剧）下的片目，空 = 全部
+	Dir       string
 	MediaType string // movie / tv / 空
 	Status    string // ok / partial / miss / 空
 	Sort      string // added_desc（默认）/ title / year_desc / year_asc
@@ -296,9 +300,13 @@ type localTitleQuery struct {
 // all 是缓存里的切片，只读；Emby 计数挂在复制出来的元素上
 func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, localTitleStats) {
 	kw := strings.ToLower(strings.TrimSpace(q.Keyword))
+	dir := strings.Trim(q.Dir, "/")
 	var st localTitleStats
 	out := make([]localTitle, 0, len(all))
 	for _, t := range all {
+		if dir != "" && !strings.HasPrefix(t.Key, dir+"/") {
+			continue
+		}
 		if kw != "" && !strings.Contains(strings.ToLower(t.Title), kw) && !strings.Contains(strings.ToLower(t.Key), kw) &&
 			(t.TmdbID == 0 || strconv.Itoa(t.TmdbID) != kw) {
 			continue
@@ -385,7 +393,7 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	}
 	all := h.localTitlesSnapshot(c.Query("refresh") == "1")
 	list, st := filterLocalTitles(all, localTitleQuery{
-		Keyword: c.Query("q"), MediaType: c.Query("type"), Status: c.Query("status"), Sort: c.Query("sort"),
+		Keyword: c.Query("q"), Dir: c.Query("dir"), MediaType: c.Query("type"), Status: c.Query("status"), Sort: c.Query("sort"),
 		Probe: c.Query("probe"), Emby: localEmbyStats(), EmbyGrade: !loadScrapeCfg().stationScrapes(),
 	})
 	offset, _ := strconv.Atoi(c.Query("offset"))
@@ -407,8 +415,35 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"configured": true, "root": root,
 		"items": list[offset:end], "total": len(list), "offset": offset, "limit": limit,
-		"stats": st, "missing": missing,
+		"stats": st, "missing": missing, "dirs": localTitleDirs(all),
 	})
+}
+
+// localTitleDir 目录筛选的一项：片目所在的目录与它的各级上层，Count 是这个目录下（含子目录）的片目数
+type localTitleDir struct {
+	Path  string `json:"path"`
+	Count int    `json:"count"`
+}
+
+// localTitleDirs 海报墙的目录清单：每个片目所在目录（库名/分类，平铺片目就是它所在的分类目录）
+// 连同各级上层（库名、多级分类的上一层 电视剧）都列出来，按路径排序，前端缩进成一棵树。
+// 数的是全部片目，不套用其余筛选 —— 目录是用来缩小范围的，数字跟着别的筛选变反而看不出目录有多大
+func localTitleDirs(all []localTitle) []localTitleDir {
+	count := map[string]int{}
+	for _, t := range all {
+		for d := path.Dir(t.Key); d != "." && d != "/" && d != ""; d = path.Dir(d) {
+			count[d]++
+		}
+	}
+	out := make([]localTitleDir, 0, len(count))
+	for p, n := range count {
+		out = append(out, localTitleDir{Path: p, Count: n})
+	}
+	// 按段比：直接比字符串的话「电视剧 2」（空格比 / 小）会插到「电视剧」和它的子目录中间
+	sort.Slice(out, func(i, j int) bool {
+		return slices.Compare(strings.Split(out[i].Path, "/"), strings.Split(out[j].Path, "/")) < 0
+	})
+	return out
 }
 
 // ---- 海报缩略图 ----

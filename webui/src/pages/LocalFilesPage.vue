@@ -17,7 +17,7 @@ import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
 import { localApi } from '@/api'
-import type { LocalEmbyStats, LocalTitle, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
+import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
 import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
@@ -53,6 +53,9 @@ const { embyScrapes, load: loadProvider } = useScrapeProvider()
 const PAGE = 60
 
 const keyword = ref('')
+/** 目录筛选：库名/分类（含子目录），空 = 全部 */
+const dir = ref('')
+const dirs = ref<LocalTitleDir[]>([])
 const type = ref<'' | 'movie' | 'tv'>('')
 const status = ref<'' | LocalTitleStatus>('')
 /** 只看 Emby 里还缺媒体信息的（有 Emby 快照才显示这个开关） */
@@ -78,7 +81,7 @@ const scroller = ref<HTMLElement | null>(null)
 /** 当前筛选（列表、翻页、全选共用） */
 function filters() {
   return {
-    q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value,
+    q: keyword.value.trim(), dir: dir.value, type: type.value, status: status.value, sort: sort.value,
     probe: probeLack.value ? ('lack' as const) : ('' as const),
   }
 }
@@ -88,6 +91,7 @@ function apply(d: LocalTitleList) {
   total.value = d.total
   stats.value = d.stats
   missing.value = d.missing ?? 0
+  dirs.value = d.dirs ?? []
   loaded.value = true
 }
 
@@ -128,7 +132,7 @@ function reload() {
   scroller.value?.scrollTo({ top: 0 })
   void load()
 }
-watch([type, status, sort, probeLack], reload)
+watch([dir, type, status, sort, probeLack], reload)
 // 打字时不必每个字都查一次：停 300ms 再查（清空立即查）
 let kwTimer: ReturnType<typeof setTimeout> | undefined
 watch(keyword, (v) => {
@@ -141,6 +145,19 @@ const typeOptions = computed(() => [
   { label: `电影 ${stats.value.movie}`, value: 'movie' as const },
   { label: `剧集 ${stats.value.tv}`, value: 'tv' as const },
 ])
+/** 目录下拉：按层级用全角空格缩进成一棵树，只写最后一段。只有一个目录时没得选，不显示 */
+const dirOptions = computed(() => [
+  { label: '全部目录', value: '' },
+  ...dirs.value.map((d) => {
+    const segs = d.path.split('/')
+    return { label: `${'　'.repeat(segs.length - 1)}${segs[segs.length - 1]}  ${d.count}`, value: d.path }
+  }),
+])
+const showDirs = computed(() => dirs.value.filter((d) => !dirs.value.some((o) => o.path.startsWith(`${d.path}/`))).length > 1)
+// 目录被删光了（换了分类规则、刷新后没了）：退回全部，免得停在一个空结果上
+watch(dirs, (v) => {
+  if (dir.value && !v.some((d) => d.path === dir.value)) dir.value = ''
+})
 const statusOptions = computed(() => [
   { label: `全部 ${stats.value.all}`, value: '' as const },
   { label: `已刮削 ${stats.value.ok}`, value: 'ok' as const },
@@ -541,6 +558,7 @@ onBeforeUnmount(() => {
           <div class="toolbar">
             <HSearchField v-model="keyword" class="filter" placeholder="搜索片名 / 路径 / TMDB 编号" />
             <div class="segs">
+              <HSelect v-if="showDirs" v-model="dir" :options="dirOptions" aria-label="目录" class="dir" :title="dir || '全部目录'" />
               <HSegmented v-model="type" :options="typeOptions" size="sm" aria-label="类型" />
               <HSegmented v-if="showStatus" v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />
               <HButton
@@ -599,7 +617,7 @@ onBeforeUnmount(() => {
           </div>
           <EmptyState
             v-else-if="!items.length"
-            :text="keyword || type || status ? '没有符合条件的片目' : '台账里还没有片目：先跑一次全量同步或自动整理'"
+            :text="keyword || dir || type || status ? '没有符合条件的片目' : '台账里还没有片目：先跑一次全量同步或自动整理'"
           />
           <div v-else :ref="setGridEl" class="grid" :class="[`v-${view}`, { dim: loading, selecting }]">
             <article
@@ -813,6 +831,9 @@ onBeforeUnmount(() => {
 }
 .sort {
   width: 150px;
+}
+.dir {
+  width: 180px;
 }
 .tip {
   margin: 0;

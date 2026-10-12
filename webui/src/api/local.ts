@@ -91,12 +91,22 @@ export interface LocalTitleList {
   stats: LocalTitleStats
   /** 台账有、本地目录不见了的片目数 */
   missing?: number
+  /** 目录筛选的选项：片目所在目录与各级上层，按段排好序；count 不套用其余筛选 */
+  dirs?: LocalTitleDir[]
+}
+
+export interface LocalTitleDir {
+  /** 含库名前缀，如 Movies/电影 */
+  path: string
+  count: number
 }
 
 export type LocalTitleSort = 'added_desc' | 'title' | 'year_desc' | 'year_asc'
 
 export interface LocalTitleQuery {
   q?: string
+  /** 只看这个目录（含子目录）下的片目 */
+  dir?: string
   type?: '' | 'movie' | 'tv'
   status?: '' | LocalTitleStatus
   /** lack = 只看 Emby 里还缺媒体信息的 */
@@ -114,6 +124,7 @@ export const listTitles = (q: LocalTitleQuery) =>
   http.get<LocalTitleList>('/local/titles', {
     params: {
       q: q.q || undefined,
+      dir: q.dir || undefined,
       type: q.type || undefined,
       status: q.status || undefined,
       probe: q.probe || undefined,
