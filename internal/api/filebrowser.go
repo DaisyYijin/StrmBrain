@@ -111,7 +111,7 @@ func (h *Handler) workspaceRoles() map[string]string {
 		}
 	}
 	add(fullCfg.Cid, "library")
-	// 附加媒体库同样是「媒体库」：片目认得出、能移出，只是第 1 期整理还只往主库放（otherLibBlock）
+	// 附加媒体库同样是「媒体库」：片目认得出、能整理、能移出（整理按分类规则的 library 决定落进哪个库）
 	for _, cid := range parseFullCfg(h.getSettingValue("full")).otherLibCids() {
 		add(cid, "library")
 	}
@@ -248,18 +248,10 @@ func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCatego
 		return fileRowActions{Block: "整理工作区目录（" + workspaceRoleText(r) + "）不能整理或移动"}
 	}
 	if chainRoleIndex(chain, roles, "library") >= 0 {
-		other := otherLibBlock(chain, roles)
 		if libName, rel, ok := libTitleOf(chain, roles, layout, it); ok {
-			a := fileRowActions{Organize: other == "", Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
-			if other != "" {
-				a.OrganizeBlock = other
-			}
-			return a
+			return fileRowActions{Organize: true, Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
 		}
 		if t, ok := libTitleAround(chain, roles, layout); ok {
-			if other != "" {
-				return fileRowActions{Block: other}
-			}
 			if why := episodeRowAction(t, layout, it.Name, it.IsDir); why != "" {
 				return fileRowActions{Block: why}
 			}
@@ -460,16 +452,6 @@ func chainZone(chain []browseCrumb, roles map[string]string) (string, int) {
 		}
 	}
 	return "", -1
-}
-
-// otherLibBlock 链上的媒体库是不是主库以外的库：是就返回不能整理的原因。
-// 重新整理与指定季集落盘时用的是主库（cfg.Library），对附加库的片目跑一遍会把它搬进主库。
-// 第 2 期整理记录带上所在库之后再放开（libroots.go）
-func otherLibBlock(chain []browseCrumb, roles map[string]string) string {
-	if i := chainRoleIndex(chain, roles, "library"); i >= 0 && isOtherLibRoot(chain[i].Cid) {
-		return "这个片目在附加媒体库里，暂时只能移动，还不能在这里整理（整理与指定季集目前只往主媒体库放）"
-	}
-	return ""
 }
 
 // chainRoleIndex 某个角色的根在链上的下标（不在链上 -1）

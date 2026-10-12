@@ -41,10 +41,19 @@ type orgRecordDTO struct {
 	// DupList / DupPicked 同集多份待选的各组与已提交的选择（展开好的 DupGroups / DupChoice，见 orgdup.go）
 	DupList   []dupGroup        `json:"dup_list,omitempty"`
 	DupPicked map[string]string `json:"dup_picked,omitempty"`
+	// LibName 落点在附加媒体库时那个库的目录名（主库为空，界面上不显示）。只查路径缓存，不发请求
+	LibName string `json:"lib_name,omitempty"`
 }
 
 func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink) orgRecordDTO {
 	d := orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files), Link: links[r.LinkID]}
+	if r.LibCid != "" {
+		if row, ok := lookupCachedRow(r.LibCid); ok {
+			d.LibName = row.Name
+		} else {
+			d.LibName = "cid " + r.LibCid
+		}
+	}
 	if r.HoldDup {
 		d.DupList, d.DupPicked = parseDupGroups(r.DupGroups), parseDupChoice(r.DupChoice)
 	}
@@ -264,6 +273,12 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	ops.suppress = true
 	sink := h.newOrgSink(cfg.Library)
 	pruner := newDirPruner(ops, orgProtectedCids(cfg), nil)
+	// 旧位置在哪个媒体库（记录上记着，空 = 主库）。那个库已经移出配置的话，旧产物的本地路径拼不出来，
+	// 删旧 STRM 会删错地方，宁可不做
+	if !recordLibOK(cfg, rec.LibCid) {
+		return fmt.Errorf("这条记录入库时所在的媒体库（cid=%s）已不在媒体库配置里：先在「账号与媒体库」把它加回附加媒体库，再重新整理", rec.LibCid)
+	}
+	oldLib := sinkLibCid(cfg, rec.LibCid)
 
 	oldTargetDir := rec.TargetDir
 	if oldTargetDir == "" {
@@ -280,7 +295,13 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// ---- 1) 先把新布局算出来 ----
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
-	category := classifyMedia(media)
+	category, libVal := classifyTarget(media)
+	newLibCid, err := ruleLibOf(cfg, sink, libVal)
+	if err != nil {
+		return err
+	}
+	newLib := sinkLibCid(cfg, newLibCid)
+	sink.useLib(newLib) // 之后的落点、台账、刷新都在新库
 	po := redoPlanOpts{strict: opt.strictDup}
 	if rec.HoldDup {
 		po.choice = parseDupChoice(rec.DupChoice) // 撞名停下、用户在记录上选过的
@@ -311,7 +332,10 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 网盘那边一个字节都不用动 —— 把文件移动到它已经在的目录，
 	// 115 的行为没有保证，而且白等一轮写限流、附属文件还要重下一遍
 	// 指定季集的文件可能名字不用改、只是放错了季目录：不走原地刷新，搬不搬交给 settledGroups
-	inPlace := len(opt.episodes) == 0 && isInPlaceRedo(rec, rootRel, renames)
+	inPlace := len(opt.episodes) == 0 && newLib == oldLib && isInPlaceRedo(rec, rootRel, renames)
+	if newLib != oldLib {
+		log.Printf("[整理] ▣ 换媒体库：%s → %s（分类规则指定）", orDash(sink.libNameOf(oldLib)), orDash(sink.libNameOf(newLib)))
+	}
 	if inPlace {
 		log.Printf("[整理] ▣ 目标与现状一致（%s），按原地刷新处理：不动网盘，只重建 STRM 与元数据", rootRel)
 	} else {
@@ -343,7 +367,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 		// 只改名不换目录的重整理（换了模板、补回了原名里的画质）同样不该搬动：
 		// 把文件移动到它已经在的目录对 115 没有保证，失败还会让整次重整理作废
 		plan.settled = settledGroups(sink, plan.groups)
-		if err := redoRelocate(ops, cfg, files, plan, &rootCid); err != nil {
+		if err := redoRelocate(ops, newLibCid, files, plan, &rootCid); err != nil {
 			return err
 		}
 	}
@@ -372,9 +396,9 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 换了标题目录：旧标题目录里刮削写的 tvshow.nfo / 海报 / season.nfo 不在台账里，
 	// 上面删不到，得单独收掉（守卫见 purgeStaleTitleDir）。整个收干净了就按目录通知 Emby 一次：
 	// 删掉的是剧集条目本身，不必逐集去查
-	if rec.TargetDir != "" && strings.Trim(rec.TargetDir, "/") != strings.Trim(rootRel, "/") {
-		if dir, n := purgeStaleTitleDir(sink.localRoot, sink.libRel(rec.TargetDir)); dir != "" {
-			log.Printf("[整理] ○ 已收掉本地旧标题目录 %s（刮削产物 %d 个）", sink.libRel(rec.TargetDir), n)
+	if rec.TargetDir != "" && (oldLib != newLib || strings.Trim(rec.TargetDir, "/") != strings.Trim(rootRel, "/")) {
+		if dir, n := purgeStaleTitleDir(sink.localRoot, sink.libRelIn(oldLib, rec.TargetDir)); dir != "" {
+			log.Printf("[整理] ○ 已收掉本地旧标题目录 %s（刮削产物 %d 个）", sink.libRelIn(oldLib, rec.TargetDir), n)
 			embyGone = []string{dir}
 		}
 	}
@@ -485,6 +509,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	rec.Category = category
 	rec.TargetDir = rootRel
 	rec.TargetCid = rootCid
+	rec.LibCid = newLib
 	rec.Files = marshalRecordFiles(newFiles)
 	rec.VideoCount = videoTotal
 	rec.TotalSize = totalSize
@@ -985,7 +1010,7 @@ func settledGroups(sink *orgSink, groups map[string][]orgRecordFile) map[string]
 // rootCid 出参给调用方（记录里要存新的标题目录 cid）。
 // 原地刷新（目标与现状一致）时调用方整段跳过 —— 把文件移动到它已经在的目录
 // 对 115 是未定义行为，白等一轮写限流不说，失败还会让整次重整理作废
-func redoRelocate(ops *pan115Ops, cfg *OrgConfig, files []orgRecordFile, plan *redoLayout, rootCid *string) error {
+func redoRelocate(ops *pan115Ops, libCid string, files []orgRecordFile, plan *redoLayout, rootCid *string) error {
 	rootRel, renames, groups, metaFiles := plan.rootRel, plan.renames, plan.groups, plan.metaFiles
 
 	if len(renames) > 0 {
@@ -1022,7 +1047,7 @@ func redoRelocate(ops *pan115Ops, cfg *OrgConfig, files []orgRecordFile, plan *r
 		}
 	}
 
-	cidOfRoot, err := ops.ensurePath(cfg.Library, rootRel)
+	cidOfRoot, err := ops.ensurePath(libCid, rootRel)
 	if err != nil {
 		return fmt.Errorf("创建目标目录失败: %w", err)
 	}
@@ -1031,7 +1056,7 @@ func redoRelocate(ops *pan115Ops, cfg *OrgConfig, files []orgRecordFile, plan *r
 	for rel, gfs := range groups {
 		cid := cidOfRoot
 		if rel != rootRel {
-			cid, err = ops.ensurePath(cfg.Library, rel)
+			cid, err = ops.ensurePath(libCid, rel)
 			if err != nil {
 				return fmt.Errorf("创建目录 %s 失败: %w", rel, err)
 			}

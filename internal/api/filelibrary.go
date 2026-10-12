@@ -98,10 +98,6 @@ func (h *Handler) enqueueLibRedo(c *gin.Context, req fileJobRequest, roles map[s
 		c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库里只有分类目录下的片目目录能整理"})
 		return
 	}
-	if why := otherLibBlock(req.Chain, roles); why != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": why})
-		return
-	}
 	if _, err := loadTmdbClient(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -154,9 +150,6 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if !ok {
 		return jobOutcome{}, errors.New("它已经不是媒体库里的片目目录了（被挪走，或分类策略改过），请刷新后重选")
 	}
-	if why := otherLibBlock(chain, roles); why != "" {
-		return jobOutcome{}, errors.New(why)
-	}
 
 	// 片目里的文件以网盘为准现场列一遍：台账可能过时，fid / pickcode / sha1 都要最新的
 	setJobProgress("读取片目", 0, 0, it.Name)
@@ -165,6 +158,8 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, fmt.Errorf("读取片目失败: %w", err)
 	}
 	rec := libTitleRecord(it, fp.Cid, rel, layout[path.Dir(rel)], files)
+	// 片目现在在哪个库：重新整理据此认旧的本地产物（分类规则指定别的库时会整部搬过去）
+	rec.LibCid = recordLibCid(chain[chainRoleIndex(chain, roles, "library")].Cid)
 	if rec.VideoCount == 0 {
 		return jobOutcome{}, errors.New("片目里没有视频文件")
 	}

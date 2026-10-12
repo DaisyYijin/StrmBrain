@@ -351,6 +351,13 @@ func newWashScanner(ops *pan115Ops, cfg *OrgConfig) *washScanner {
 		dirs: map[string][]model.SyncedFile{}, sha1s: map[string][]model.SyncedFile{}}
 }
 
+// inLib 指定库名前缀（多个媒体库时洗版只比目标库里的版本，libroots.go）。
+// 与 orgSink 的库名同源：两边各取一次的话，主库取不到名字时一个有前缀一个没有
+func (w *washScanner) inLib(name string) *washScanner {
+	w.prefix, w.gotPrefix = name, true
+	return w
+}
+
 func (w *washScanner) ledgerPrefix() string {
 	if !w.gotPrefix {
 		w.prefix = ledgerPrefixOf(w.ops, w.cfg)
@@ -415,9 +422,11 @@ type washPlan struct {
 // 反推的：那张表只有整理自己会写，库是全量/增量同步建起来的用户永远等不到洗版，
 // 而「重新整理」往里写的又是目录、再 path.Dir 一次就退到了二级分类层
 //
+// libName 是目标媒体库的目录名（台账前缀），与落盘同源（orgCtx.libName）。
+//
 // 整目录（一次几十上百集）走 processDir 里的批量路径，不要用这个入口。
-func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, newSha1, targetDir, landing string, onLog func(string)) string {
-	sc := newWashScanner(ops, cfg)
+func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName, newSha1, targetDir, landing string, onLog func(string)) string {
+	sc := newWashScanner(ops, cfg).inLib(libName)
 	sameFiles := sc.sameFile(newSha1)
 	st := matchWashStrategy(media.MediaType, classifyMedia(media))
 	if st == nil {

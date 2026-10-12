@@ -63,6 +63,9 @@ const jobFilter = computed(() => {
   const n = Number(route.query.job_id)
   return Number.isInteger(n) && n > 0 ? n : 0
 })
+/** 落点带上附加媒体库的库名（主库不带，和原来一样）：几个库里可能有同名的分类目录 */
+const libDir = (r: { target_dir: string; lib_name?: string }) => (r.lib_name ? `${r.lib_name}/${r.target_dir}` : r.target_dir)
+
 /** 网盘文件页片目「整理记录」跳过来时带 ?target_dir=：只看这个片目的记录 */
 const dirFilter = computed(() => (typeof route.query.target_dir === 'string' ? route.query.target_dir : ''))
 /** 订阅详情里「整理记录」跳过来时带 ?link_id=：只看这条来源链接认领到的记录 */
@@ -652,7 +655,7 @@ async function clearAll() {
                 <template v-if="r.hold_dup">{{ r.message }}</template>
                 <template v-else-if="r.tmdb_id">
                   <span class="plan-label">将入库到</span>
-                  <code class="plan-dir">{{ r.target_dir || '（确认时按模板生成）' }}</code>
+                  <code class="plan-dir">{{ r.target_dir ? libDir(r) : '（确认时按模板生成）' }}</code>
                 </template>
                 <template v-else>{{ r.message || '未能自动识别，请重新指定 TMDB 条目' }}</template>
               </div>
@@ -671,8 +674,8 @@ async function clearAll() {
               <div class="meta">
                 <!-- 精确时间放 title：触屏没有 hover，长按也能看到 -->
                 <span :title="fullTime(r.created_at)">{{ relTime(r.created_at) }}</span>
-                <span v-if="r.target_dir && r.status !== 'awaiting'" class="meta-dir" :title="r.target_dir">
-                  → {{ r.target_dir }}
+                <span v-if="r.target_dir && r.status !== 'awaiting'" class="meta-dir" :title="libDir(r)">
+                  → {{ libDir(r) }}
                 </span>
                 <span v-if="r.category">{{ r.category }}</span>
                 <span v-if="r.video_count">视频 {{ r.video_count }}</span>

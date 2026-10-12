@@ -191,6 +191,7 @@ export const CATEGORY_FIELDS: [string, string][] = [
   ['release_year', '发行年份（剧集取首播年份），如 2020 或范围 2000-2009'],
   ['custom_regex', '正则匹配片名 / 原名，命中即归此类（不要求其他条件同时成立）'],
   ['ext', '文件后缀；当前版本不参与匹配：只写了 ext 的规则不会匹配任何条目'],
+  ['library', '这一类整理进哪个媒体库：写附加媒体库的目录名（或 cid），不写进主媒体库。它不是匹配条件，只写了它的规则照样是兜底'],
 ]
 
 export const CATEGORY_RULES: [string, string][] = [
@@ -207,6 +208,9 @@ export const CATEGORY_RULES: [string, string][] = [
   ['movie / tv', '两类独立配置，互不干扰；其他顶层键会被忽略'],
   ['自动建目录', '115 中不存在时自动创建'],
 ]
+
+/** 分类规则的设置项：会被后端解析，但不是匹配条件（不影响「兜底」判断） */
+export const CATEGORY_SETTING_KEYS = ['library'] as const
 
 /** 分类条件字段（保存时真正被解析的键） */
 export const CATEGORY_FIELD_KEYS = [

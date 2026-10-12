@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"115-station/internal/model"
 )
 
 // ==================== 多个 115 媒体库（2026-10-12，第 1 期：同步） ====================
@@ -61,21 +63,6 @@ func parseFullCfg(raw string) fullSyncCfg {
 	var cfg fullSyncCfg
 	_ = json.Unmarshal([]byte(raw), &cfg)
 	return cfg
-}
-
-// otherLibCidsCompat 不挂 Handler 的地方用（读 settingValueCompat）
-func otherLibCidsCompat() []string {
-	return parseFullCfg(settingValueCompat("full")).otherLibCids()
-}
-
-// isOtherLibRoot cid 是不是附加媒体库根
-func isOtherLibRoot(cid string) bool {
-	for _, c := range otherLibCidsCompat() {
-		if c == cid {
-			return true
-		}
-	}
-	return false
 }
 
 // libRoot 解析过的一个媒体库
@@ -170,4 +157,96 @@ func panDirOfLocal(roots []libRoot, relDir string) string {
 		abs += "/" + rest
 	}
 	return abs
+}
+
+// ==================== 第 2 期：分类规则指定媒体库 ====================
+//
+// 分类规则 YAML 里一类可以写 library: <库目录名或 cid>，这一类整理进那个库；不写进主库。
+// 写库目录名而不是 cid：YAML 是给人看、给人改的，cid 一串数字看不出是哪个库。
+// 认不出（库被移出配置、改了名）一律报错停下，不退回主库 —— 退回去等于把片子放进用户没指定的库，
+// 事后要挪还得重新整理一遍
+
+// pickRuleLib 规则里的库值 → 库 cid。libs 第一个是主库；库值为空返回主库。
+// 先按 cid 认，再按目录名认（目录名不唯一时报错，保存时 checkWorkspaceSlots 已经拦过同名）
+func pickRuleLib(val string, libs []libRoot) (string, error) {
+	val = strings.TrimSpace(val)
+	if len(libs) == 0 {
+		return "", fmt.Errorf("未配置媒体库目录")
+	}
+	if val == "" {
+		return libs[0].Cid, nil
+	}
+	for _, l := range libs {
+		if l.Cid == val {
+			return l.Cid, nil
+		}
+	}
+	found := ""
+	for _, l := range libs {
+		if l.Name != "" && l.Name == strings.Trim(val, "/") {
+			if found != "" {
+				return "", fmt.Errorf("分类规则指定的媒体库「%s」有不止一个同名目录", val)
+			}
+			found = l.Cid
+		}
+	}
+	if found == "" {
+		return "", fmt.Errorf("分类规则指定的媒体库「%s」不在媒体库配置里（到「账号与媒体库」添加附加媒体库，或改分类规则的 library）", val)
+	}
+	return found, nil
+}
+
+// recordLibCid 整理记录的 LibCid：主库记空（老记录都是空，口径一致），附加库记 cid
+func recordLibCid(cid string) string {
+	if cid == "" || cid == primaryLibCidCompat() {
+		return ""
+	}
+	return cid
+}
+
+// primaryLibCidCompat 当前配置的主库 cid（不挂 Handler 的地方用）
+func primaryLibCidCompat() string {
+	return strings.TrimSpace(parseFullCfg(settingValueCompat("full")).Cid)
+}
+
+// ruleLibCid 分类规则的库值 → 库 cid（网盘文件页等没有整理上下文的地方用）。
+// 没写就是主库，不发任何请求；写了才解析各库的名字（走路径缓存）
+func (h *Handler) ruleLibCid(val string) (string, error) {
+	cfg := h.loadFullSyncCfg()
+	if strings.TrimSpace(val) == "" {
+		return cfg.Cid, nil
+	}
+	cookie, _ := h.get115Cookie()
+	roots, err := h.resolveConfiguredLibRoots(cookie)
+	if err != nil {
+		return "", err
+	}
+	return pickRuleLib(val, roots)
+}
+
+// checkRuleLibraries 分类规则里写的 library 都要对得上一个媒体库（保存分类规则时调用）。
+// 没有规则写 library 时零请求
+func (h *Handler) checkRuleLibraries(rows []model.CategoryRule) error {
+	var vals []string
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if v := strings.TrimSpace(r.Library); v != "" && !seen[v] {
+			seen[v] = true
+			vals = append(vals, v)
+		}
+	}
+	if len(vals) == 0 {
+		return nil
+	}
+	cookie, _ := h.get115Cookie()
+	roots, err := h.resolveConfiguredLibRoots(cookie)
+	if err != nil {
+		return fmt.Errorf("分类规则写了 library，但认不出各媒体库：%v", err)
+	}
+	for _, v := range vals {
+		if _, err := pickRuleLib(v, roots); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -23,7 +23,7 @@ export interface ExtraLib {
 }
 
 export interface FullSyncConfig {
-  /** 主媒体库：整理只往这里放（第 2 期按分类规则分库） */
+  /** 主媒体库：分类规则没写 library 的都整理到这里 */
   cid: string
   /** 仅用于配置页回显；同步仍以 cid 为准 */
   cid_path?: string

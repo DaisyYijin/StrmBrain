@@ -54,7 +54,7 @@ watch(
 
 /**
  * 附加媒体库（full.extra_libs）。主库以外再挂几个 115 目录，同步、海报墙、深度删除和主库一样管；
- * 整理目前只往主库放。编辑时只改这份副本，点「保存媒体库位置」才写回 media.model。
+ * 整理按分类规则的 library 决定放进哪个库。编辑时只改这份副本，点「保存媒体库位置」才写回 media.model。
  */
 const extraLibs = ref<CidValue[]>([])
 const extraInputs = ref<(InstanceType<typeof Cid115Input> | null)[]>([])
@@ -390,14 +390,14 @@ onMounted(() => {
           <FieldRow
             label="115 媒体库目录"
             required
-            tip="主媒体库。全量同步、增量同步、整理入库与洗版判定共同锚定此目录；整理目前只往这里放。"
+            tip="主媒体库。分类规则没写 library 的都整理到这里；全量同步、增量同步与洗版判定都以各库为准。"
           >
             <Cid115Input ref="cidInput" v-model="cidValue" />
           </FieldRow>
 
           <FieldRow
             label="附加媒体库"
-            tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。整理入库目前只往主媒体库放。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
+            tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。要把某一类整理进附加库，在「自动整理 → 二级分类」的规则里写 library: 库目录名（规则生成器里可以直接选）。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
           >
             <div class="extra-libs">
               <div v-for="(_row, i) in extraLibs" :key="i" class="extra-lib">

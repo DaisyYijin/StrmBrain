@@ -99,6 +99,9 @@ type CategoryRule struct {
 	Name       string `json:"name" gorm:"size:100;not null"`            // 库内相对目录，如 电影/华语电影、动漫番剧
 	Cid        string `json:"cid" gorm:"size:100"`                      // 115 文件夹 CID
 	ArchiveDir string `json:"archive_dir" gorm:"size:200"`              // 归档子目录路径
+	// Library 这一类整理进哪个媒体库（YAML 的 library 键）：库目录名或 cid，空 = 主媒体库。
+	// 不是匹配条件：只写了它的规则照样是兜底
+	Library string `json:"library" gorm:"size:200"`
 
 	// 匹配维度（对齐 CMS 的 YAML 策略，逗号分隔多值）
 	GenreIds         string `json:"genre_ids" gorm:"size:200"`         // TMDB 类型ID，如 "16,99"
@@ -377,6 +380,8 @@ type OrganizeRecord struct {
 	Category   string `json:"category" gorm:"size:50"`
 	TargetDir  string `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 	TargetCid  string `json:"target_cid" gorm:"size:64"`
+	// LibCid TargetDir 在哪个媒体库：空 = 主媒体库（老记录都是空），附加媒体库记它的 cid
+	LibCid string `json:"lib_cid" gorm:"size:64"`
 
 	// Files 是 []{fid,name,kind} 的 JSON。fid 在 115 上移动/改名后不变，
 	// 所以这就是「重新整理」原地捞回文件所需的全部定位信息

@@ -9,6 +9,7 @@
  */
 import {
   CATEGORY_FIELD_KEYS,
+  CATEGORY_SETTING_KEYS,
   WASH_LEVEL_FIELD_KEYS,
   countryName,
   genreName,
@@ -106,6 +107,8 @@ export interface CategoryRuleView {
   conds: Cond[]
   /** 没有任何生效条件 → 匹配一切，它就是兜底 */
   fallback: boolean
+  /** library：这一类整理进哪个媒体库（不是匹配条件，不进 conds） */
+  library?: Cond
 }
 
 export interface CategorySectionView {
@@ -171,6 +174,11 @@ export function parseCategory(src: string): CategoryModel {
       continue
     }
     if (section.condIndent < 0) section.condIndent = e.indent
+    if ((CATEGORY_SETTING_KEYS as readonly string[]).includes(e.key)) {
+      rule.library = { key: e.key, value: e.value, line: e.line } // 不是条件：不影响兜底判断
+      rule.endLine = e.line
+      continue
+    }
     rule.conds.push({ key: e.key, value: e.value, line: e.line })
     rule.endLine = e.line
     // 认不出的条件后端也不当兜底（这条规则不匹配任何条目），这里同口径
@@ -236,6 +244,9 @@ export function lintCategory(src: string): RuleIssue[] {
         fallbackAt = r.line
       }
 
+      if (r.library && !r.library.value.trim()) {
+        issues.push({ line: r.library.line, level: 'warn', text: 'library 没有值，这一类照常进主媒体库' })
+      }
       for (const c of r.conds) {
         if (!(CATEGORY_FIELD_KEYS as readonly string[]).includes(c.key)) {
           issues.push({
@@ -530,6 +541,7 @@ export function outlineCategory(src: string): OutlineGroup[] {
             ...(r.fallback ? ['兜底'] : []),
             ...(name ? [] : ['无分类目录']),
             ...(dead ? ['不会匹配'] : []),
+            ...(r.library?.value.trim() ? [`→ ${r.library.value.trim().replace(/^['"]|['"]$/g, '')} 库`] : []),
           ],
           chips: r.conds
             .filter(c => c.value.trim())

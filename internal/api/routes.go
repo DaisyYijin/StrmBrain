@@ -1219,6 +1219,11 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未解析到 movie/tv 分类规则"})
 		return
 	}
+	// library 写的库要认得出：整理时认不出会让这一类全部失败（不退回主库，见 pickRuleLib）
+	if err := h.checkRuleLibraries(rows); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	// 存储 YAML 到 ScrapeRule 表（界面回显源）
 	var rule model.ScrapeRule
 	h.DB.Where("type = ?", "category_config").First(&rule)
@@ -1378,6 +1383,9 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 						r.ReleaseYear = fv
 					case "ext":
 						r.Ext = fv
+					case "library":
+						// 落到哪个媒体库，不是匹配条件（下面判兜底时不看它）
+						r.Library = strings.TrimSpace(fv)
 					default:
 						r.Unsupported = joinNonEmpty(r.Unsupported, fk)
 					}

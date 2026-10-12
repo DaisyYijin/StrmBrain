@@ -69,6 +69,7 @@ func withoutPicked(eps map[string]*ParsedName, picks map[string]episodePick) map
 // libFileTitle 当前目录所在的片目（媒体库里、片目目录本身或它下面任意一层）
 type libFileTitle struct {
 	libName  string // 库名（台账前缀）
+	libCid   string // 所在媒体库的根 cid（重新整理据此认旧位置在哪个库）
 	titleRel string // 片目的库内相对路径
 	titleCid string
 	titleIdx int    // 片目在面包屑上的下标
@@ -98,7 +99,7 @@ func libTitleAround(chain []browseCrumb, roles map[string]string, layout libCate
 		for _, c := range chain[j+1:] {
 			sub = append(sub, c.Name)
 		}
-		return libFileTitle{libName: chain[idx].Name, titleRel: rel, titleCid: chain[j].Cid, titleIdx: j,
+		return libFileTitle{libName: chain[idx].Name, libCid: chain[idx].Cid, titleRel: rel, titleCid: chain[j].Cid, titleIdx: j,
 			dirRel: strings.Join(sub, "/")}, true
 	}
 	return libFileTitle{}, false
@@ -316,9 +317,6 @@ func (h *Handler) prepareEpisodeContext(chain []browseCrumb, items []fileJobItem
 	if !ok {
 		return nil, errors.New("只能给媒体库片目里的视频指定季集")
 	}
-	if why := otherLibBlock(chain, roles); why != "" {
-		return nil, errors.New(why)
-	}
 	for _, it := range items {
 		if why := episodeRowAction(t, layout, it.Name, it.IsDir); why != "" {
 			return nil, fmt.Errorf("「%s」不能指定季集：%s", it.Name, why)
@@ -341,7 +339,13 @@ func (h *Handler) prepareEpisodeContext(chain []browseCrumb, items []fileJobItem
 	}
 	media.MediaType = "tv"
 	ensureRenameTpl()
-	category := classifyMedia(media)
+	category, libVal := classifyTarget(media)
+	// 指定季集只在片目现在的库里改名搬移：分类规则要它去别的库的话，先整部「整理」过去
+	if want, err := h.ruleLibCid(libVal); err != nil {
+		return nil, err
+	} else if t.libCid != "" && want != t.libCid {
+		return nil, errors.New("分类规则把这部剧放在另一个媒体库：请先对整部片目「整理」，让它搬到规则指定的库，再指定季集")
+	}
 	return &episodeContext{title: t, media: media, category: category, st: matchWashStrategy("tv", category)}, nil
 }
 
@@ -723,6 +727,7 @@ func episodeRecord(ctx *episodeContext, files []orgRecordFile) model.OrganizeRec
 		TmdbID: ctx.media.TmdbID, Title: ctx.media.Title, Year: ctx.media.Year, MediaType: "tv",
 		PosterPath: ctx.media.PosterPath, Category: ctx.category,
 		TargetDir: ctx.title.titleRel, TargetCid: ctx.title.titleCid,
+		LibCid: recordLibCid(ctx.title.libCid),
 	}
 	for _, f := range files {
 		if f.Kind == "video" {

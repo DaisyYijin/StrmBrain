@@ -160,6 +160,10 @@ export interface OrganizeRecord {
   category: string
   target_dir: string
   target_cid: string
+  /** 落点在附加媒体库时那个库的 cid（主库为空） */
+  lib_cid?: string
+  /** 同上，库目录名（后端从路径缓存取，取不到时是「cid xxx」） */
+  lib_name?: string
   video_count: number
   total_size: number
   strm_created: number

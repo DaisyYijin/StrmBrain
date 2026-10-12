@@ -8,6 +8,8 @@
  *   3) 分类规则讲顺序，写在兜底后面等于白写 → 插入点由结构决定（见 ruleEdit）。
  */
 import { computed, ref, watch } from 'vue'
+import { configApi } from '@/api'
+import type { FullSyncConfig } from '@/api/sync'
 import HMultiSelect, { type MultiGroup, type MultiOption } from '@/components/hero/HMultiSelect.vue'
 import HSelect, { type SelectOption } from '@/components/hero/HSelect.vue'
 import HButton from '@/components/hero/HButton.vue'
@@ -47,6 +49,29 @@ const prodCountries = ref<string[]>([])
 const langs = ref<string[]>([])
 const years = ref('')
 const regex = ref('')
+/** 整理进哪个媒体库：空 = 主媒体库；值是附加媒体库的目录名（YAML 的 library） */
+const library = ref('')
+const libOptions = ref<SelectOption<string>[]>([])
+
+/** 附加媒体库清单（账号与媒体库里配的），没有附加库时不显示这一项 */
+async function loadLibOptions() {
+  try {
+    const full = await configApi.getSetting<Partial<FullSyncConfig>>('full', {})
+    const extras = (full.extra_libs ?? []).filter(e => e.cid && e.cid !== full.cid)
+    libOptions.value = extras.length
+      ? [
+          { label: '主媒体库（不写 library）', value: '' },
+          ...extras.map(e => {
+            // YAML 里写目录名：比 cid 好认；没存路径的老配置只能写 cid
+            const name = (e.path ?? '').split('/').filter(Boolean).pop() || e.cid
+            return { label: e.path ? `${name}（${e.path}）` : `cid ${e.cid}`, value: name }
+          }),
+        ]
+      : []
+  } catch {
+    libOptions.value = []
+  }
+}
 
 const genreOptions = computed<MultiOption<string>[]>(() =>
   (media.value === 'movie' ? MOVIE_GENRES : TV_GENRES).map(([v, l]) => ({ label: `${l}（${v}）`, value: v })),
@@ -210,7 +235,7 @@ const washDraft = computed(() => ({
 
 const preview = computed(() =>
   props.kind === 'category'
-    ? categorySnippet({ media: media.value, name: catName.value || '分类名', conds: catConds.value })
+    ? categorySnippet({ media: media.value, name: catName.value || '分类名', conds: catConds.value, library: library.value })
     : washSnippet({ ...washDraft.value, name: washName.value || '策略名' }),
 )
 
@@ -225,7 +250,7 @@ function apply() {
   if (!canApply.value) return
   const next =
     props.kind === 'category'
-      ? insertCategoryRule(props.yaml, { media: media.value, name: catName.value.trim(), conds: catConds.value })
+      ? insertCategoryRule(props.yaml, { media: media.value, name: catName.value.trim(), conds: catConds.value, library: library.value })
       : appendWashStrategy(props.yaml, { ...washDraft.value, name: washName.value.trim() })
   emit('apply', next)
   show.value = false
@@ -233,6 +258,7 @@ function apply() {
 
 function resetForm() {
   catName.value = ''
+  library.value = ''
   genres.value = []
   countries.value = []
   prodCountries.value = []
@@ -249,7 +275,10 @@ function resetForm() {
 }
 
 watch(show, v => {
-  if (v) resetForm()
+  if (v) {
+    resetForm()
+    if (props.kind === 'category') void loadLibOptions()
+  }
 })
 </script>
 
@@ -296,6 +325,15 @@ watch(show, v => {
 
         <FieldRow label="片名正则" tip="命中片名或原名即归此类，不要求其他条件同时成立" wide>
           <HInput v-model="regex" placeholder="选填，如 ^(哆啦A梦|蜡笔小新)" />
+        </FieldRow>
+
+        <FieldRow
+          v-if="libOptions.length"
+          label="放进媒体库"
+          tip="library：这一类整理进哪个媒体库。不是匹配条件，只选了它的规则照样是兜底"
+          wide
+        >
+          <HSelect v-model="library" :options="libOptions" />
         </FieldRow>
       </template>
 

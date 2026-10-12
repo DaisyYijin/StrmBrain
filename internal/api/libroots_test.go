@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"115-station/internal/model"
 )
@@ -49,12 +50,12 @@ func TestResolveLibRoots(t *testing.T) {
 func TestPanDirOfLocal(t *testing.T) {
 	roots := []libRoot{{Cid: "1", Name: "影视", Abs: "/影视"}, {Cid: "2", Name: "影视2", Abs: "/盘2/影视2"}}
 	cases := map[string]string{
-		"影视/电影/A":   "/影视/电影/A",
-		"影视2/剧集/B":  "/盘2/影视2/剧集/B", // 原来按字符串前缀剥，会剥成「2/剧集/B」
-		"影视2":       "/盘2/影视2",
-		"别的/电影":     "/影视/别的/电影", // 认不出库名：退回主库、整段照用（老行为）
-		".":         "/影视",
-		`影视\电影\A`: "/影视/电影/A",
+		"影视/电影/A":  "/影视/电影/A",
+		"影视2/剧集/B": "/盘2/影视2/剧集/B", // 原来按字符串前缀剥，会剥成「2/剧集/B」
+		"影视2":      "/盘2/影视2",
+		"别的/电影":    "/影视/别的/电影", // 认不出库名：退回主库、整段照用（老行为）
+		".":        "/影视",
+		`影视\电影\A`:  "/影视/电影/A",
 	}
 	for in, want := range cases {
 		if got := panDirOfLocal(roots, in); got != want {
@@ -239,24 +240,158 @@ func TestIncrMultiLibAbortsOnBadExtra(t *testing.T) {
 
 // ---- 网盘文件页 ----
 
-// 附加库里的片目能认出、能移出，但第 1 期不许整理 / 指定季集（落盘还只认主库，会被搬进主库）
-func TestRowActionsOtherLibBlocked(t *testing.T) {
-	newTestDB(t, "libroots_rowactions.db")
-	model.DB.Create(&model.Setting{Key: "full", Value: `{"cid":"100","extra_libs":[{"cid":"500"}]}`})
+// 附加库里的片目和主库一样：能认、能整理、能移（整理落进哪个库由分类规则决定，第 2 期）
+func TestRowActionsOtherLib(t *testing.T) {
 	roles := map[string]string{"100": "library", "500": "library", "300": "redundant"}
 	layout := libCategoryLayout{"电影/华语电影": "movie", "剧集/国产剧": "tv"}
 
 	other := []browseCrumb{{"500", "动漫库"}, {"501", "电影"}, {"502", "华语电影"}}
 	a := rowActionsOf(other, roles, layout, fileEntry{ID: "503", Name: "某片 (2020)", IsDir: true})
-	if !a.Title || !a.Move || a.Organize || a.OrganizeBlock == "" || a.TitleKey != "动漫库/电影/华语电影/某片 (2020)" {
-		t.Fatalf("附加库的片目：能认、能移、不能整理，实得 %+v", a)
+	if !a.Title || !a.Move || !a.Organize || a.TitleKey != "动漫库/电影/华语电影/某片 (2020)" {
+		t.Fatalf("附加库的片目：能认、能整理、能移，实得 %+v", a)
 	}
 	inTitle := []browseCrumb{{"500", "动漫库"}, {"501", "剧集"}, {"502", "国产剧"}, {"503", "某剧"}}
-	if a := rowActionsOf(inTitle, roles, layout, fileEntry{ID: "f", Name: "某剧 S01E01.mkv"}); a.Episode || a.Block == "" {
-		t.Fatalf("附加库片目里的视频不能指定季集，实得 %+v", a)
+	if a := rowActionsOf(inTitle, roles, layout, fileEntry{ID: "f", Name: "某剧 S01E01.mkv", Video: true}); !a.Episode {
+		t.Fatalf("附加库片目里的视频能指定季集，实得 %+v", a)
 	}
-	main := []browseCrumb{{"100", "影视"}, {"101", "电影"}, {"102", "华语电影"}}
-	if a := rowActionsOf(main, roles, layout, fileEntry{ID: "103", Name: "某片 (2020)", IsDir: true}); !a.Organize {
-		t.Fatalf("主库的片目照常能整理，实得 %+v", a)
+}
+
+// ==================== 第 2 期：分类规则指定媒体库 ====================
+
+func resetClassifyCache() {
+	classifyRuleMu.Lock()
+	classifyRuleCache = map[string][]model.CategoryRule{}
+	classifyRuleAt = map[string]time.Time{}
+	classifyRuleMu.Unlock()
+}
+
+// library 不是匹配条件：只写了它的规则仍是兜底；值原样存下
+func TestParseCategoryYAMLLibrary(t *testing.T) {
+	rows, err := parseCategoryYAML(`
+tv:
+  动漫番剧:
+    genre_ids: '16'
+    library: 动漫库
+  剧集:
+    library: '剧集库'
+`)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("解析失败: %v %+v", err, rows)
+	}
+	if rows[0].Library != "动漫库" || rows[0].IsDefault || rows[0].Unsupported != "" {
+		t.Fatalf("带条件的规则：库照存、不是兜底，实得 %+v", rows[0])
+	}
+	if rows[1].Library != "剧集库" || !rows[1].IsDefault {
+		t.Fatalf("只写了 library 的规则仍是兜底，实得 %+v", rows[1])
+	}
+}
+
+func TestClassifyTargetLibrary(t *testing.T) {
+	newTestDB(t, "libroots_classify.db")
+	resetClassifyCache()
+	t.Cleanup(resetClassifyCache)
+	seedCategoryRules(t,
+		model.CategoryRule{MediaType: "tv", Name: "动漫番剧", GenreIds: "16", Library: "动漫库", Priority: 1},
+		model.CategoryRule{MediaType: "tv", Name: "剧集", IsDefault: true, Priority: 2},
+	)
+	if c, lib := classifyTarget(&TmdbMedia{MediaType: "tv", GenreIDs: []int{16}}); c != "动漫番剧" || lib != "动漫库" {
+		t.Fatalf("命中规则应带回它的库，实得 %q %q", c, lib)
+	}
+	if c, lib := classifyTarget(&TmdbMedia{MediaType: "tv", GenreIDs: []int{18}}); c != "剧集" || lib != "" {
+		t.Fatalf("兜底没写库 = 主库，实得 %q %q", c, lib)
+	}
+}
+
+func TestPickRuleLib(t *testing.T) {
+	libs := []libRoot{{Cid: "1", Name: "影视"}, {Cid: "2", Name: "动漫库"}}
+	cases := map[string]string{"": "1", "动漫库": "2", "/动漫库/": "2", "2": "2", "影视": "1"}
+	for in, want := range cases {
+		if got, err := pickRuleLib(in, libs); err != nil || got != want {
+			t.Errorf("pickRuleLib(%q)=%q,%v want %q", in, got, err, want)
+		}
+	}
+	if _, err := pickRuleLib("不存在的库", libs); err == nil {
+		t.Fatal("认不出的库必须报错，不能退回主库")
+	}
+	if _, err := pickRuleLib("影视", []libRoot{{Cid: "1", Name: "影视"}, {Cid: "3", Name: "影视"}}); err == nil {
+		t.Fatal("同名的两个库认不出是哪个，必须报错")
+	}
+}
+
+// 整理上下文：按规则切库 → 落点、库名前缀、记录的 LibCid 都跟着换；下一个条目复位回主库
+func TestOrgCtxClassifySwitchesLibrary(t *testing.T) {
+	newTestDB(t, "libroots_ctx.db")
+	resetClassifyCache()
+	t.Cleanup(resetClassifyCache)
+	seedCategoryRules(t,
+		model.CategoryRule{MediaType: "tv", Name: "动漫番剧", GenreIds: "16", Library: "动漫库", Priority: 1},
+		model.CategoryRule{MediaType: "tv", Name: "剧集", IsDefault: true, Priority: 2},
+		model.CategoryRule{MediaType: "movie", Name: "电影", IsDefault: true, Library: "没有这个库", Priority: 1},
+	)
+	sink := &orgSink{libName: "影视", libResolved: true, curNames: map[string]string{"lib2": "动漫库"}, jobs: map[string]scrapeJob{}}
+	ctx := &orgCtx{cfg: &OrgConfig{Library: "lib", OtherLibs: []string{"lib2"}}, sink: sink, libAbs: "/影视"}
+	ctx.absOf = map[string]string{"lib": "/影视", "lib2": "/盘2/动漫库"}
+
+	cat, err := ctx.classify(&TmdbMedia{MediaType: "tv", GenreIDs: []int{16}})
+	if err != nil || cat != "动漫番剧" {
+		t.Fatalf("classify: %q %v", cat, err)
+	}
+	if ctx.libCid() != "lib2" || ctx.libAbs != "/盘2/动漫库" || sink.libRel("动漫番剧/X") != "动漫库/动漫番剧/X" {
+		t.Fatalf("应切到附加库: cid=%s abs=%s rel=%s", ctx.libCid(), ctx.libAbs, sink.libRel("动漫番剧/X"))
+	}
+	rec := &model.OrganizeRecord{Source: "x", TargetDir: "动漫番剧/X", Status: "success"}
+	sink.note(rec)
+	if rec.LibCid != "lib2" {
+		t.Fatalf("记录应带上附加库，实得 %q", rec.LibCid)
+	}
+
+	// 下一个条目：复位回主库，没写库的规则就在主库
+	ctx.enterLib("")
+	if _, err := ctx.classify(&TmdbMedia{MediaType: "tv", GenreIDs: []int{18}}); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.libCid() != "lib" || sink.libRel("剧集/Y") != "影视/剧集/Y" {
+		t.Fatalf("没写库的规则应回主库: cid=%s rel=%s", ctx.libCid(), sink.libRel("剧集/Y"))
+	}
+	rec2 := &model.OrganizeRecord{Source: "y", TargetDir: "剧集/Y", Status: "success"}
+	sink.note(rec2)
+	if rec2.LibCid != "" {
+		t.Fatalf("主库的记录 LibCid 记空（与老记录同口径），实得 %q", rec2.LibCid)
+	}
+
+	// 规则写了认不出的库：报错，且不切库
+	if _, err := ctx.classify(&TmdbMedia{MediaType: "movie"}); err == nil {
+		t.Fatal("认不出的库必须报错")
+	}
+	if ctx.libCid() != "lib" {
+		t.Fatalf("报错时不该切库，实得 %s", ctx.libCid())
+	}
+}
+
+// Emby 刷新按库各刷一个最浅目录
+func TestOrgSinkRefreshPerLibrary(t *testing.T) {
+	s := &orgSink{localRoot: "/m", refreshDirs: []string{"影视/剧集/A", "动漫库/番剧/B", "影视/电影/C/D", "动漫库/番剧"}}
+	dirs, _ := s.refreshTarget()
+	want := []string{filepath.Join("/m", "影视", "剧集", "A"), filepath.Join("/m", "动漫库", "番剧")}
+	if strings.Join(dirs, "|") != strings.Join(want, "|") {
+		t.Fatalf("每个库各刷最浅的一个，实得 %v", dirs)
+	}
+}
+
+// 洗版只比目标库里的版本：别的库同一路径下的不算
+func TestWashScannerInLib(t *testing.T) {
+	newTestDB(t, "libroots_wash.db")
+	model.DB.Create(&model.SyncedFile{FileID: "a", RelPath: "影视/剧集/X/Season 01/X.S01E01.strm", Kind: "video"})
+	model.DB.Create(&model.SyncedFile{FileID: "b", RelPath: "动漫库/剧集/X/Season 01/X.S01E01.strm", Kind: "video"})
+	rows := newWashScanner(nil, nil).inLib("动漫库").libFiles("剧集/X/Season 01")
+	if len(rows) != 1 || rows[0].FileID != "b" {
+		t.Fatalf("只该拿到动漫库那一份，实得 %+v", rows)
+	}
+}
+
+func TestRecordLibOK(t *testing.T) {
+	cfg := &OrgConfig{Library: "1", OtherLibs: []string{"2"}}
+	if !recordLibOK(cfg, "") || !recordLibOK(cfg, "1") || !recordLibOK(cfg, "2") || recordLibOK(cfg, "9") {
+		t.Fatal("记录所在库的判定不对")
 	}
 }

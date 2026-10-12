@@ -57,6 +57,11 @@ type orgSink struct {
 	libCid      string
 	libName     string
 	libResolved bool
+	// cur 当前条目落进的媒体库（分类规则的 library，libroots.go）；空 = 主库（libCid）。
+	// 整理逐条串行，每个条目识别前 useLib("") 复位、分类后 useLib(目标库)。
+	// 附加库的名字按需解析，同样一轮只解析一次
+	cur      string
+	curNames map[string]string
 
 	mu          sync.Mutex
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次
@@ -94,7 +99,46 @@ func (h *Handler) newOrgSink(libCid string) *orgSink {
 	}
 }
 
-// resolveLibName 取媒体库根目录名（STRM 路径第一层）。
+// useLib 切到某个媒体库（空或主库 cid = 主库）。之后的 libRel / 落盘 / 记录都按它
+func (s *orgSink) useLib(cid string) {
+	if cid == s.libCid {
+		cid = ""
+	}
+	s.cur = cid
+}
+
+// curLib 当前条目的媒体库 cid（主库时是 libCid）
+func (s *orgSink) curLib() string {
+	if s.cur != "" {
+		return s.cur
+	}
+	return s.libCid
+}
+
+// libNameOf 某个媒体库的根目录名（本地第一层）。主库走 resolveLibName（老逻辑与测试都依赖它）
+func (s *orgSink) libNameOf(cid string) string {
+	if cid == "" || cid == s.libCid {
+		return s.resolveLibName()
+	}
+	if n, ok := s.curNames[cid]; ok {
+		return n
+	}
+	name := ""
+	if s.h != nil {
+		if cookie, err := s.h.get115Cookie(); err == nil && cookie != "" {
+			if info, err := get115DirInfo(cookie, cid); err == nil {
+				name = info.n
+			}
+		}
+	}
+	if s.curNames == nil {
+		s.curNames = map[string]string{}
+	}
+	s.curNames[cid] = name
+	return name
+}
+
+// resolveLibName 取主媒体库根目录名（STRM 路径第一层）。
 // 必须与全量/增量同步算出来的一致，否则同一部片会在本地落到两棵目录树下，
 // 所以取法与 executeFullSync 完全相同。只解析一次，且只在真要落盘时才解析
 func (s *orgSink) resolveLibName() string {
@@ -113,9 +157,14 @@ func (s *orgSink) resolveLibName() string {
 	return s.libName
 }
 
-// libRel 把库内相对路径拼上库名（STRM 台账里的 RelPath 都带库名前缀）
+// libRel 把库内相对路径拼上当前媒体库的库名（STRM 台账里的 RelPath 都带库名前缀）
 func (s *orgSink) libRel(rel string) string {
-	return path.Join(s.resolveLibName(), strings.Trim(rel, "/"))
+	return path.Join(s.libNameOf(s.cur), strings.Trim(rel, "/"))
+}
+
+// libRelIn 同 libRel，但指定媒体库（重新整理要同时拼旧库与新库的路径）
+func (s *orgSink) libRelIn(cid, rel string) string {
+	return path.Join(s.libNameOf(cid), strings.Trim(rel, "/"))
 }
 
 // commit 把本条目移动完成后的文件落到本地：视频写 .strm，附属文件（字幕/NFO/封面）下载。
@@ -224,11 +273,7 @@ func (s *orgSink) flushScrape() {
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Key < jobs[j].Key })
 	// Emby 刷新尽量交给刮削：刮完只刷一次，Emby 第一次扫到这部片时 NFO 已经在了
-	var refresh []string
-	target, landed := s.refreshTarget()
-	if target != "" {
-		refresh = []string{target}
-	}
+	refresh, landed := s.refreshTarget()
 	if enqueueAutoScrape(s.h.DB, jobs, s.scrapeCfg, refresh, landed) {
 		s.mu.Lock()
 		s.refreshHandedOff = true
@@ -236,22 +281,29 @@ func (s *orgSink) flushScrape() {
 	}
 }
 
-// refreshTarget 本轮要刷的 Emby 目标：受影响的最浅目录（传库根等于全刷）与回查样本
-func (s *orgSink) refreshTarget() (dir string, landed []string) {
+// refreshTarget 本轮要刷的 Emby 目标：受影响的最浅目录（传库根等于全刷）与回查样本。
+// 按媒体库各取一个：几个 115 媒体库常常对应 Emby 里不同的库，只刷最浅的那个会漏掉别的库
+func (s *orgSink) refreshTarget() (dirs []string, landed []string) {
 	s.mu.Lock()
-	dirs := append([]string(nil), s.refreshDirs...)
+	all := append([]string(nil), s.refreshDirs...)
 	landed = append([]string(nil), s.landed...)
 	s.mu.Unlock()
-	if len(dirs) == 0 {
-		return "", nil
-	}
-	shallowest := dirs[0]
-	for _, d := range dirs[1:] {
-		if len(d) < len(shallowest) {
-			shallowest = d
+	shallowest := map[string]string{}
+	var order []string
+	for _, d := range all {
+		lib, _ := splitLibRel(d)
+		cur, ok := shallowest[lib]
+		if !ok {
+			order = append(order, lib)
+		}
+		if !ok || len(d) < len(cur) {
+			shallowest[lib] = d
 		}
 	}
-	return filepath.Join(s.localRoot, filepath.FromSlash(shallowest)), landed
+	for _, lib := range order {
+		dirs = append(dirs, filepath.Join(s.localRoot, filepath.FromSlash(shallowest[lib])))
+	}
+	return dirs, landed
 }
 
 // flushRefresh 通知 Emby 刷新。必须排在 flushScrape 之后：刷新交给了刮削任务的话这里不再刷
@@ -262,7 +314,8 @@ func (s *orgSink) flushRefresh() {
 	if handedOff {
 		return
 	}
-	if dir, landed := s.refreshTarget(); dir != "" {
+	dirs, landed := s.refreshTarget()
+	for _, dir := range dirs {
 		s.h.notifyEmbyRefresh(dir, landed...)
 	}
 }
@@ -546,6 +599,9 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		return
 	}
 	rec.BatchID = s.batchID
+	if rec.TargetDir != "" && rec.LibCid == "" && s.cur != "" {
+		rec.LibCid = s.cur
+	}
 	if rec.RecogKey == "" {
 		rec.RecogKey = s.recog.key
 	}

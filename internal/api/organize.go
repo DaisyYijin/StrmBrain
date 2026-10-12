@@ -51,8 +51,8 @@ type OrgConfig struct {
 	NoTwinHold bool `json:"no_twin_hold"`
 	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
 	ShareCid      string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
-	// OtherLibs 附加媒体库（full.extra_libs，libroots.go）。第 1 期整理还只往主库放，
-	// 它们和工作区根一样只当保护子树：不被当条目整理、不被空目录清理删掉
+	// OtherLibs 附加媒体库（full.extra_libs，libroots.go）。分类规则写了 library 的整理进它们（classify）；
+	// 同时和工作区根一样是保护子树：库根本身不被当条目整理、不被空目录清理删掉
 	OtherLibs []string `json:"-"`
 }
 
@@ -90,6 +90,96 @@ type orgCtx struct {
 	// 顶层清单是开头列好的快照，不跳过的话兄弟文件会被当成新条目再整理一次，
 	// 这时网盘里已经有同一份文件，于是被判「已存在」搬走
 	handled map[string]bool
+
+	// absOf 各媒体库的网盘绝对路径（enterLib 按需取，首个是构造时给的主库 libAbs）
+	absOf map[string]string
+}
+
+// classify 分类，并按命中规则的 library 选定这个条目落进哪个媒体库（libroots.go）：
+// sink 切过去、ctx.libAbs 换成那个库的路径。之后的 ensurePath / 洗版 / 落盘都用 libCid()。
+// 库认不出时返回错误，调用方要在任何网盘写之前停下
+func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
+	category, val := classifyTarget(media)
+	cid, err := c.ruleLib(val)
+	if err != nil {
+		return category, err
+	}
+	c.enterLib(cid)
+	return category, nil
+}
+
+// ruleLib 分类规则的库值 → 库 cid
+func (c *orgCtx) ruleLib(val string) (string, error) {
+	return ruleLibOf(c.cfg, c.sink, val)
+}
+
+// ruleLibOf 分类规则的库值 → 库 cid。没写就是主库，不为它解析任何库名。
+// 库名取自 sink（与落盘同源，一轮只解析一次）
+func ruleLibOf(cfg *OrgConfig, sink *orgSink, val string) (string, error) {
+	if strings.TrimSpace(val) == "" {
+		return cfg.Library, nil
+	}
+	cids := append([]string{cfg.Library}, cfg.OtherLibs...)
+	roots := make([]libRoot, 0, len(cids))
+	for _, cid := range cids {
+		roots = append(roots, libRoot{Cid: cid, Name: sink.libNameOf(sinkLibCid(cfg, cid))})
+	}
+	return pickRuleLib(val, roots)
+}
+
+// sinkCid sink 里主库记作空：cfg.Library 与 sink.libCid 在测试里可能对不上，主库一律按空传
+func (c *orgCtx) sinkCid(cid string) string { return sinkLibCid(c.cfg, cid) }
+
+func sinkLibCid(cfg *OrgConfig, cid string) string {
+	if cid == cfg.Library {
+		return ""
+	}
+	return cid
+}
+
+// recordLibOK 记录所在的媒体库还在配置里（空 = 主库，总是在）
+func recordLibOK(cfg *OrgConfig, libCid string) bool {
+	if libCid == "" || libCid == cfg.Library {
+		return true
+	}
+	for _, c := range cfg.OtherLibs {
+		if c == libCid {
+			return true
+		}
+	}
+	return false
+}
+
+// enterLib 切到某个媒体库（空 = 主库）。每个条目识别前先切回主库，免得沿用上一个条目的库
+func (c *orgCtx) enterLib(cid string) {
+	if c.absOf == nil {
+		c.absOf = map[string]string{c.cfg.Library: c.libAbs}
+	}
+	if cid == "" {
+		cid = c.cfg.Library
+	}
+	c.sink.useLib(c.sinkCid(cid))
+	abs, ok := c.absOf[cid]
+	if !ok {
+		if c.ops != nil && c.ops.cookie != "" {
+			abs = absPathOf(c.ops.cookie, cid)
+		}
+		c.absOf[cid] = abs
+	}
+	c.libAbs = abs
+}
+
+// libName 当前条目落进的媒体库的目录名（台账前缀；洗版、撞名都只比这个库里的）
+func (c *orgCtx) libName() string {
+	return c.sink.libNameOf(c.sink.cur)
+}
+
+// libCid 当前条目落进的媒体库 cid
+func (c *orgCtx) libCid() string {
+	if c.sink != nil && c.sink.cur != "" {
+		return c.sink.cur
+	}
+	return c.cfg.Library
 }
 
 // holdable 这一条要不要停下来等人工确认
@@ -600,6 +690,13 @@ func classifyRules(mediaType string) []model.CategoryRule {
 //
 // 返回空串表示「不要分类子目录」，由 categoryDir 退回媒体类型默认目录。
 func classifyMedia(media *TmdbMedia) string {
+	category, _ := classifyTarget(media)
+	return category
+}
+
+// classifyTarget 同 classifyMedia，另外带回命中那条规则指定的媒体库（YAML 的 library，原样；空 = 主库）。
+// 库值换成 cid 见 pickRuleLib（要认库目录名，得有各库的名字）
+func classifyTarget(media *TmdbMedia) (category, library string) {
 	// 电影和电视剧分开查询
 	mediaType := "movie"
 	if media.MediaType == "tv" {
@@ -609,20 +706,20 @@ func classifyMedia(media *TmdbMedia) string {
 
 	for _, cat := range categories {
 		if matchCategory(&cat, media) {
-			return libSubPath(cat.Name)
+			return libSubPath(cat.Name), cat.Library
 		}
 	}
 
 	// 查找默认分类
 	for _, cat := range categories {
 		if cat.IsDefault {
-			return libSubPath(cat.Name)
+			return libSubPath(cat.Name), cat.Library
 		}
 	}
 
 	// 这一档只在该媒体类型一条规则都没有时才会走到（有兜底规则就轮不到）。
 	// 挂在媒体类型目录下而不是库根，免得库根多出一个孤零零的「未分类」
-	return libSubPath(mediaTypeCategory(mediaType), "未分类")
+	return libSubPath(mediaTypeCategory(mediaType), "未分类"), ""
 }
 
 // categoryDir 分类目录的库内相对路径。分类名为空 = 用户不要分类子目录，
@@ -1348,6 +1445,7 @@ func adoptContainerMeta(ctx *orgCtx, entry dirEntry, remaining []dirEntry, recs 
 		assets = append(assets, remoteFile{Fid: a.Fid, Name: a.Name, PickCode: a.PickCode, Size: a.Size, Sha1: a.Sha1})
 	}
 	media := &TmdbMedia{TmdbID: target.TmdbID, Title: target.Title, Year: target.Year, MediaType: target.MediaType}
+	ctx.enterLib(target.LibCid) // 落盘跟着那条记录所在的媒体库
 	// 不并进任何一季的整理记录：那样从某一季的记录点「深度删除」会把整部剧的 tvshow.nfo 一起删掉，
 	// 「重新整理」某一季也会把它搬走。台账里有它的行（commit 写入），事件深删照常按路径认
 	_, dl := ctx.sink.commit(ops, media, target.TargetDir, target.TargetDir, nil, assets)
@@ -1787,6 +1885,7 @@ func fileKindSummary(files []remoteFile) string {
 // processDir 处理一个子目录（包含多个文件的影视目录）
 func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult {
 	ctx.sink.recog = recogMeta{} // 识别之前就失败的记录不带键
+	ctx.enterLib("")             // 库由分类决定，先切回主库，别沿用上一个条目的
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	var results []OrganizeResult
 
@@ -1968,6 +2067,16 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 	}
 
+	// 分类 + 选库先于去重：去重查的、洗版比的、文件搬去的，都是这个条目将要落进的那个媒体库
+	category, lerr := ctx.classify(media)
+	if lerr != nil {
+		onLog(fmt.Sprintf("✗ %s/ - %v", dir.Name, lerr))
+		results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: lerr.Error()})
+		failMedia("failed", "move", lerr.Error(), media, category, "")
+		return results
+	}
+	libAbs = ctx.libAbs
+
 	// 直接查网盘去重（不依赖本地缓存表，不会过期）
 	// 检查网盘目标目录里是否有相同 SHA1 的文件
 	if len(videoFiles) == 1 && checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
@@ -1984,9 +2093,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		return results
 	}
 
-	// 分类 + 目标目录先算出来：洗版要按「这个新文件将要落到哪个库内目录」去查
+	// 目标目录先算出来：洗版要按「这个新文件将要落到哪个库内目录」去查
 	// 库内现有版本，不能再依赖 MediaLibrary 记录（同步建起来的库没有那张表的行）
-	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, mainVideo.Name)
 	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
 	holdingDir := recognizedHoldingDir(media, parsed, mainVideo.Name)
@@ -2016,7 +2124,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 但**执行**一律攒到判完再发。逐集各发一次 115 写请求要过 3 秒写间隔：
 	// 153 集的动漫光让位 + 移「已存在」就是十几分钟，这段时间整理一直占着 taskMu，
 	// 增量同步每 30 秒来一次全被挡回去（现场日志：转存后 2 分半还没开始整理）
-	sc := newWashScanner(ops, cfg)
+	sc := newWashScanner(ops, cfg).inLib(ctx.libName())
 	st := matchWashStrategy(media.MediaType, category)
 	var accepted []remoteFile
 	planOf := map[string]*washPlan{} // fid → 让旧版让位的计划（撞名停下 / 移走的不执行）
@@ -2249,7 +2357,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 按文件分类移动（规范结构）：
 	//   视频 + 字幕 → 各自的季目录（电影为标题目录，见 placeEntryFiles）；NFO + 标准封面图 → 标题目录；垃圾 → 冗余
 	onLog(fmt.Sprintf("▣ 目标目录就绪: %s", rootRel))
-	rootCid, err := ops.ensurePath(cfg.Library, rootRel)
+	rootCid, err := ops.ensurePath(ctx.libCid(), rootRel)
 	if err != nil {
 		onLog(fmt.Sprintf("✗ %s/ - 创建目录失败: %v（目标=%q）", dir.Name, err, rootRel))
 		results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建目录失败: " + err.Error()})
@@ -2322,7 +2430,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			continue
 		}
 		onLog(fmt.Sprintf("▣ 季目录就绪: %s", rel))
-		cid, err := ops.ensurePath(cfg.Library, rel)
+		cid, err := ops.ensurePath(ctx.libCid(), rel)
 		if err != nil {
 			onLog(fmt.Sprintf("✗ %s/ - 创建季目录失败: %v（目标=%q）", dir.Name, err, rel))
 			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建季目录失败: " + err.Error()})
@@ -2736,7 +2844,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -2759,7 +2867,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 			files: files, decision: decision, holding: holdingDir}
 	}
 
-	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
+	targetCid, err := ops.ensurePath(ctx.libCid(), targetDir)
 	if err != nil {
 		return fail("创建目录失败: " + err.Error())
 	}
@@ -2874,6 +2982,7 @@ func stdPath(p string) string {
 // 同前缀的兄弟文件会并进同一条记录（一部剧 24 集不该刷出 24 行）
 func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.OrganizeRecord) {
 	ctx.sink.recog = recogMeta{}
+	ctx.enterLib("") // 库由分类决定，先切回主库
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
 	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
@@ -2985,7 +3094,13 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	result.Title = media.Title
 	result.Year = media.Year
 	result.MediaType = media.MediaType
-	category := classifyMedia(media)
+	category, lerr := ctx.classify(media)
+	if lerr != nil {
+		onLog(fmt.Sprintf("✗ %s - %v", f.Name, lerr))
+		result.Status, result.Message = "failed", lerr.Error()
+		return fail("failed", "move", lerr.Error())
+	}
+	libAbs = ctx.libAbs
 	newPath, targetDir, rootRel := singleFileTarget(media, category, parsed, f.Name)
 	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
 	if holdingDir == "" {
@@ -3016,7 +3131,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)
@@ -3050,7 +3165,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		prefix, prefixGot := "", false
 		rowsOf := func(dir string) []model.SyncedFile {
 			if !prefixGot {
-				prefix, prefixGot = ledgerPrefixOf(ops, cfg), true
+				prefix, prefixGot = ctx.libName(), true
 			}
 			return libraryFilesOf(dir, prefix)
 		}
@@ -3117,7 +3232,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		}
 	}
 
-	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
+	targetCid, err := ops.ensurePath(ctx.libCid(), targetDir)
 	if err != nil {
 		result.Status = "failed"
 		result.Message = "创建目录失败: " + err.Error()

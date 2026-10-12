@@ -16,6 +16,8 @@ export interface CategoryDraft {
   media: 'movie' | 'tv'
   name: string
   conds: DraftCond[]
+  /** 整理进哪个媒体库（附加媒体库的目录名）；空 = 主媒体库，不写这一行 */
+  library?: string
 }
 
 export interface WashDraft {
@@ -36,6 +38,7 @@ export function categorySnippet(d: CategoryDraft, ruleIndent = 2, condIndent = 4
   const cpad = ' '.repeat(condIndent)
   const lines = [`${pad}${d.name.trim()}:`]
   for (const c of cleanConds(d.conds)) lines.push(`${cpad}${c.key}: '${c.value}'`)
+  if (d.library?.trim()) lines.push(`${cpad}library: '${d.library.trim()}'`)
   return lines.join('\n')
 }
 
