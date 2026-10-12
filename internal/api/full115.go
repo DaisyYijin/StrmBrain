@@ -425,14 +425,13 @@ func relaxMediaPerms(root string) (dirs, files int) {
 	return dirs, files
 }
 
-// orgSkipCids 整理工作区（待整理/已存在/冗余/转存目录）的 cid 集合，
+// orgSkipCids 整理工作区（转存/待整理、已存在、冗余）的 cid 集合，
 // 同步遍历时跳过这些子树——同步媒体库根目录时，工作区里等待处理的
 // 内容不应生成 STRM。rootCid 自身不计入（同步目标就是工作区时照常执行）。
 // 第二个返回值为各槽位的配置情况（"待整理:✓/✗" 列表，供日志诊断配错配漏）
 func (h *Handler) orgSkipCids(rootCid string) (map[string]bool, []string) {
 	skip := map[string]bool{}
 	var orgSkip struct {
-		Pending   string `json:"pending"`
 		Existing  string `json:"existing"`
 		Redundant string `json:"redundant"`
 	}
@@ -443,8 +442,8 @@ func (h *Handler) orgSkipCids(rootCid string) (map[string]bool, []string) {
 	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &shareSkip)
 	slots := make([]string, 0, 4)
 	for _, s := range []struct{ name, cid string }{
-		{"待整理", orgSkip.Pending}, {"已存在", orgSkip.Existing},
-		{"冗余", orgSkip.Redundant}, {"转存目录", shareSkip.Folder},
+		{"转存/待整理", shareSkip.Folder}, {"已存在", orgSkip.Existing},
+		{"冗余", orgSkip.Redundant},
 	} {
 		mark := "✗"
 		if s.cid != "" {

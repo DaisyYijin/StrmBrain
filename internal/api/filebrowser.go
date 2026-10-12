@@ -111,8 +111,8 @@ func (h *Handler) workspaceRoles() map[string]string {
 		}
 	}
 	add(fullCfg.Cid, "library")
-	add(basic.Pending, "pending")
-	add(h.shareFolderCid(), "share")
+	// 转存/待整理是一个目录（stagingdir.go），角色沿用 pending：移动目标与前端都认这个名字
+	add(h.shareFolderCid(), "pending")
 	add(basic.Existing, "existing")
 	add(basic.Redundant, "redundant")
 	return out
@@ -271,7 +271,7 @@ func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCatego
 		a.OrganizeBlock = "不是视频文件"
 	}
 	if !a.Organize && !a.Move {
-		a.Block = "不是视频文件，也没有可移动到的目录（冗余 / 已存在 / 待整理未配置）"
+		a.Block = "不是视频文件，也没有可移动到的目录（冗余 / 已存在 / 转存/待整理都未配置）"
 	}
 	return a
 }

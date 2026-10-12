@@ -445,7 +445,7 @@ const clearHint = computed(() => {
   const label = FILTERS.find((f) => f.key === status.value)?.label ?? '全部'
   const tail =
     status.value === 'awaiting'
-      ? '条目仍留在待整理目录里，下次整理会重新识别并再次等待确认。'
+      ? '条目仍留在转存/待整理目录里，下次整理会重新识别并再次等待确认。'
       : '只删记录，网盘与本地文件不受影响。'
   return `清空「${label}」下的所有记录？${tail}`
 })
@@ -471,7 +471,7 @@ async function clearAll() {
         class="banner"
         :title="`有 ${recordStats.awaiting} 项等你确认后入库`"
       >
-        识别已经完成，文件还留在待整理目录里，确认之前不会搬动。
+        识别已经完成，文件还留在转存/待整理目录里，确认之前不会搬动。
         <template #actions>
           <HButton size="sm" variant="primary" @click="pickStatus('awaiting')">去确认</HButton>
         </template>
@@ -823,7 +823,7 @@ async function clearAll() {
                 <template #content>
                   删除这条记录？只删记录，网盘与本地文件不受影响。
                   <template v-if="r.status === 'awaiting'">
-                    <br />条目仍在待整理目录里，下次整理会重新识别。
+                    <br />条目仍在转存/待整理目录里，下次整理会重新识别。
                   </template>
                 </template>
               </HPopconfirm>

@@ -13,8 +13,13 @@ import (
 
 // ==================== 工作区目录：互斥校验 + 一键创建 ====================
 //
-// 五个目录分存在三个 setting 里：full.cid（媒体库）、share.folder（转存）、
-// org-basic.pending/existing/redundant（待整理/已存在/冗余）。
+// 四个目录分存在三个 setting 里：full.cid（媒体库）、share.folder（转存/待整理）、
+// org-basic.existing/redundant（已存在/冗余）。
+//
+// 转存与待整理原是两个目录（org-basic.pending 另存一份），2026-10-12 合成一个：
+// 两条整理路径（转存触发 / 守望者、定时整理）扫同一个目录时都在 taskMu 上排队，
+// 后跑的那个列出来是空的、按空转处理，不会重复整理。老配置由 MigrateStagingDir 合并，
+// org-basic 里的 pending 字段此后一律不读（SaveSetting 时剥掉，见 stripOrgPending）。
 // 它们之间只要有一对互相包含，后果都落在网盘内容上：
 // 工作区在媒体库里 → 增量把待整理素材当库内变更整棵回退遍历（2026-09-23 现场：
 // 一轮列 296 次目录）；媒体库在工作区里 → 整理把库内内容当素材搬走。
@@ -22,7 +27,7 @@ import (
 
 // wsSlot 一个工作区目录槽位
 type wsSlot struct {
-	key   string // library / share / pending / existing / redundant
+	key   string // library / share / existing / redundant
 	label string
 	cid   string
 }
@@ -33,7 +38,6 @@ const wsRootName = "StrmStation"
 // wsSubDirs 一键创建时每个槽位用的子目录名（媒体库不在此列，它必须由用户自己选）
 var wsSubDirs = map[string]string{
 	"share":     "转存",
-	"pending":   "待整理",
 	"existing":  "已存在",
 	"redundant": "冗余",
 }
@@ -42,7 +46,6 @@ var wsSubDirs = map[string]string{
 var wsSettingOf = map[string][2]string{
 	"library":   {"full", "cid"},
 	"share":     {"share", "folder"},
-	"pending":   {"org-basic", "pending"},
 	"existing":  {"org-basic", "existing"},
 	"redundant": {"org-basic", "redundant"},
 }
@@ -50,8 +53,7 @@ var wsSettingOf = map[string][2]string{
 // wsSlotOrder 固定顺序，报错文案与测试都依赖它稳定
 var wsSlotOrder = []struct{ key, label string }{
 	{"library", "115 媒体库目录"},
-	{"share", "转存目录"},
-	{"pending", "待整理目录"},
+	{"share", "转存/待整理目录"},
 	{"existing", "已存在目录"},
 	{"redundant", "冗余目录"},
 }
@@ -66,7 +68,7 @@ func jsonStrField(raw, field string) string {
 	return strings.TrimSpace(s)
 }
 
-// workspaceSlots 按 setting 原文拼出五个槽位。getter 是「key → JSON 原文」
+// workspaceSlots 按 setting 原文拼出四个槽位。getter 是「key → JSON 原文」
 func workspaceSlots(getter func(key string) string) []wsSlot {
 	out := make([]wsSlot, 0, len(wsSlotOrder))
 	for _, s := range wsSlotOrder {
@@ -92,7 +94,7 @@ func wsContains(b, a string) bool {
 //   - cid 相同直接判冲突，不查接口；
 //   - 改动过的槽位强制重查（刚选的目录，缓存里多半没有，有也不该信）；
 //     没改动的走 PathCache，命中就不打接口。一次请求拿整条祖先链，
-//     所以每个目录最多一次请求，五个槽位最多五次。
+//     所以每个目录最多一次请求，四个槽位最多四次。
 //   - 只比较「至少一方改动过」的那些对：两个没动过的旧槽位之间即使有问题，
 //     也不该拦住这次无关的保存（它们会在用户改其中之一时被拦下）。
 //
@@ -224,7 +226,7 @@ func (h *Handler) mergeSettingFields(key string, fields map[string]string) error
 	return h.Config.SaveSetting(key, string(b))
 }
 
-// InitWorkspaceDirs 一键创建工作目录：网盘根下 /StrmStation/{转存,待整理,已存在,冗余}，
+// InitWorkspaceDirs 一键创建工作目录：网盘根下 /StrmStation/{转存,已存在,冗余}，
 // 只补还没配置的槽位，已配置的一个都不动。同名目录已存在就直接复用（ensurePath 先查后建）。
 // POST /organize/workspace/init
 func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
@@ -312,7 +314,7 @@ func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
 	}
 
 	orgFields := map[string]string{}
-	for _, k := range []string{"pending", "existing", "redundant"} {
+	for _, k := range []string{"existing", "redundant"} {
 		if cid, ok := created[k]; ok {
 			orgFields[k] = cid
 			orgFields[k+"_path"] = paths[k]
@@ -326,7 +328,7 @@ func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
 	}
 	if cid, ok := created["share"]; ok {
 		if err := h.mergeSettingFields("share", map[string]string{"folder": cid, "folder_path": paths["share"]}); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存转存目录配置失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "保存转存/待整理目录配置失败: " + err.Error()})
 			return
 		}
 	}

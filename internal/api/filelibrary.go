@@ -284,7 +284,7 @@ func (h *Handler) MoveFiles(c *gin.Context) {
 // roleCid 工作区角色 → cid
 func roleCid(roles map[string]string, role string) (string, error) {
 	if !fileMoveTargets[role] {
-		return "", errors.New("只能移动到 冗余 / 已存在 / 待整理")
+		return "", errors.New("只能移动到 冗余 / 已存在 / 转存/待整理")
 	}
 	for cid, r := range roles {
 		if r == role {
@@ -415,7 +415,7 @@ func execFileMoveJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		msg += fmt.Sprintf("（其中 %d 部移出媒体库，本地 STRM 与元数据已清理）", len(libs))
 	}
 	if fp.Target == "pending" {
-		msg += "；下一轮自动整理会重新识别它们"
+		msg += "；守望者约一分钟内会接管、重新识别它们"
 	}
 	if len(res.Skipped) > 0 {
 		msg += fmt.Sprintf("；%d 项未移动：%s", len(res.Skipped), truncateStr(strings.Join(res.Skipped, "；"), 200))

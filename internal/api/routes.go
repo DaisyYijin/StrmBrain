@@ -92,6 +92,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	h.MigrateStrmISOExt()
 	// Emby 路径映射本地一侧开放填写之前，老配置里自动写入的旧值清掉（一次性，embylibrary.go）
 	h.MigrateEmbyLocalSide()
+	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
+	// 要赶在下面的调度器 / 守望者起来之前
+	h.MigrateStagingDir()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 
@@ -1074,12 +1077,7 @@ func (h *Handler) SystemGuide(c *gin.Context) {
 	var tmdbCfg model.TmdbConfig
 	guide["tmdb"] = h.DB.First(&tmdbCfg).Error == nil && tmdbCfg.ApiKey != ""
 	// 3. 整理目录
-	type orgBasic struct {
-		Pending string `json:"pending"`
-	}
-	var ob orgBasic
-	_ = json.Unmarshal([]byte(h.getSettingValue("org-basic")), &ob)
-	guide["orgDirs"] = ob.Pending != ""
+	guide["orgDirs"] = h.shareFolderCid() != ""
 	// 4. 首次同步
 	var synced int64
 	h.DB.Model(&model.SyncedFile{}).Count(&synced)
@@ -1685,7 +1683,11 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 	if sensitiveSettingKeys[req.Key] {
 		req.Value = unmaskSensitiveJSON(req.Value, h.settingValueRaw(req.Key))
 	}
-	// 媒体库 / 转存 / 待整理 / 已存在 / 冗余 必须互不包含，见 workspace.go
+	// 待整理已并进转存（stagingdir.go）：老前端整存 org-basic 时带回来的 pending 不落库
+	if req.Key == "org-basic" {
+		req.Value, _ = stripOrgPending(req.Value)
+	}
+	// 媒体库 / 转存（待整理）/ 已存在 / 冗余 必须互不包含，见 workspace.go
 	if err := h.guardWorkspaceSetting(req.Key, req.Value); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

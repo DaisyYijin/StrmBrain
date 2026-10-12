@@ -61,7 +61,7 @@ import HelpDoc from '@/components/ui/HelpDoc.vue'
       <h3 class="block-title">哪些不归它管</h3>
       <ul class="ul">
         <li>
-          <strong>工作区里的变动</strong>：待整理、已存在、冗余、转存目录里的增删改一概不监控——
+          <strong>工作区里的变动</strong>：转存/待整理、已存在、冗余目录里的增删改一概不监控——
           那是自动整理的地盘，整理完搬进媒体库才算数
         </li>
         <li>

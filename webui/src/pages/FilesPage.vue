@@ -53,8 +53,9 @@ const router = useRouter()
 
 const ROLE_TEXT: Record<WorkspaceRole, string> = {
   library: '媒体库',
-  pending: '待整理',
-  share: '转存',
+  // 转存与待整理已是同一个目录，后端只给 pending；share 留着兼容
+  pending: '转存/待整理',
+  share: '转存/待整理',
   existing: '已存在',
   redundant: '冗余',
 }

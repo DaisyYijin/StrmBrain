@@ -1,7 +1,8 @@
-/** org-basic 这个 setting key 的形状：整理的三个工作目录 + 人工确认开关（「基础配置」页签） */
+/**
+ * org-basic 这个 setting key 的形状：已存在 / 冗余两个工作目录 + 人工确认开关（「基础配置」页签）。
+ * 原来的 pending（待整理）已并进 setting `share`（转存/待整理，见 composables/stagingDir.ts），后端保存时会剥掉它
+ */
 export interface OrgBasic {
-  pending: string
-  pending_path: string
   existing: string
   existing_path: string
   redundant: string
@@ -17,8 +18,6 @@ export interface OrgBasic {
 }
 
 export const ORG_BASIC_DEFAULTS: OrgBasic = {
-  pending: '',
-  pending_path: '',
   existing: '',
   existing_path: '',
   redundant: '',

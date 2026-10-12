@@ -80,7 +80,7 @@ func TestIncrDirDeleteIgnoresStaleCachedName(t *testing.T) {
 // 缓存说这个目录在整理工作区里：不动媒体库
 func TestIncrDirDeleteInWorkspaceIgnored(t *testing.T) {
 	h, d, p := newIncrTestEnv(t, "incr_dirdel_ws.db")
-	d.settings["org-basic"] = `{"pending":"w1"}`
+	d.settings["share"] = `{"folder":"w1"}`
 	d.abs["w1"] = "/影视/待整理"
 	mkTree(t, p.LocalPath, "媒体库/剧集/X/Season 0/特别篇.strm")
 	d.cachedAbs["s0"] = "/影视/待整理/X/Season 0"

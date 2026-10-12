@@ -53,7 +53,7 @@ watch(
 )
 
 /**
- * 工作目录（转存 / 待整理 / 已存在 / 冗余）的现状，连同媒体库一起在「工作目录」卡里列出来。
+ * 工作目录（转存/待整理、已存在、冗余）的现状，连同媒体库一起在「工作目录」卡里列出来。
  * 路径只为显示而存（*_path / folder_path）；没存路径的老配置退回显示 cid。
  */
 const wsRaw = ref<{ org: Record<string, string>; share: Record<string, string> } | null>(null)
@@ -61,11 +61,13 @@ const creatingWs = ref(false)
 
 async function loadMissingWs() {
   try {
-    const [org, share] = await Promise.all([
+    const [org, share, legacy] = await Promise.all([
       configApi.getSetting<Record<string, string>>('org-basic', {}),
       configApi.getSetting<Record<string, string>>('share', {}),
+      configApi.getSetting<{ cid?: string; path?: string }>('staging_legacy', {}),
     ])
     wsRaw.value = { org, share }
+    wsLegacy.value = legacy.cid ? legacy.path || `cid ${legacy.cid}` : ''
   } catch {
     wsRaw.value = null
   }
@@ -83,16 +85,27 @@ const wsSlots = computed<WsSlot[]>(() => {
   return [
     slot('library', lib.cid, lib.cid_path),
     slot('share', share.folder, share.folder_path),
-    slot('pending', org.pending, org.pending_path),
     slot('existing', org.existing, org.existing_path),
     slot('redundant', org.redundant, org.redundant_path),
   ]
 })
-const LABELS: Record<string, string> = { share: '转存', pending: '待整理', existing: '已存在', redundant: '冗余' }
+/** 一键创建时的子目录名（与后端 wsSubDirs 一致），不是界面上的槽位名 */
+const LABELS: Record<string, string> = { share: '转存', existing: '已存在', redundant: '冗余' }
 /** 媒体库以外还缺的；媒体库没保存时后端会拒绝一键创建，按钮也不出 */
 const missingWs = computed(() =>
   wsRaw.value ? wsSlots.value.filter((s) => s.key !== 'library' && !s.configured).map((s) => LABELS[s.key]) : [],
 )
+
+/** 待整理并进转存时被弃用的旧目录（后端 stagingdir.go）；点「知道了」清掉 */
+const wsLegacy = ref('')
+async function dismissLegacy() {
+  try {
+    await configApi.saveSetting('staging_legacy', {})
+    wsLegacy.value = ''
+  } catch (e) {
+    toastError(e, '操作失败')
+  }
+}
 
 async function createWs() {
   const ok = await dialog.confirm({
@@ -354,7 +367,9 @@ onMounted(() => {
           :slots="wsSlots"
           :can-create="!!media.saved.value.cid && missingWs.length > 0"
           :creating="creatingWs"
+          :legacy="wsLegacy"
           @create="createWs"
+          @dismiss-legacy="dismissLegacy"
         />
       </div>
     </div>

@@ -290,7 +290,6 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	}
 	var excludedAbs []string
 	var orgCfgRaw struct {
-		Pending   string `json:"pending"`
 		Existing  string `json:"existing"`
 		Redundant string `json:"redundant"`
 	}
@@ -301,7 +300,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		Folder string `json:"folder"`
 	}
 	_ = json.Unmarshal([]byte(d.setting("share")), &shareCfgRaw)
-	for _, cid := range []string{orgCfgRaw.Pending, orgCfgRaw.Existing, orgCfgRaw.Redundant, shareCfgRaw.Folder} {
+	for _, cid := range []string{shareCfgRaw.Folder, orgCfgRaw.Existing, orgCfgRaw.Redundant} {
 		if cid != "" {
 			if a := d.absPath(cid); a != "" {
 				excludedAbs = append(excludedAbs, strings.TrimSuffix(a, "/"))
@@ -313,7 +312,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 直接中止本次增量——事件一条都不拉取消费，修正配置后原样补上
 	for _, ex := range excludedAbs {
 		if libAbs != "" && strings.HasPrefix(strings.TrimSuffix(libAbs, "/")+"/", ex+"/") {
-			lg.infof("⚠ 整理目录（%s）把整个媒体库都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把待整理/已存在/冗余目录改到媒体库外面", ex)
+			lg.infof("⚠ 整理目录（%s）把整个媒体库都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把转存/待整理、已存在、冗余目录改到媒体库外面", ex)
 			return sum, fmt.Errorf("配置错误：工作区目录 %s 覆盖了整个媒体库 %s，增量同步中止（事件未消费，修正配置后重试即可补上）", ex, libAbs)
 		}
 	}

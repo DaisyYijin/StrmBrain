@@ -194,47 +194,26 @@ func (h *Handler) triggerOrganizeAndSync() (model.TaskJob, error) {
 		Source: "auto", Priority: jobPriorityBackground})
 }
 
-// runTransferOrganize 整理转存目录（没配就扫待整理）再跑一轮增量。调用方（队列 worker）持有 taskMu。
+// runTransferOrganize 整理转存/待整理目录再跑一轮增量。调用方（队列 worker）持有 taskMu。
 // 返回整理处理了几个条目与增量的结果
 func (h *Handler) runTransferOrganize() (int, *incrSummary, error) {
 	time.Sleep(3 * time.Second) // 沉淀：115 刚转存 / 刚下完时目录列表偶尔还没刷出来
 
 	start := time.Now()
 
-	// 整理：直接扫描转存目录（转存触发时不需要扫待整理目录）
+	// 整理：扫转存/待整理目录（loadOrgConfig 的扫描根就是它，stagingdir.go）
 	organized := 0 // 本轮整理处理了几个条目（0 且增量也没产出 = 空转，任务历史里不留）
-	shareFolder := ""
-	var shareCfg struct {
-		Folder string `json:"folder"`
-	}
-	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &shareCfg)
-	shareFolder = shareCfg.Folder
-
-	if shareFolder != "" {
-		orgCfg, err := h.loadOrgConfig()
-		if err != nil {
-			log.Printf("[上传] ○ 整理跳过（配置缺失）: %v", err)
-		} else if h.dirOverlapWithLibrary(shareFolder, orgCfg.Library) {
-			// 转存目录与媒体库存在包含关系（转存进了库里，或转存目录覆盖整个库）：
-			// 扫描会波及库内容，直接放弃本次自动整理（引擎层守卫之外的第二道防线）
-			log.Printf("[上传] ⚠ 转存目录与媒体库存在包含关系，跳过自动整理以防误搬库内容，请到「分享同步」修正转存目录")
-		} else {
-			// 转存目录作为待整理目录
-			if orgCfg.Pending != shareFolder {
-				orgCfg.Pending = shareFolder
-			}
-			_, details, orgErr := h.executeOrganizeWithConfig(orgCfg)
-			organized = len(details)
-			if orgErr != nil {
-				log.Printf("[上传] ○ 转存目录整理失败: %v", orgErr)
-			}
-		}
+	if orgCfg, err := h.loadOrgConfig(); err != nil {
+		log.Printf("[上传] ○ 整理跳过（配置缺失）: %v", err)
+	} else if h.dirOverlapWithLibrary(orgCfg.Pending, orgCfg.Library) {
+		// 转存/待整理目录与媒体库存在包含关系（建在了库里，或覆盖整个库）：
+		// 扫描会波及库内容，直接放弃本次自动整理（引擎层守卫之外的第二道防线）
+		log.Printf("[上传] ⚠ 转存/待整理目录与媒体库存在包含关系，跳过自动整理以防误搬库内容，请到「自动整理 → 基础配置」修正")
 	} else {
-		// 没配转存目录，退回到扫待整理目录
-		_, details, orgErr := h.executeOrganize()
+		_, details, orgErr := h.executeOrganizeWithConfig(orgCfg)
 		organized = len(details)
 		if orgErr != nil {
-			log.Printf("[上传] ○ 整理跳过: %v", orgErr)
+			log.Printf("[上传] ○ 转存/待整理目录整理失败: %v", orgErr)
 		}
 	}
 
@@ -742,30 +721,13 @@ func fetchOfflineTaskList(cookie string) ([]offlineTaskInfo, error) {
 	return tasks, nil
 }
 
-// shareFolderCid 读取分享同步配置的转存目录 cid（未配置返回空）
+// shareFolderCid 转存/待整理目录 cid（setting share.folder；未配置返回空）
 func (h *Handler) shareFolderCid() string {
 	var cfg struct {
 		Folder string `json:"folder"`
 	}
 	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &cfg)
 	return cfg.Folder
-}
-
-// dirInside 判断 childCid 是否位于 parentCid 子树内（含相等），取不到路径返回 false
-func (h *Handler) dirInside(childCid, parentCid string) bool {
-	if childCid == "" || parentCid == "" || childCid == parentCid {
-		return childCid == parentCid && childCid != ""
-	}
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		return false
-	}
-	childAbs := strings.TrimSuffix(absPathOf(cookie, childCid), "/")
-	parentAbs := strings.TrimSuffix(absPathOf(cookie, parentCid), "/")
-	if childAbs == "" || parentAbs == "" {
-		return false
-	}
-	return childAbs == parentAbs || strings.HasPrefix(childAbs+"/", parentAbs+"/")
 }
 
 // dirOverlapWithLibrary 判断转存目录与媒体库是否存在包含关系

@@ -48,27 +48,8 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	logFn := func(msg string) { log.Println(msg) }
 	orgResults, successCount := runOrganizeEngine(ops, orgCfg, sink, logFn)
 
-	// 转存目录兜底扫描：磁力/离线下载完成时间不可控（提交 60 秒后的自动触发
-	// 可能扑空），手动/定时整理时顺带扫一遍转存目录，保证迟到内容最终被整理。
-	//
-	// 先列目录（1 次读请求），空的就到此为止 —— 两个重叠守卫要爬目录链算绝对路径，
-	// 而绝大多数轮次转存目录是空的，没必要为「没活干」先付那几次请求。
-	// 守卫仍然排在**任何整理动作之前**，安全性不变
-	if shareCid := h.shareFolderCid(); shareCid != "" && shareCid != orgCfg.Pending {
-		if entries, _, lerr := ops.listEntries(shareCid, 0); lerr == nil && len(entries) > 0 {
-			// 转存目录在待整理子树内（会被上面的扫描覆盖）或与媒体库重叠时跳过
-			if h.dirOverlapWithLibrary(shareCid, orgCfg.Library) || h.dirInside(shareCid, orgCfg.Pending) {
-				log.Printf("[整理] ○ 转存目录与媒体库/待整理目录重叠，跳过兜底扫描")
-			} else {
-				log.Printf("[整理] ▶ 顺带扫描转存目录（%d 个条目）", len(entries))
-				shareCfg := *orgCfg
-				shareCfg.Pending = shareCid
-				shareResults, shareOK := runOrganizeEngineWithConfig(ops, &shareCfg, sink, logFn)
-				orgResults = append(orgResults, shareResults...)
-				successCount += shareOK
-			}
-		}
-	}
+	// 原来这里还要「顺带扫一遍转存目录」：转存与待整理已合成一个目录（stagingdir.go），
+	// 上面扫的就是它
 
 	totalFiles := len(orgResults)
 	existsCount, failedCount, awaitingCount := 0, 0, 0

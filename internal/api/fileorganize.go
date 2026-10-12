@@ -95,10 +95,8 @@ func workspaceRoleText(role string) string {
 	switch role {
 	case "library":
 		return "媒体库"
-	case "pending":
-		return "待整理"
-	case "share":
-		return "转存"
+	case "pending", "share":
+		return "转存/待整理"
 	case "existing":
 		return "已存在"
 	case "redundant":

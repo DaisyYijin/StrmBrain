@@ -12,7 +12,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
 /**
- * 移动到 冗余 / 已存在 / 待整理。
+ * 移动到 冗余 / 已存在 / 转存/待整理。
  * 从媒体库里移出片目会删掉本地 STRM、元数据与台账，Emby 里的条目随之消失 —— 要勾确认才能提交。
  */
 const props = defineProps<{
@@ -30,7 +30,7 @@ const queue = useQueueStore()
 const TARGETS: { value: MoveTarget; label: string; note: string }[] = [
   { value: 'redundant', label: '冗余', note: '放着不管：不会被自动整理，也不在媒体库里。' },
   { value: 'existing', label: '已存在', note: '当作重复版本收起来：不会被自动整理，也不在媒体库里。' },
-  { value: 'pending', label: '待整理', note: '下一轮自动整理会重新识别并入库；开着「人工确认」时会先停在待确认。' },
+  { value: 'pending', label: '转存/待整理', note: '守望者约一分钟内接管，重新识别并入库；开着「人工确认」时会先停在待确认。' },
 ]
 
 const options = computed(() =>

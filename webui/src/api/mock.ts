@@ -264,14 +264,12 @@ const SETTINGS: Record<string, unknown> = {
   monitor: { enabled: false },
   'org-basic': {
     manual_confirm: true,
-    pending: '301',
-    pending_path: '/StrmStation/待整理',
     existing: '303',
     existing_path: '/StrmStation/已存在',
     redundant: '',
     redundant_path: '',
   },
-  share: { folder: '302', folder_path: '/StrmStation/转存' },
+  share: { folder: '301', folder_path: '/StrmStation/转存' },
 }
 
 /** 网盘文件页（/files/115?cid=…）：一棵小目录树 */
@@ -279,7 +277,7 @@ const d = (id: string, name: string, root?: string) => ({ id, name, is_dir: true
 const f = (id: string, name: string, size: number) => ({ id, name, is_dir: false, size, pickcode: 'pc' + id })
 const FILE_TREE: Record<string, unknown[]> = {
   '0': [d('2894561234', '媒体库', 'library'), d('300', 'StrmStation'), d('400', '我的资源'), f('9001', '说明.txt', 1_200)],
-  '300': [d('301', '待整理', 'pending'), d('302', '转存', 'share'), d('303', '已存在', 'existing'), d('304', '冗余', 'redundant')],
+  '300': [d('301', '转存', 'pending'), d('303', '已存在', 'existing'), d('304', '冗余', 'redundant')],
   '301': [
     d('3011', '沙丘2.Dune.Part.Two.2024.2160p.WEB-DL'),
     d('3012', 'The.Last.of.Us.S01.1080p'),
@@ -290,7 +288,7 @@ const FILE_TREE: Record<string, unknown[]> = {
   '201': [d('2011', '科幻电影'), d('2012', '动画电影')],
   '2011': [d('20111', '沙丘 (2021) [tmdb=438631]'), d('20112', '星际穿越 (2014) [tmdb=157336]')],
 }
-const FILE_ROOTS = { '2894561234': 'library', '301': 'pending', '302': 'share', '303': 'existing', '304': 'redundant' }
+const FILE_ROOTS = { '2894561234': 'library', '301': 'pending', '303': 'existing', '304': 'redundant' }
 
 type Route = unknown | ((q: URLSearchParams) => unknown)
 

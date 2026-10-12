@@ -181,12 +181,12 @@ func TestIncrAbortsWhenLibraryPathUnresolvable(t *testing.T) {
 	}
 }
 
-// 工作区目录（待整理/已存在/冗余/转存）覆盖了整个媒体库时同样熔断：
+// 工作区目录（转存/待整理、已存在、冗余）覆盖了整个媒体库时同样熔断：
 // 此时排除区判定会吞掉所有库内事件，继续跑就是把媒体库当垃圾区处理
 func TestIncrAbortsWhenWorkspaceCoversLibrary(t *testing.T) {
 	h, d, p := newIncrTestEnv(t, "incrflow_cover.db")
-	d.settings["org-basic"] = `{"pending":"w1"}`
-	d.abs["w1"] = "/影视" // 待整理目录选在了媒体库根上
+	d.settings["share"] = `{"folder":"w1"}`
+	d.abs["w1"] = "/影视" // 转存/待整理目录选在了媒体库根上
 
 	if _, err := h.executeIncrementalSyncWith(d, p); err == nil {
 		t.Fatal("工作区覆盖整个媒体库时必须报错中止")

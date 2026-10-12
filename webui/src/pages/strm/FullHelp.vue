@@ -14,7 +14,7 @@ import HelpDoc from '@/components/ui/HelpDoc.vue'
         每个产物都记一条<strong>台账</strong>（本地相对路径 ↔ 115 文件 id）。
       </p>
       <p class="p">
-        整理的工作区目录（待整理 / 已存在 / 冗余 / 转存）会被排除在外，不会被当成媒体同步。
+        整理的工作区目录（转存/待整理、已存在、冗余）会被排除在外，不会被当成媒体同步。
         本地已经有的 STRM 是覆盖还是跳过，取决于「STRM 配置」里的设置。
       </p>
     </section>

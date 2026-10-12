@@ -1,48 +1,56 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
-import { Archive, ChevronRight, Copy, FolderInput, FolderPlus, Inbox, Library } from '@lucide/vue'
+import { Archive, ChevronRight, Copy, FolderInput, FolderPlus, Library } from '@lucide/vue'
+import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 
 /**
- * 五个工作目录一览。原来这一页只在「缺了」的时候冒一条黄色提示，
+ * 四个工作目录一览。原来这一页只在「缺了」的时候冒一条黄色提示，
  * 配好了反而看不到它们各在哪、各管什么 —— 而它们互不包含这条约束（workspace.go）恰恰要一眼看全才好判断。
- * 目录本身在各自的页面改（转存在影视转存、另外三个在自动整理），这里只负责看和跳过去；
+ * 目录本身在各自的页面改（转存/待整理、已存在、冗余都在自动整理；转存/待整理在影视转存里也能改），这里只负责看和跳过去；
  * 媒体库目录在本页「媒体库位置」卡里改。
  */
 export interface WsSlot {
-  key: 'library' | 'share' | 'pending' | 'existing' | 'redundant'
+  key: 'library' | 'share' | 'existing' | 'redundant'
   /** 已配置时的显示路径（没存路径的老配置退回 cid） */
   path: string
   configured: boolean
 }
 
-defineProps<{ slots: WsSlot[]; canCreate: boolean; creating?: boolean }>()
-const emit = defineEmits<{ create: [] }>()
+/** legacy：合并时被弃用的旧待整理目录（后端 stagingdir.go 记的），用户点「知道了」之前一直提示 */
+defineProps<{ slots: WsSlot[]; canCreate: boolean; creating?: boolean; legacy?: string }>()
+const emit = defineEmits<{ create: []; dismissLegacy: [] }>()
 
 const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component; to?: RouteLocationRaw }> = {
   library: { label: '媒体库', desc: '整理入库的目的地，同步与洗版都以它为准', icon: Library },
   share: {
-    label: '转存',
-    desc: '分享转存 / 离线下载落地，守望者自动接管整理',
+    label: '转存/待整理',
+    desc: '转存、离线下载落地，手动要整理的也放这里，守望者每分钟接管',
     icon: FolderInput,
-    to: { name: 'media-transfer', query: { tab: 'settings' } },
+    to: { name: 'organize', query: { tab: 'basic' } },
   },
-  pending: { label: '待整理', desc: '手动丢进来的素材，定时整理会处理', icon: Inbox, to: { name: 'organize', query: { tab: 'basic' } } },
   existing: { label: '已存在', desc: '洗版判输或重复的文件搬到这里', icon: Copy, to: { name: 'organize', query: { tab: 'basic' } } },
   redundant: { label: '冗余', desc: '被新版本替换下来的旧文件', icon: Archive, to: { name: 'organize', query: { tab: 'basic' } } },
 }
 </script>
 
 <template>
-  <SectionCard title="工作目录" hint="五个目录必须互不包含；整理在它们之间搬运文件">
+  <SectionCard title="工作目录" hint="四个目录必须互不包含；整理在它们之间搬运文件">
     <template v-if="canCreate" #extra>
       <HButton variant="secondary" size="sm" :loading="creating" @click="emit('create')">
         <template #icon><FolderPlus :size="15" /></template>
         一键创建缺少的
       </HButton>
     </template>
+
+    <HAlert v-if="legacy" status="warning" title="待整理已并进转存目录" class="ws-legacy">
+      原来的待整理目录（{{ legacy }}）不再自动整理。里面如果还有要整理的，请移到上面的转存/待整理目录。
+      <template #actions>
+        <HButton variant="tertiary" size="sm" @click="emit('dismissLegacy')">知道了</HButton>
+      </template>
+    </HAlert>
 
     <ul class="ws">
       <li v-for="s in slots" :key="s.key" class="ws-item" :class="{ 'is-missing': !s.configured }">
@@ -65,6 +73,9 @@ const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component
 </template>
 
 <style scoped>
+.ws-legacy {
+  margin-bottom: 12px;
+}
 .ws {
   margin: -4px 0;
   padding: 0;

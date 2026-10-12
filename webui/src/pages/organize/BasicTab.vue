@@ -18,6 +18,7 @@ import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSett
 import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { confirmUnsaved } from '@/composables/confirmUnsaved'
+import { useStagingDir } from '@/composables/stagingDir'
 import { ORG_BASIC_DEFAULTS } from './orgBasic'
 
 const { message } = useFeedback()
@@ -46,16 +47,19 @@ async function checkTmdb(): Promise<boolean> {
 }
 onMounted(() => { void checkTmdb() })
 
-/** 本页只用得上三个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
-const { model, saving, save, load, dirty: settingDirty } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
+/** 本页只用得上两个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
+const { model, saving: orgSaving, save, load, dirty: settingDirty } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
 
-type DirKey = 'pending' | 'existing' | 'redundant'
+/**
+ * 转存/待整理目录不在 org-basic 里，存在 setting `share`（2026-10-12 与转存合并，后端 stagingdir.go）。
+ * 「影视转存 → 设置」里也能改同一个值
+ */
+const staging = useStagingDir()
+const stagingValue = staging.value
+const saving = computed(() => orgSaving.value || staging.saving.value)
+
+type DirKey = 'existing' | 'redundant'
 const DIRS: { key: DirKey; label: string; tip: string }[] = [
-  {
-    key: 'pending',
-    label: '待整理文件夹',
-    tip: '存放刚转存或下载的原始资源，整理引擎从这里扫描。建议用非媒体库内的文件夹，如 /影视库/等待整理。',
-  },
   {
     key: 'existing',
     label: '已存在文件夹',
@@ -69,7 +73,6 @@ const DIRS: { key: DirKey; label: string; tip: string }[] = [
 ]
 
 const cids = ref<Record<DirKey, { cid: string; path: string }>>({
-  pending: { cid: '', path: '' },
   existing: { cid: '', path: '' },
   redundant: { cid: '', path: '' },
 })
@@ -151,7 +154,7 @@ async function saveCron(): Promise<boolean> {
 }
 
 /**
- * 三个目录输入框只写在 cids 上，要 saveAll 时才经 resolveAll 回填 model，
+ * 两个目录输入框只写在 cids 上，要 saveAll 时才经 resolveAll 回填 model，
  * 所以 useSetting 的 dirty 看不见它们，得单独比一次。
  *
  * 比 cid 不比 path：Cid115Input 在路径一改就把 cid 作废（解析成功才填回），
@@ -163,10 +166,10 @@ const dirsDirty = computed(() =>
 
 /** 整理跑的配置全部从库里读，所以本页任何一处没保存都要拦 */
 const dirty = computed(
-  () => settingDirty.value || dirsDirty.value || cron.value.trim() !== cronSaved.value,
+  () => settingDirty.value || dirsDirty.value || staging.dirty.value || cron.value.trim() !== cronSaved.value,
 )
 
-/** 三个目录都要在保存前确认 cid 可信；任一失配就整体拦下 */
+/** 两个目录都要在保存前确认 cid 可信；任一失配就整体拦下 */
 async function resolveAll(): Promise<boolean> {
   for (const { key, label } of DIRS) {
     const raw = cids.value[key].path.trim()
@@ -190,18 +193,18 @@ async function resolveAll(): Promise<boolean> {
 
 async function saveAll(): Promise<boolean> {
   if (!(await resolveAll())) return false
+  // 转存/待整理是另一个 setting，改过才存；后端会校验它和已存在 / 冗余互不包含
+  if (staging.dirty.value && !(await staging.save())) return false
   if (!(await saveCron())) return false
   // org-basic 是整对象覆盖存：先把库里最新的拉回来，再盖上本页的字段，
   // 库里有而本页不管的字段（后端另写的）就不会被打开本页时的旧值还原
   const mine = pickMine()
   await load()
   Object.assign(model.value, mine)
-  const ok = await save()
-  warnOverlap()
-  return ok
+  return save()
 }
 
-/** 本页管的字段：resolveAll 回填的六个目录 + 人工确认开关 + 同集多份超时 */
+/** 本页管的字段：resolveAll 回填的两个目录（含路径）+ 人工确认开关 + 同集多份超时 */
 function pickMine() {
   const d: Record<string, string | boolean | number> = {
     manual_confirm: model.value.manual_confirm,
@@ -214,15 +217,6 @@ function pickMine() {
     d[`${key}_path`] = model.value[`${key}_path` as const]
   }
   return d
-}
-
-/** 待整理目录可以在媒体库内部（常见布局），只警告「覆盖整个库」这种危险方向 */
-function warnOverlap() {
-  const norm = (p: string) => p.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  const p = norm(cids.value.pending.path)
-  if (p && p !== '/' && p.length <= 1) {
-    message.warning('待整理目录看起来覆盖到整个媒体库，库内条目会被跳过，建议改为库内子目录或与库平级')
-  }
 }
 
 /** 按钮上的 popconfirm 文案；配置改过时这个气泡不弹，由未保存确认框接管 */
@@ -246,7 +240,7 @@ const DUP_ACTIONS = [
   { label: '超时后留推荐的，没有推荐就都保留', value: 'recommend' as const },
 ]
 
-const runHint = '确定开始整理？会扫描待整理目录并搬移文件。'
+const runHint = '确定开始整理？会扫描转存/待整理目录并搬移文件。'
 
 async function runOrganize() {
   if (!(await checkTmdb())) return
@@ -282,12 +276,12 @@ const PIPELINE = ['识别', '二级分类', '洗版', '重命名', '搬入媒体
  * 所有触发都只入任务队列，排着就不会丢 —— 原文里「每分钟重试补上」「5 分钟冷却」已随改造删除
  */
 const TRIGGERS: { name: string; text: string }[] = [
-  { name: '定时', text: '上面的定时整理到点入队，扫待整理目录（顺带扫一次转存目录）；关掉只是不定时跑，其余触发照常' },
+  { name: '定时', text: '上面的定时整理到点入队，扫转存/待整理目录；关掉只是不定时跑，守望者照样每分钟接管' },
   { name: '手动', text: '下面的「开始整理」，扫的目录同上；排队时优先于后台任务' },
   { name: '机器人', text: '给企微 / TG 机器人发「整理」，和手动一样' },
   { name: '转存完成', text: '影视转存（含机器人找资源）的分享转存成功后入队' },
   { name: '离线下载', text: '离线任务下载完成后入队（同时发完成通知）' },
-  { name: '守望者', text: '每分钟看一眼转存目录，有内容就接管，兜住上面两种扑空的情况' },
+  { name: '守望者', text: '每分钟看一眼转存/待整理目录，有内容就接管：手动放进来的，和上面两种扑空的' },
 ]
 </script>
 
@@ -314,7 +308,7 @@ const TRIGGERS: { name: string; text: string }[] = [
 
         <FieldRow
           label="人工确认"
-          tip="打开后整理识别完就停下：条目原地留在待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
+          tip="打开后整理识别完就停下：条目原地留在转存/待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
         >
           <div class="switch-row">
             <HSwitch v-model="model.manual_confirm" />
@@ -358,7 +352,7 @@ const TRIGGERS: { name: string; text: string }[] = [
         <FieldRow
           label="定时整理"
           wide
-          tip="只负责「到点扫一遍待整理目录」。关掉不影响转存完成、离线下载、守望者这些即时触发。"
+          tip="只负责「到点扫一遍转存/待整理目录」。守望者每分钟也会看这个目录，所以关掉它，放进去的内容照样会被整理。"
         >
           <SchedulePicker v-model="cron" v-model:enabled="cronOn" toggle :placeholder="CRON_SUGGEST" />
         </FieldRow>
@@ -370,14 +364,20 @@ const TRIGGERS: { name: string; text: string }[] = [
             <li v-for="t in TRIGGERS" :key="t.name"><b>{{ t.name }}</b><span>{{ t.text }}</span></li>
           </ul>
           <p class="more-foot">
-            后三种走同一个「转存触发」任务：扫转存目录（没配才退回待整理目录），整理完再跑一轮增量同步，
-            几路同时触发会合并成一个。所有触发都只进任务队列，和同步、深删排同一条队，同一时刻只跑一个，排着不会丢。
+            后三种走同一个「转存触发」任务：扫的是同一个转存/待整理目录，整理完再跑一轮增量同步，几路同时触发会合并成一个。
+            所有触发都只进任务队列，和同步、深删排同一条队，同一时刻只跑一个，排着不会丢；先跑的搬走了内容，后跑的就是空转。
           </p>
         </details>
       </SectionCard>
 
       <!-- ==== 右：在哪些目录之间搬 ==== -->
-      <SectionCard title="工作目录" hint="整理从待整理目录取素材，按结果搬到媒体库 / 已存在 / 冗余">
+      <SectionCard title="工作目录" hint="整理从转存/待整理目录取素材，按结果搬到媒体库 / 已存在 / 冗余">
+        <FieldRow
+          label="转存/待整理"
+          tip="转存、离线下载、订阅的内容落在这里，手动要整理的也放这里；守望者每分钟看一次，有内容就整理。必须与媒体库互不包含。「影视转存 → 设置」里改的是同一个目录。"
+        >
+          <Cid115Input :ref="(el) => (staging.input.value = el as never)" v-model="stagingValue" placeholder="115 目录 cid" />
+        </FieldRow>
         <FieldRow v-for="d in DIRS" :key="d.key" :label="d.label" :tip="d.tip">
           <Cid115Input
             :ref="(el) => (inputs[d.key] = el as never)"
@@ -388,7 +388,7 @@ const TRIGGERS: { name: string; text: string }[] = [
         <p class="dir-note">
           <Info :size="14" />
           <span>
-            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」，转存目录在「<RouterLink :to="{ name: 'media-transfer', query: { tab: 'settings' } }">影视转存 → 设置</RouterLink>」。
+            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」。
             第一次用之前，先配好二级分类策略并跑一次全量同步。
           </span>
         </p>
@@ -397,7 +397,7 @@ const TRIGGERS: { name: string; text: string }[] = [
 
     <!-- 两张卡共用一次保存；「开始整理」挨着保存放，改过没保存时整条高亮 -->
     <div class="save-bar" :class="{ 'is-dirty': dirty }">
-      <span class="save-note">{{ dirty ? '有未保存的改动' : '整理会扫描待整理目录并搬移网盘文件' }}</span>
+      <span class="save-note">{{ dirty ? '有未保存的改动' : '整理会扫描转存/待整理目录并搬移网盘文件' }}</span>
       <HButton variant="primary" v-if="tmdbReady === false" size="sm" @click="configureTmdb">配置 TMDB 后开始整理</HButton>
       <HButton variant="tertiary" v-else-if="tmdbReady === null || checkingTmdb" size="sm" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</HButton>
       <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->

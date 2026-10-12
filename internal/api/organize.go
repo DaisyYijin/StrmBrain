@@ -39,7 +39,7 @@ type OrganizeResult struct {
 
 // OrgConfig 整理配置（从数据库加载）
 type OrgConfig struct {
-	Pending   string `json:"pending"`   // 待整理目录 cid
+	Pending   string `json:"pending"`   // 扫描根：转存/待整理目录 cid（loadOrgConfig 取 share.folder；重新整理等场景会换成别的目录）
 	Library   string `json:"library"`   // 我的影视库 cid（整理后最终归宿）
 	Existing  string `json:"existing"`  // 已存在目录 cid（洗版重复）
 	Redundant string `json:"redundant"` // 冗余目录 cid（识别失败等）
@@ -50,7 +50,7 @@ type OrgConfig struct {
 	// 反着存是为了老配置里没有这个键时默认开着
 	NoTwinHold bool `json:"no_twin_hold"`
 	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
-	ShareCid      string `json:"-"` // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
+	ShareCid      string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
 }
 
 // orgCtx 一次整理运行的上下文：引擎各函数共用的只读配置 + 落盘出口。
@@ -182,8 +182,10 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	}
 	// 最小体积在「识别规则」页（识别前的过滤），不在 org-basic 里
 	cfg.MinSize = loadRecognizeConfig().MinSize
+	// 扫描根 = 转存/待整理目录（share.folder）。org-basic 里老的 pending 字段不再读，见 stagingdir.go
+	cfg.Pending = h.shareFolderCid()
 	if cfg.Pending == "" {
-		return nil, fmt.Errorf("未配置待整理文件夹")
+		return nil, fmt.Errorf("未配置转存/待整理目录")
 	}
 	if cfg.Existing == "" {
 		return nil, fmt.Errorf("未配置已存在文件夹")
@@ -204,12 +206,9 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	if cfg.Library == "" {
 		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
 	}
-	// 转存目录同样是工作区根：整理引擎跳过它自身（内容由转存触发/守望者以它为扫描根处理）
-	var shareCfg struct {
-		Folder string `json:"folder"`
-	}
-	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &shareCfg)
-	cfg.ShareCid = shareCfg.Folder
+	// 转存与待整理已是同一个目录；ShareCid 留着是因为引擎里「转存目录是保护子树，
+	// 除非它就是扫描根」那几处判断还认它（fileorganize 把扫描根换成别的目录时仍要护住它）
+	cfg.ShareCid = cfg.Pending
 	return &cfg, nil
 }
 

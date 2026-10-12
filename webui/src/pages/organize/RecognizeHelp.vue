@@ -8,7 +8,7 @@ import HelpDoc from '@/components/ui/HelpDoc.vue'
     <section class="block">
       <h3 class="block-title">它管的是哪一段</h3>
       <p class="p">
-        整理是一条流水线：<strong>扫待整理目录 → 识别 → 分类 → 洗版 → 重命名 → 搬进媒体库</strong>。
+        整理是一条流水线：<strong>扫转存/待整理目录 → 识别 → 分类 → 洗版 → 重命名 → 搬进媒体库</strong>。
         这一页只管最前面那一小段——<strong>文件名送去识别之前</strong>的预处理与过滤。
       </p>
       <p class="p">
