@@ -26,6 +26,7 @@ export const JOB_KIND: Record<string, string> = {
   libredo: '重新整理片目',
   libepisode: '指定季集',
   filemove: '移动',
+  libclean: '清理媒体库残留',
   ignore: '忽略',
   deepdel: '深度删除',
   full: '全量同步',

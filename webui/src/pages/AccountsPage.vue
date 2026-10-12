@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
@@ -14,7 +15,9 @@ import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import Cid115Input, { type CidValue } from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
-import { configApi, organizeApi, storageApi } from '@/api'
+import { configApi, libraryApi, organizeApi, storageApi } from '@/api'
+import type { LibLeftover } from '@/api/library'
+import { useQueueStore } from '@/stores/queue'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
@@ -65,6 +68,43 @@ watch(
   },
   { immediate: true },
 )
+/**
+ * 移出配置的媒体库在本地留下的 STRM 与台账（后端 libleft.go）。删掉一个附加库、或 115 上给库改了名之后出现；
+ * 只列出来，用户点了才清，清理也只动本地
+ */
+const queue = useQueueStore()
+const leftovers = ref<LibLeftover[]>([])
+async function loadLeftovers() {
+  try {
+    leftovers.value = (await libraryApi.getLeftovers()).data ?? []
+  } catch {
+    leftovers.value = []
+  }
+}
+const offFinished = queue.onFinished((j) => {
+  if (j.kind === 'libclean') void loadLeftovers()
+})
+onUnmounted(offFinished)
+
+async function cleanLeftover(l: LibLeftover) {
+  const ok = await dialog.confirm({
+    title: `清理「${l.name}」的本地残留`,
+    content: `将删除本地媒体库根目录下的「${l.name}」整个目录（STRM、字幕、NFO、图片），以及台账里它的 ${l.files} 行。网盘上的文件不动；以后想要回来，把这个库加回附加媒体库再跑一次全量同步即可。Emby 里对应的媒体库请自己在 Emby 里删除或刷新。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '清理本地', value: true, variant: 'danger' },
+    ],
+  })
+  if (!ok) return
+  try {
+    const d = await libraryApi.cleanLeftover(l.name)
+    message.success(d.message)
+    await queue.submitted(d.job_id)
+  } catch (e) {
+    toastError(e, '提交清理失败')
+  }
+}
+
 function addExtraLib() {
   extraLibs.value.push({ cid: '', path: '' })
 }
@@ -288,7 +328,7 @@ async function saveMedia() {
     extras.push({ cid: ecid, path: p })
   }
   media.model.value.extra_libs = extras
-  await media.save()
+  if (await media.save()) void loadLeftovers() // 刚移掉的库会出现在残留里
 }
 
 function reset() {
@@ -305,6 +345,7 @@ function reset() {
 onMounted(() => {
   load()
   loadMissingWs()
+  void loadLeftovers()
 })
 </script>
 
@@ -418,6 +459,18 @@ onMounted(() => {
             </div>
           </FieldRow>
 
+          <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
+            这些目录是移出配置的媒体库（或 115 上改过名的库）留下的，同步不再管它们，海报墙和 Emby 里还看得到。
+            <ul class="leftover-list">
+              <li v-for="l in leftovers" :key="l.name">
+                <span>
+                  <b>{{ l.name }}</b>：台账 {{ l.files }} 行（视频 {{ l.videos }} 个）<template v-if="!l.local">，本地目录已不在</template>
+                </span>
+                <HButton variant="tertiary" size="sm" @click="cleanLeftover(l)">清理本地</HButton>
+              </li>
+            </ul>
+          </HAlert>
+
           <FieldRow
             label="本地媒体库根目录"
             required
@@ -487,6 +540,21 @@ onMounted(() => {
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+.leftovers {
+  margin: 4px 0 8px;
+}
+.leftover-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.leftover-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
 }
 .extra-libs {
   display: flex;

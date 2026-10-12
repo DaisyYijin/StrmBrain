@@ -324,6 +324,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/files/library/episodes/preview", h.PreviewFileEpisodes)
 		protected.POST("/files/library/episodes", h.SubmitFileEpisodes)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
+		protected.GET("/library/leftovers", h.ListLibLeftovers)
+		protected.POST("/library/leftovers/clean", h.CleanLibLeftover)
 
 		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理
 		protected.GET("/organize/records", h.ListOrganizeRecords)

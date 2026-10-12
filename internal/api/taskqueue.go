@@ -88,6 +88,8 @@ type jobParams struct {
 	Subs *subJobParams `json:"subs,omitempty"`
 	// Person 刮削后补演职人员：只看这几部片目（embypeoplescrape.go）；没有就是全库续扫
 	Person *personJobParams `json:"person,omitempty"`
+	// LibName 清理移出配置的媒体库的本地残留（libleft.go）
+	LibName string `json:"lib_name,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
