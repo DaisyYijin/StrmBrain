@@ -120,10 +120,12 @@ func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bo
 	if organize {
 		go func() {
 			time.Sleep(10 * time.Second)
-			if cid := h.shareFolderCid(); cid != "" {
+			// 看提交的目标目录（可能是绑定了媒体库的转存子目录），不是转存目录根：
+			// 根下挂着绑定子目录时永远「有条目」，试探就失去意义
+			if cid := target; cid != "" {
 				if ops, err := h.newPan115Ops(); err == nil {
-					if entries, _, lerr := ops.listEntries(cid, 0); lerr == nil && len(entries) > 0 {
-						log.Printf("[上传] 秒传命中（转存目录已有 %d 个条目），立即整理", len(entries))
+					if entries, _, lerr := ops.listEntries(cid, 0); lerr == nil && stagingTopCount(entries, stagingLibMap(loadStagingLibs())) > 0 {
+						log.Printf("[上传] 秒传命中（目标目录已有 %d 个条目），立即整理", len(entries))
 						h.triggerOrganizeAndSync()
 						return
 					}
@@ -417,8 +419,16 @@ func (w *transferWatch) tick(h *Handler) {
 		}
 		return
 	}
-	// 只剩等人工确认的条目也算「没活」，否则每轮空跑一次再被熔断
-	w.decide(h, countUnheld(entries), now)
+	// 只剩等人工确认的条目也算「没活」，否则每轮空跑一次再被熔断。
+	// 绑定了媒体库的子目录本身不算条目，算它里面的（stagingsub.go）
+	n, err := countStagingUnheld(func(cid string) ([]map[string]interface{}, error) { return listAllEntries(ops, cid) }, entries, stagingLibMap(loadStagingLibs()))
+	if err != nil {
+		if w.lastJob != 0 {
+			log.Printf("[守望] ○ 复查转存子目录失败（不计失败次数）: %v", err)
+		}
+		return
+	}
+	w.decide(h, n, now)
 }
 
 // decide 看完目录之后怎么办（纯状态机，不碰网盘）

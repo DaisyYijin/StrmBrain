@@ -25,6 +25,8 @@ export interface Subscription {
   offline_mode: OfflineMode
   /** 资源条件；null = 跟随订阅设置 */
   cond: SubCond | null
+  /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
+  subdir?: string
   /** active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到 */
   state: 'active' | 'paused' | 'done' | 'stalled'
   next_check_at?: string | null
@@ -59,6 +61,8 @@ export interface SubForm {
   offline_mode: OfflineMode
   /** 资源条件；null = 跟随订阅设置 */
   cond: SubCond | null
+  /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
+  subdir: string
 }
 
 /**
@@ -158,6 +162,8 @@ export interface SubscribeConfig {
   offline_monthly: number
   offline_reserve: number
   cond: SubCond
+  /** 默认转存到哪个转存子目录（cid）；空 = 转存目录本身 */
+  subdir?: string
 }
 
 export const list = () => http.get<{ data: Subscription[] }>('/subscriptions')
@@ -192,6 +198,7 @@ export function toForm(s: Subscription): SubForm {
     exclude: s.exclude,
     offline_mode: s.offline_mode || '',
     cond: s.cond ? { ...blankCond(), ...s.cond } : null,
+    subdir: s.subdir || '',
   }
 }
 

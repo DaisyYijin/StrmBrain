@@ -296,7 +296,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category, libVal := classifyTarget(media)
-	newLibCid, err := ruleLibOf(cfg, sink, libVal)
+	newLibCid, bySource, err := redoLibOf(cfg, sink, rec, libVal)
 	if err != nil {
 		return err
 	}
@@ -510,6 +510,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	rec.TargetDir = rootRel
 	rec.TargetCid = rootCid
 	rec.LibCid = newLib
+	rec.LibBySource = bySource
 	rec.Files = marshalRecordFiles(newFiles)
 	rec.VideoCount = videoTotal
 	rec.TotalSize = totalSize
@@ -1108,4 +1109,26 @@ func isInPlaceRedo(rec *model.OrganizeRecord, rootRel string, renames map[string
 		rec.TargetDir != "" && rec.TargetCid != "" &&
 		rec.TargetDir == rootRel &&
 		len(renames) == 0
+}
+
+// redoLibOf 重新整理落进哪个媒体库。来源子目录事后可能已经不在、或改绑了，所以：
+//  1. 库是按来源定的（LibBySource）且还在配置里 → 留在原库，不按规则改库；
+//  2. 从没入过库（失败 / 未识别，TargetDir 为空）、扫到它的目录是绑定子目录 → 按来源；
+//  3. 其余按分类规则（第 2 期的行为：规则改了库，重新整理就搬过去）。
+func redoLibOf(cfg *OrgConfig, sink *orgSink, rec *model.OrganizeRecord, ruleVal string) (cid string, bySource bool, err error) {
+	if rec.LibBySource && recordLibOK(cfg, rec.LibCid) {
+		if rec.LibCid == "" {
+			return cfg.Library, true, nil
+		}
+		return rec.LibCid, true, nil
+	}
+	if rec.TargetDir == "" && rec.SourceCid != "" {
+		scan := *cfg
+		scan.Pending = rec.SourceCid
+		if cid, ok, err := sourceLibOf(&scan); ok || err != nil {
+			return cid, ok, err
+		}
+	}
+	cid, err = ruleLibOf(cfg, sink, ruleVal)
+	return cid, false, err
 }

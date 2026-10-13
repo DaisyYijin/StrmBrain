@@ -175,10 +175,12 @@ type subJobResult struct {
 
 // subRunner 一个任务里所有订阅共用的东西
 type subRunner struct {
-	h        *Handler
-	cfg      subscribeCfg
-	tc       *TmdbClient
-	target   string // 转存目录 cid
+	h      *Handler
+	cfg    subscribeCfg
+	tc     *TmdbClient
+	target string // 转存目录 cid
+	// subs 绑定了媒体库的转存子目录（stagingsub.go），按订阅选的子目录建包装目录
+	subs     map[string]stagingLib
 	cookie   string
 	re0Left  int  // 今天还能自动解锁多少积分，<0 = 不限
 	stopPaid bool // 解锁报了积分不足 / 没登录：这一轮不再付费解锁
@@ -259,6 +261,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	if r.target == "" {
 		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
+	r.subs = stagingLibMap(loadStagingLibs())
 	ops, err := h.newPan115Ops()
 	if err != nil {
 		return nil, err
@@ -1001,8 +1004,25 @@ func (r *subRunner) makeWrapper(sub *model.Subscription, covered []epKey) (name,
 	var n int64
 	r.h.DB.Model(&model.SubAttempt{}).Where("sub_id = ?", sub.ID).Count(&n)
 	name = subWrapperName(sub, covered, int(n)+1)
-	cid, err = r.mkdir(r.target, name)
+	cid, err = r.mkdir(r.targetOf(sub), name)
 	return name, cid, err
+}
+
+// targetOf 这个订阅的包装目录建在哪：订阅自己选的子目录 > 订阅设置的默认 > 转存目录本身。
+// 子目录已经解绑的退回转存目录本身（照常入库，只是不再按来源分库），记一行日志
+func (r *subRunner) targetOf(sub *model.Subscription) string {
+	sd := strings.TrimSpace(sub.Subdir)
+	if sd == "" {
+		sd = strings.TrimSpace(r.cfg.Subdir)
+	}
+	if sd == "" || sd == "root" || sd == r.target {
+		return r.target
+	}
+	if s, ok := r.subs[sd]; ok {
+		return s.Cid
+	}
+	log.Printf("[订阅] ○ 《%s》选的转存子目录（cid=%s）已不在绑定表里，改转存到转存目录本身", sub.Title, sd)
+	return r.target
 }
 
 // dropWrapper 提交失败时收掉刚建的空包装目录：留在转存目录里，守望者会把它当成待整理的活，

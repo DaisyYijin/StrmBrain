@@ -18,6 +18,7 @@ import { resourcesApi } from '@/api'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubForm, Subscription, TmdbSeason } from '@/api/subscribe'
 import { useTransferSources } from '@/composables/transferSources'
+import { useStagingSubs } from '@/composables/stagingSubs'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
@@ -40,6 +41,19 @@ const emit = defineEmits<{ saved: [s: Subscription] }>()
 const { message } = useFeedback()
 const queue = useQueueStore()
 const { state: srcState } = useTransferSources()
+const { items: stagingItems } = useStagingSubs()
+/** 「转存到」：跟随设置 / 转存目录本身 / 各绑定子目录。只在有绑定时显示（按来源分库） */
+const subdirOptions = computed(() => {
+  const out = [
+    { label: '跟随订阅设置', value: '' },
+    { label: '转存目录', value: 'root' },
+    ...stagingItems.value.filter((s) => !s.problem).map((s) => ({ label: `${s.name} → ${s.lib_name || '媒体库'}`, value: s.cid })),
+  ]
+  // 选过的子目录后来解绑了：仍显示出来，免得下拉是空的、看不出原来选了什么
+  const cur = form.value.subdir
+  if (cur && !out.some((o) => o.value === cur)) out.push({ label: '已解绑的子目录（会转存到转存目录）', value: cur })
+  return out
+})
 
 const blank = (): SubForm => ({
   scope: 'all',
@@ -54,6 +68,7 @@ const blank = (): SubForm => ({
   exclude: '',
   offline_mode: '',
   cond: null,
+  subdir: '',
 })
 const form = ref<SubForm>(blank())
 const seasons = ref<TmdbSeason[]>([])
@@ -234,6 +249,14 @@ async function submit() {
           />
         </FieldRow>
       </template>
+
+      <FieldRow
+        v-if="stagingItems.length"
+        label="转存到"
+        hint="按来源分库：转存进绑定了媒体库的子目录，整理时落进那个库（优先于分类规则）。跟随设置 = 订阅设置里的默认值"
+      >
+        <HSelect v-model="form.subdir" :options="subdirOptions" aria-label="转存到" />
+      </FieldRow>
 
       <button type="button" class="adv-toggle" :aria-expanded="advanced" @click="advanced = !advanced">
         <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源条件、关键词、离线

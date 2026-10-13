@@ -312,6 +312,8 @@ type Subscription struct {
 	OfflineMode string `json:"offline_mode" gorm:"size:16"`
 	// Cond 资源条件（分辨率 / 质量 / 特效 / 编码 / 发布组 / 中字 / 体积）的 JSON；空 = 跟随订阅设置，"{}" = 自定义成不限
 	Cond string `json:"cond" gorm:"type:text"`
+	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
+	Subdir string `json:"subdir" gorm:"size:64"`
 
 	// State active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到（降频检查）
 	State       string     `json:"state" gorm:"index;size:10"`
@@ -382,6 +384,9 @@ type OrganizeRecord struct {
 	TargetCid  string `json:"target_cid" gorm:"size:64"`
 	// LibCid TargetDir 在哪个媒体库：空 = 主媒体库（老记录都是空），附加媒体库记它的 cid
 	LibCid string `json:"lib_cid" gorm:"size:64"`
+	// LibBySource 库是按来源定的（条目来自绑定了媒体库的转存子目录，stagingsub.go）。
+	// 重新整理时这种记录留在原库，不再按分类规则改库：来源子目录事后可能已经不在、或改绑了
+	LibBySource bool `json:"lib_by_source"`
 
 	// Files 是 []{fid,name,kind} 的 JSON。fid 在 115 上移动/改名后不变，
 	// 所以这就是「重新整理」原地捞回文件所需的全部定位信息

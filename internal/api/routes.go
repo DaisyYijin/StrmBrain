@@ -273,6 +273,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/scrape/categories", h.SaveCategories)
 		protected.POST("/scrape/categories/preview", h.PreviewCategories)
 		// 其他媒体库目录：只用于识别片目，不参与整理分类（extradirs.go）
+		protected.GET("/staging/libs", h.GetStagingLibs)
+		protected.PUT("/staging/libs", h.SaveStagingLibs)
+		protected.GET("/staging/subdirs", h.StagingSubdirs)
+		protected.POST("/staging/subdirs", h.MkStagingSubdir)
 		protected.GET("/library/extra-dirs", h.GetLibExtraDirs)
 		protected.POST("/library/extra-dirs", h.SaveLibExtraDirs)
 		protected.POST("/library/extra-dirs/add", h.AddLibExtraDirs)

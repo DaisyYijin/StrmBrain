@@ -12,10 +12,13 @@ import { transferApi } from '@/api'
 import { useTransferSources } from '@/composables/transferSources'
 import { type ParsedLink, parseLinks, pendingLinkText } from '@/composables/transferLinks'
 import { useFeedback } from '@/composables/useFeedback'
+import { useStagingSubs } from '@/composables/stagingSubs'
+import SubdirPicker from '@/components/transfer/SubdirPicker.vue'
 
 const router = useRouter()
 const { message, dialog } = useFeedback()
 const { state: srcState } = useTransferSources()
+const { current: subdir } = useStagingSubs()
 const folderPath = computed(() => srcState.value?.folder_path || srcState.value?.folder || '')
 
 // ---- 提交链接 ----
@@ -77,7 +80,7 @@ async function submit() {
   for (const r of rows.value) {
     r.state = 'busy'
     try {
-      const d = await transferApi.submit({ url: r.url, code: r.code })
+      const d = await transferApi.submit({ url: r.url, code: r.code, subdir: subdir.value || undefined })
       r.state = 'ok'
       r.msg = d.message
     } catch (e) {
@@ -129,6 +132,7 @@ async function submit() {
           {{ parsed.length > 1 ? `提交 ${parsed.length} 个链接` : '提交' }}
         </HButton>
         <span v-if="summary" class="summary">认出 {{ summary }}</span>
+        <SubdirPicker class="subdir" />
       </FormActions>
 
       <ul v-if="rows.length" class="results">

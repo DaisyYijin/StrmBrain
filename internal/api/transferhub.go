@@ -785,6 +785,8 @@ type resSubmitReq struct {
 	Ref     string `json:"ref"`
 	Title   string `json:"title"`
 	Confirm bool   `json:"confirm"` // RE0 解锁花积分：界面二次确认后才带 true
+	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身（stagingsub.go）
+	Subdir string `json:"subdir"`
 }
 
 type resSubmitResult struct {
@@ -805,6 +807,11 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			label = src.Label
 		}
 	}
+	// 目标目录先于解锁解析：RE0 解锁会花积分，子目录失效要在花之前报出来
+	target, err := h.stagingTarget(req.Subdir)
+	if err != nil {
+		return resSubmitResult{}, err
+	}
 	rl, err := h.resolveResourceLink(req)
 	if err != nil {
 		return resSubmitResult{}, err
@@ -812,7 +819,7 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 
 	switch rl.Action {
 	case "transfer":
-		msg, ok, fail, err := h.shareReceiveCore(rl.URL, rl.Code, "", label, true)
+		msg, ok, fail, err := h.shareReceiveCore(rl.URL, rl.Code, target, label, true)
 		if rl.Unlocked {
 			if err != nil {
 				// 积分已经花了：把链接交回去，用户还能自己转存
@@ -832,7 +839,7 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		return resSubmitResult{Message: msg + "，完成后自动整理入库"}, nil
 
 	case "offline":
-		if status, msg := h.offlineSubmitCore(rl.URL, "", label, true); status != http.StatusOK {
+		if status, msg := h.offlineSubmitCore(rl.URL, target, label, true); status != http.StatusOK {
 			return resSubmitResult{}, fmt.Errorf("%s", msg)
 		}
 		return resSubmitResult{Message: "已提交 115 离线下载，完成后自动整理入库"}, nil

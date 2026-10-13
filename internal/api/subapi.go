@@ -35,6 +35,8 @@ type subForm struct {
 	OfflineMode string `json:"offline_mode"`
 	// Cond 资源条件，nil = 跟随订阅设置
 	Cond *subCond `json:"cond"`
+	// Subdir 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
+	Subdir string `json:"subdir"`
 }
 
 // applySubForm 校验表单并写进订阅；范围变了返回 true（要立刻重新检查）
@@ -94,6 +96,13 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		return false, errors.New("离线策略只能是 只下合集包 / 只转存分享 / 不限")
 	}
 	sub.OfflineMode = f.OfflineMode
+	sd := strings.TrimSpace(f.Subdir)
+	if sd != "" && sd != "root" {
+		if _, ok := stagingLibMap(loadStagingLibs())[sd]; !ok {
+			return false, errors.New("所选转存子目录不在绑定表里，请重新选择")
+		}
+	}
+	sub.Subdir = sd
 	sub.Cond = ""
 	if f.Cond != nil {
 		b, _ := json.Marshal(normalizeSubCond(*f.Cond))

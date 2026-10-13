@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HMultiSelect from '@/components/hero/HMultiSelect.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
@@ -13,6 +14,7 @@ import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubscribeConfig } from '@/api/subscribe'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useStagingSubs } from '@/composables/stagingSubs'
 
 /**
  * 订阅的全局设置（setting "subscribe"，整存整取）。
@@ -25,6 +27,18 @@ const cfg = ref<SubscribeConfig | null>(null)
 const spent = ref(0)
 const saving = ref(false)
 const notify = ref<string[]>([])
+const { items: stagingItems } = useStagingSubs()
+/** 默认转存到：转存目录本身或某个绑定了媒体库的子目录（按来源分库） */
+const subdirOptions = computed(() => [
+  { label: '转存目录', value: '' },
+  ...stagingItems.value.filter((s) => !s.problem).map((s) => ({ label: `${s.name} → ${s.lib_name || '媒体库'}`, value: s.cid })),
+])
+const subdir = computed({
+  get: () => cfg.value?.subdir ?? '',
+  set: (v: string) => {
+    if (cfg.value) cfg.value.subdir = v
+  },
+})
 
 async function load() {
   try {
@@ -95,6 +109,13 @@ async function save() {
       </FieldRow>
       <FieldRow label="先看几条分享的文件" hint="很多整季包标题只写「剧名 4K」，看不出有几集。先列排在前面的几条 115 分享，按文件实际能补几集重排，整季包一次转完，不用一条条转单集；转存时直接用列出的结果，不会再列一次。0 = 不预看，只按标题排">
         <div class="unit"><HNumberInput v-model="cfg.share_preview_max" :min="0" :max="30" aria-label="条数" /><span>条分享</span></div>
+      </FieldRow>
+      <FieldRow
+        v-if="stagingItems.length"
+        label="默认转存到"
+        hint="按来源分库：订阅转存进绑定了媒体库的子目录，整理时落进那个库。单个订阅可以另选；子目录解绑后退回转存目录"
+      >
+        <HSelect v-model="subdir" :options="subdirOptions" aria-label="默认转存到" />
       </FieldRow>
       <FieldRow label="排除词" hint="资源标题含任何一个就不要，所有订阅都生效（逗号分隔）；单个订阅还能另加">
         <HInput v-model="cfg.exclude_default" />

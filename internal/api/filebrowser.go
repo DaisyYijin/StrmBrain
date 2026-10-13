@@ -117,6 +117,10 @@ func (h *Handler) workspaceRoles() map[string]string {
 	}
 	// 转存/待整理是一个目录（stagingdir.go），角色沿用 pending：移动目标与前端都认这个名字
 	add(h.shareFolderCid(), "pending")
+	// 绑定了媒体库的转存子目录（stagingsub.go）：本身不能整理 / 移动，里面的条目照常
+	for _, s := range loadStagingLibs() {
+		add(s.Cid, "stagesub")
+	}
 	add(basic.Existing, "existing")
 	add(basic.Redundant, "redundant")
 	return out

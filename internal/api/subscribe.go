@@ -95,6 +95,9 @@ type subscribeCfg struct {
 
 	// Cond 默认的资源条件（subcond.go），订阅自己可以另设
 	Cond subCond `json:"cond"`
+	// Subdir 默认转存到哪个绑定了媒体库的转存子目录（cid，stagingsub.go）；空 = 转存目录本身。
+	// 订阅自己的 Subdir 为空时跟随它
+	Subdir string `json:"subdir"`
 }
 
 // subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集），2 = 加了 created（新订阅）

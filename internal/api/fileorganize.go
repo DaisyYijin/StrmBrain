@@ -97,6 +97,8 @@ func workspaceRoleText(role string) string {
 		return "媒体库"
 	case "pending", "share":
 		return "转存/待整理"
+	case "stagesub":
+		return "绑定了媒体库的转存子目录"
 	case "existing":
 		return "已存在"
 	case "redundant":

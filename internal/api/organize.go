@@ -45,15 +45,18 @@ type OrgConfig struct {
 	Redundant string `json:"redundant"` // 冗余目录 cid（识别失败等）
 	// ManualConfirm 人工确认：识别完只登记「待确认」记录、文件原地不动，
 	// 用户在整理记录里确认（或改指定 TMDB 条目）之后才继续后面的流水线
-	ManualConfirm bool   `json:"manual_confirm"`
+	ManualConfirm bool `json:"manual_confirm"`
 	// NoTwinHold 关掉「同名待确认」（twinHold）：TMDB 上同名同分时照旧取相关度第一的。
 	// 反着存是为了老配置里没有这个键时默认开着
-	NoTwinHold bool `json:"no_twin_hold"`
-	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
-	ShareCid      string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
+	NoTwinHold bool   `json:"no_twin_hold"`
+	MinSize    int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
+	ShareCid   string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
 	// OtherLibs 附加媒体库（full.extra_libs，libroots.go）。分类规则写了 library 的整理进它们（classify）；
 	// 同时和工作区根一样是保护子树：库根本身不被当条目整理、不被空目录清理删掉
 	OtherLibs []string `json:"-"`
+	// SubLibs 绑定了媒体库的转存子目录（stagingsub.go）：子目录 cid → 绑定。
+	// 子目录也是工作区根（不当条目、不被清理）；扫描根换成它时 classify 按它选库
+	SubLibs map[string]stagingLib `json:"-"`
 }
 
 // workspaceRootCids 整理引擎永不当条目处理的根：媒体库（全部）、待整理、已存在、冗余、转存
@@ -63,6 +66,9 @@ func (cfg *OrgConfig) workspaceRootCids() map[string]bool {
 		if cid != "" {
 			out[cid] = true
 		}
+	}
+	for cid := range cfg.SubLibs {
+		out[cid] = true
 	}
 	return out
 }
@@ -95,17 +101,28 @@ type orgCtx struct {
 	absOf map[string]string
 }
 
-// classify 分类，并按命中规则的 library 选定这个条目落进哪个媒体库（libroots.go）：
+// classify 分类，并选定这个条目落进哪个媒体库：先看来源（扫描根是绑定了库的转存子目录，stagingsub.go），
+// 再看命中规则的 library（libroots.go），都没有进主库。分类目录照常按规则算，来源只换库。
 // sink 切过去、ctx.libAbs 换成那个库的路径。之后的 ensurePath / 洗版 / 落盘都用 libCid()。
 // 库认不出时返回错误，调用方要在任何网盘写之前停下
 func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
 	category, val := classifyTarget(media)
-	cid, err := c.ruleLib(val)
+	cid, bySource, err := c.pickLib(val)
 	if err != nil {
 		return category, err
 	}
 	c.enterLib(cid)
+	c.sink.bySource = bySource
 	return category, nil
+}
+
+// pickLib 选库：来源子目录 > 规则 library > 主库。bySource 表示是按来源定的（记进整理记录，重新整理沿用）
+func (c *orgCtx) pickLib(ruleVal string) (cid string, bySource bool, err error) {
+	if cid, ok, err := sourceLibOf(c.cfg); ok || err != nil {
+		return cid, ok, err
+	}
+	cid, err = c.ruleLib(ruleVal)
+	return cid, false, err
 }
 
 // ruleLib 分类规则的库值 → 库 cid
@@ -159,6 +176,7 @@ func (c *orgCtx) enterLib(cid string) {
 		cid = c.cfg.Library
 	}
 	c.sink.useLib(c.sinkCid(cid))
+	c.sink.bySource = false // classify 选完库再按来源标上
 	abs, ok := c.absOf[cid]
 	if !ok {
 		if c.ops != nil && c.ops.cookie != "" {
@@ -303,6 +321,7 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 		cfg.Library = fullCfg.Cid
 	}
 	cfg.OtherLibs = fullCfg.otherLibCids()
+	cfg.SubLibs = stagingLibMap(loadStagingLibs())
 	if cfg.Library == "" {
 		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
 	}
@@ -1664,17 +1683,9 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 
 	// 五个工作区根目录（媒体库/待整理/已存在/冗余/转存目录）永不被移动：
 	// 引擎只往它们里面放内容，目录自身绝不能被当作影视条目处理
-	// （否则会出现"已经存在文件夹移进自己"、转存目录被当容器壳搬进冗余等事故）
-	excluded := cfg.workspaceRootCids()
-	filtered := topEntries[:0]
-	for _, e := range topEntries {
-		if e.IsDir && excluded[e.Cid] {
-			onLog(fmt.Sprintf("○ 跳过整理工作区目录: %s/", e.Name))
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	topEntries = ctx.dropHeld(filtered)
+	// （否则会出现"已经存在文件夹移进自己"、转存目录被当容器壳搬进冗余等事故）。
+	// 绑定了媒体库的转存子目录同样不是条目，展开成它里面一层、各自以子目录为扫描根（stagingsub.go）
+	topEntries, ctxs := stagingWork(ctx, expandStagingEntries(orgLister(ops), cfg, topEntries, onLog))
 	if len(topEntries) == 0 {
 		return results, 0 // 空转静默：定时任务每 10 分钟一轮，不为空目录刷日志
 	}
@@ -1696,7 +1707,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		}
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
 		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
-		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
+		results = append(results, processEntry(ctxs[i], guards, entry, 0, &successCount)...)
 		done = i + 1
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -2128,8 +2139,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	st := matchWashStrategy(media.MediaType, category)
 	var accepted []remoteFile
 	planOf := map[string]*washPlan{} // fid → 让旧版让位的计划（撞名停下 / 移走的不执行）
-	var rejectFids []string         // 判为已存在的视频 + 跟着它命名的字幕
-	var rejectFiles []orgRecordFile // 同一批的整理记录快照
+	var rejectFids []string          // 判为已存在的视频 + 跟着它命名的字幕
+	var rejectFiles []orgRecordFile  // 同一批的整理记录快照
 	rejectVideos, sameFileVideos := 0, 0
 	excluded := map[string]bool{}
 	take := func(f remoteFile) {
@@ -3417,16 +3428,8 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog,
 		held: loadAwaiting(), handled: map[string]bool{}}
 
-	// 五个工作区根目录自身永不被当作条目处理（与 runOrganizeEngine 一致）
-	excluded := cfg.workspaceRootCids()
-	filtered := topEntries[:0]
-	for _, e := range topEntries {
-		if e.IsDir && excluded[e.Cid] {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
-	topEntries = ctx.dropHeld(filtered)
+	// 五个工作区根目录自身永不被当作条目处理，绑定子目录展开（与 runOrganizeEngine 一致）
+	topEntries, ctxs := stagingWork(ctx, expandStagingEntries(orgLister(ops), cfg, topEntries, func(string) {}))
 	if len(topEntries) == 0 {
 		return results, 0 // 只剩等待人工确认的条目：静默，记录页里看得到
 	}
@@ -3447,7 +3450,7 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		}
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
 		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
-		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
+		results = append(results, processEntry(ctxs[i], guards, entry, 0, &successCount)...)
 		done = i + 1
 		time.Sleep(300 * time.Millisecond)
 	}

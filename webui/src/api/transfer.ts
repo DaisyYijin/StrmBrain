@@ -96,6 +96,8 @@ export interface SubmitBody {
   title?: string
   /** RE0 解锁花积分：确认过才带 true */
   confirm?: boolean
+  /** 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身 */
+  subdir?: string
 }
 
 export interface SubmitResult {
@@ -107,6 +109,35 @@ export interface SubmitResult {
 
 export const submit = (body: SubmitBody) =>
   http.post<SubmitResult>('/transfer/submit', body, { timeoutMs: 5 * 60_000 })
+
+/** 转存子目录绑定的媒体库（按来源分库，后端 stagingsub.go） */
+export interface StagingLib {
+  cid: string
+  name: string
+  /** 媒体库 cid */
+  lib: string
+  lib_name?: string
+  /** 失效原因（库移出配置 / 子目录不在转存目录下） */
+  problem?: string
+}
+
+export interface LibChoice {
+  cid: string
+  name: string
+  primary: boolean
+}
+
+export interface StagingLibs {
+  root: string
+  items: StagingLib[]
+  libs: LibChoice[]
+}
+
+export const stagingLibs = () => http.get<StagingLibs>('/staging/libs')
+export const saveStagingLibs = (items: Pick<StagingLib, 'cid' | 'name' | 'lib'>[]) =>
+  http.put<StagingLibs>('/staging/libs', { items })
+export const stagingSubdirs = () => http.get<{ dirs: { cid: string; name: string }[] }>('/staging/subdirs')
+export const mkStagingSubdir = (name: string) => http.post<{ cid: string; name: string }>('/staging/subdirs', { name })
 
 export interface OwnedInfo {
   title: string

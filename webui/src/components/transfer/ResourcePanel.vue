@@ -9,9 +9,11 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ResourceRow from '@/components/transfer/ResourceRow.vue'
+import SubdirPicker from '@/components/transfer/SubdirPicker.vue'
 import { transferApi } from '@/api'
 import type { ResourceItem, ResourceQuery, SourceKey, TransferSource } from '@/api/transfer'
 import { useFeedback } from '@/composables/useFeedback'
+import { useStagingSubs } from '@/composables/stagingSubs'
 import { type KindGroup, type SortKey, kindGroup, pixGroup, resourceKey, sortResources } from '@/utils/transferSort'
 import { RefreshCw } from '@lucide/vue'
 
@@ -26,6 +28,7 @@ const props = defineProps<{
 
 const router = useRouter()
 const { message, dialog } = useFeedback()
+const { current: subdir } = useStagingSubs()
 
 type SourceState =
   | { status: 'loading' }
@@ -253,6 +256,7 @@ async function act(it: ResourceItem) {
       ref: it.ref,
       title: it.title,
       confirm: it.action === 'unlock',
+      subdir: subdir.value || undefined,
     })
     if (r.open_url) window.open(r.open_url, '_blank', 'noopener')
     const text = r.message + (r.code ? `（提取码 ${r.code}）` : '')
@@ -311,6 +315,7 @@ async function act(it: ResourceItem) {
       <div class="w-sort">
         <HSelect v-model="sortKey" :options="SORT_OPTIONS" aria-label="排序" />
       </div>
+      <SubdirPicker class="w-subdir" />
     </div>
 
     <div class="list">

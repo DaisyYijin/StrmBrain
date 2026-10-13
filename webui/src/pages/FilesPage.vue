@@ -56,6 +56,8 @@ const ROLE_TEXT: Record<WorkspaceRole, string> = {
   // 转存与待整理已是同一个目录，后端只给 pending；share 留着兼容
   pending: '转存/待整理',
   share: '转存/待整理',
+  // 绑定了媒体库的转存子目录（按来源分库）
+  stagesub: '转存子目录',
   existing: '已存在',
   redundant: '冗余',
 }
@@ -63,6 +65,7 @@ const ROLE_TONE: Record<WorkspaceRole, 'success' | 'accent' | 'warning' | 'defau
   library: 'success',
   pending: 'accent',
   share: 'accent',
+  stagesub: 'accent',
   existing: 'warning',
   redundant: 'default',
 }

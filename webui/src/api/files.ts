@@ -4,7 +4,7 @@ import type { QueuedReply } from './tasks'
 /** 网盘文件页（后端 internal/api/filebrowser.go / fileorganize.go / filelibrary.go）。刮削在海报墙（local.ts） */
 
 /** 工作区根目录的角色 */
-export type WorkspaceRole = 'library' | 'pending' | 'share' | 'existing' | 'redundant'
+export type WorkspaceRole = 'library' | 'pending' | 'share' | 'stagesub' | 'existing' | 'redundant'
 
 export interface FileItem {
   /** 文件是 fid，目录是它自己的 cid */

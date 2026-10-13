@@ -62,6 +62,8 @@ type orgSink struct {
 	// 附加库的名字按需解析，同样一轮只解析一次
 	cur      string
 	curNames map[string]string
+	// bySource 当前条目的库是按来源（绑定了库的转存子目录）定的，记进整理记录的 LibBySource
+	bySource bool
 
 	mu          sync.Mutex
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次
@@ -601,6 +603,9 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	rec.BatchID = s.batchID
 	if rec.TargetDir != "" && rec.LibCid == "" && s.cur != "" {
 		rec.LibCid = s.cur
+	}
+	if rec.TargetDir != "" && s.bySource {
+		rec.LibBySource = true
 	}
 	if rec.RecogKey == "" {
 		rec.RecogKey = s.recog.key
