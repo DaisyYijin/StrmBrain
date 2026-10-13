@@ -386,6 +386,11 @@ func (r *titleRun) run() {
 	// 不写 include_image_language 时 TMDB 只回 zh 与无语言的图，英文 logo 就挑不到了
 	params := map[string]string{"language": "zh-CN", "append_to_response": "credits,images",
 		"include_image_language": "zh,en,null"}
+	if kind == "tv" {
+		// 剧集的 credits 只是最新一季的常驻演员，老季的主演一个都不在；aggregate_credits 汇总所有季，
+		// 与演职人员补全（fetchTitleCredits）同一份名单。credits 留着兜底
+		params["append_to_response"] = "credits,aggregate_credits,images"
+	}
 	s.rep.sub("详情", 0, 0, "")
 	start := time.Now()
 	body, err := s.tc.get("/"+kind+"/"+strconv.Itoa(r.tmdbID), params)
@@ -510,6 +515,9 @@ func (r *titleRun) tvNFO(body []byte) {
 		Credits struct {
 			Cast []tmdbCastMember `json:"cast"`
 		} `json:"credits"`
+		AggregateCredits struct {
+			Cast []tmdbAggregateCast `json:"cast"`
+		} `json:"aggregate_credits"`
 		Seasons []struct {
 			SeasonNumber int    `json:"season_number"`
 			Name         string `json:"name"`
@@ -534,8 +542,13 @@ func (r *titleRun) tvNFO(body []byte) {
 	for _, nw := range d.Networks {
 		nfo.Studios = append(nfo.Studios, nw.Name)
 	}
-	// 演员取 credits.cast。此前取的是 created_by（主创）当演员写，剧的演员表基本是空的
-	nfo.Actors = nfoActorsOf(d.Credits.Cast)
+	// 演员取 aggregate_credits（所有季），拿不到再退回 credits（最新一季）。
+	// 此前取的是 created_by（主创）当演员写，剧的演员表基本是空的
+	cast := aggregateCastOf(d.AggregateCredits.Cast)
+	if len(cast) == 0 {
+		cast = d.Credits.Cast
+	}
+	nfo.Actors = nfoActorsOf(cast)
 	r.s.rep.sub("剧 / 季 NFO", 0, 0, "tvshow.nfo")
 	if !r.skip(t.Dir, "tvshow.nfo") {
 		if b, err := marshalNFO(nfo); err == nil {
@@ -581,7 +594,8 @@ func (r *titleRun) tvNFO(body []byte) {
 				epNFO.Ratings = []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: ep.VoteAverage}}
 			}
 			if ep.StillPath != "" {
-				epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
+				// 走 tmdbImageURL：图床地址填成 …/t/p/w500 时直接拼会变成 …/t/p/w500/t/p/w500/xx.jpg
+				epNFO.Thumb = tmdbImageURL(tmdbImageBase(), "w500", ep.StillPath)
 			}
 			nfos = append(nfos, epNFO)
 			if ep.Name != "" {

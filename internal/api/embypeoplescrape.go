@@ -113,7 +113,7 @@ func embyTitlesByTmdb(base, key string, t personTarget) ([]embyTitleItem, error)
 	id := strconv.Itoa(t.TmdbID)
 	q := url.Values{
 		"Recursive": {"true"}, "IncludeItemTypes": {typ}, "AnyProviderIdEquals": {"tmdb." + id},
-		"Fields": {"ProviderIds,People"}, "EnableUserData": {"false"}, "Limit": {"20"},
+		"Fields": {"ProviderIds,People,Path"}, "EnableUserData": {"false"}, "Limit": {"20"},
 	}
 	var page struct {
 		Items []embyTitleItem `json:"Items"`
@@ -209,6 +209,7 @@ func execPersonTargets(r *personRunner, job *model.TaskJob, targets []personTarg
 	}
 
 	out := summarizePersonRun(r.results, titles)
+	out.NFOs, out.ActorImages = r.nfoStat.NFOs, r.nfoStat.Images
 	msg := personHandledMessage(out)
 	if len(pending) > 0 {
 		var names []string
@@ -233,6 +234,6 @@ func execPersonTargets(r *personRunner, job *model.TaskJob, targets []personTarg
 	log.Printf("[演职人员] ■ 刮削后补全：%s", msg)
 	// 没查到的不算失败：Emby 没扫完、片目不在 Emby 的库里都会这样，定时任务之后会扫到
 	partial := out.States[personStateFailed] > 0
-	idle := job.Priority == jobPriorityBackground && out.Handled == 0 && len(pending) == 0
+	idle := job.Priority == jobPriorityBackground && out.idle() && len(pending) == 0
 	return jobOutcome{Message: msg, Result: out, Canceled: stopped, Partial: partial, Idle: idle}, nil
 }

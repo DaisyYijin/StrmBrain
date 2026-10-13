@@ -64,6 +64,8 @@ export interface PersonFillConfig {
   zh_bio: boolean
   max_cast: number
   max_per_run: number
+  /** 补完后同步本地 NFO：演职人员名换中文、演员头像存进 .actors */
+  nfo_sync: boolean
 }
 export interface PersonFillInfo {
   config: PersonFillConfig

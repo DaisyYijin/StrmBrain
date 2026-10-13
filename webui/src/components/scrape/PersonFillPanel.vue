@@ -33,6 +33,7 @@ const DEFAULTS: PersonFillConfig = {
   zh_bio: true,
   max_cast: 20,
   max_per_run: 300,
+  nfo_sync: true,
 }
 
 const TYPES: { v: PersonType; label: string }[] = [
@@ -150,7 +151,7 @@ function openLastJob() {
     <p class="lead">
       给 Emby 里缺头像、名字不是中文的演职人员补上 TMDB 的头像、中文名与中文简介。
       通过 Emby API 写入（人物头像存在 Emby 自己的元数据目录里，不在媒体文件夹旁边），
-      头像经本站的 TMDB 代理下载，Emby 连不上 TMDB 也能补。不发任何 115 请求。
+      头像经本站的 TMDB 代理下载，Emby 连不上 TMDB 也能补；开着「同步到本地 NFO」时也写回片目的 NFO 与 .actors。不发任何 115 请求。
     </p>
 
     <FieldRow
@@ -190,6 +191,13 @@ function openLastJob() {
     </FieldRow>
     <FieldRow label="中文简介" tip="原简介为空或不是中文、而 TMDB 有中文简介时替换，同样锁定字段。已有头像和中文名、只缺中文简介的人物也会处理。">
       <HSwitch v-model="form.zh_bio" aria-label="中文简介" />
+    </FieldRow>
+    <FieldRow
+      label="同步到本地 NFO"
+      :hint="embyScrapes ? '当前由 Emby 刮削，本站不改 NFO，这一项不生效' : undefined"
+      tip="Kodi、VidHub 等直接读媒体目录的播放器看的是 NFO，不是 Emby。开启后每补完一部，把它的 NFO 里的演员、导演、编剧名换成中文，演员头像存进片目录下的 .actors（Kodi 约定，优先用 Emby 里那张）。只改人名，NFO 其余内容不动；网盘同步下来的 NFO 不改。"
+    >
+      <HSwitch v-model="form.nfo_sync" :disabled="embyScrapes" aria-label="同步到本地 NFO" />
     </FieldRow>
     <FieldRow label="每部片演员" tip="每部片只看演员表前 N 位（导演、编剧不占名额）。龙套在 TMDB 上多半既无头像也无中文名。0 = 不限。">
       <HNumberInput v-model="form.max_cast" :min="0" :max="200" aria-label="每部片演员数">

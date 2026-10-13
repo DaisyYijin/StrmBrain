@@ -217,6 +217,9 @@ type fakePeopleServer struct {
 	userGets int
 	// titleStarts 每次列片目请求的 StartIndex（看续扫从哪开始）
 	titleStarts []int
+	// paths 片目 id → Emby 里的路径（同步本地 NFO 用）；imgGets 读人物头像的次数
+	paths   map[string]string
+	imgGets map[string]int
 }
 
 // titles 假库里的片目（按加入时间）。有 p7 时多一部片：两位已有头像、已是中文名、只缺中文简介的演员
@@ -226,6 +229,11 @@ func (f *fakePeopleServer) titles() []map[string]any {
 			f.ref("p1", "Actor"), f.ref("p2", "Actor"), f.ref("p5", "Actor"), f.ref("p4", "Actor"), f.ref("p3", "Director"),
 		}},
 		{"Id": "s1", "Name": "某剧", "Type": "Series", "ProviderIds": map[string]string{"tmdb": "100"}, "People": []any{}},
+	}
+	for _, it := range out {
+		if p := f.paths[it["Id"].(string)]; p != "" {
+			it["Path"] = p
+		}
 	}
 	if f.persons["p7"] != nil {
 		out = append(out, map[string]any{"Id": "m2", "Name": "色戒", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "14"},
@@ -339,6 +347,16 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		js(map[string]any{"Items": items})
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/Images/Primary"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/Items/"), "/Images/Primary")
+		if f.imgGets != nil {
+			f.imgGets[id]++
+		}
+		if p := f.persons[id]; p == nil || p.Image == "" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(append(append([]byte{0xff, 0xd8, 0xff, 0xe0}, make([]byte, 200)...), 0xff, 0xd9))
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/Images/Primary"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/Items/"), "/Images/Primary")
 		body, _ := io.ReadAll(r.Body)

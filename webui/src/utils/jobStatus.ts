@@ -127,6 +127,8 @@ const RESULT_LABEL: [string, string][] = [
   ['images', '补头像'],
   ['renamed', '改中文名'],
   ['bios', '补中文简介'],
+  ['nfos', '改写本地 NFO'],
+  ['actor_images', '存演员头像'],
   // 媒体信息补全（metafill.go 的 metaFillResult）
   ['scrape_lack', '没刮全'],
   ['scrape_queued', '补刮'],

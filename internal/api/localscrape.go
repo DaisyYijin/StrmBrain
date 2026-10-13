@@ -326,18 +326,8 @@ func (w *fileScrapeWriter) retire(d metaDest, name string) bool {
 		return false
 	}
 	p := filepath.Join(d.Local, name)
-	rel := localRelOrEmpty(w.localRoot, p)
-	if rel == "" {
+	if localRelOrEmpty(w.localRoot, p) == "" || ledgerHasLocal(w.localRoot, p) {
 		return false
-	}
-	if model.DB != nil {
-		var n int64
-		// 与 scrapeDirVideoRows 同样两级认：台账路径可能多一截前缀
-		model.DB.Model(&model.SyncedFile{}).
-			Where(`rel_path = ? OR rel_path LIKE ? ESCAPE '\'`, rel, "%/"+likeEscape(rel)).Count(&n)
-		if n > 0 {
-			return false
-		}
 	}
 	return os.Remove(p) == nil
 }

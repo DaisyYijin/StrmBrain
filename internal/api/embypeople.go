@@ -65,6 +65,9 @@ type personFillCfg struct {
 	MaxCast int `json:"max_cast"`
 	// MaxPerRun 单次最多处理多少个人物（真正去查 TMDB / 改 Emby 的），剩下的下次接着来
 	MaxPerRun int `json:"max_per_run"`
+	// NFOSync 补完一部后把本地 NFO 的演职人员名换成中文、演员头像存进 .actors（embypeoplenfo.go）。
+	// 直接读媒体目录的播放器看的是 NFO，不改的话与 Emby 里两个样
+	NFOSync bool `json:"nfo_sync"`
 }
 
 const personFillSetting = "personfill"
@@ -72,7 +75,7 @@ const personFillSetting = "personfill"
 func defaultPersonFillCfg() personFillCfg {
 	return personFillCfg{
 		Enabled: false, Cron: "30 3 * * *", Types: []string{"actor", "director", "writer"},
-		Image: true, ZhName: true, ZhBio: true, MaxCast: 20, MaxPerRun: 300,
+		Image: true, ZhName: true, ZhBio: true, MaxCast: 20, MaxPerRun: 300, NFOSync: true,
 	}
 }
 
@@ -151,6 +154,7 @@ type embyTitleItem struct {
 	ID          string            `json:"Id"`
 	Name        string            `json:"Name"`
 	Type        string            `json:"Type"`
+	Path        string            `json:"Path"` // 电影是 STRM，剧集是剧目录；同步本地 NFO 用
 	ProviderIds map[string]string `json:"ProviderIds"`
 	People      []embyPersonRef   `json:"People"`
 }
@@ -181,7 +185,7 @@ func embyGetJSON(base, key, path string, q url.Values, out any) error {
 // embyTitlesPage 一页电影 / 剧集（带演职人员）
 func embyTitlesPage(base, key string, start, limit int) ([]embyTitleItem, int, error) {
 	q := url.Values{
-		"Recursive": {"true"}, "IncludeItemTypes": {"Movie,Series"}, "Fields": {"ProviderIds,People"},
+		"Recursive": {"true"}, "IncludeItemTypes": {"Movie,Series"}, "Fields": {"ProviderIds,People,Path"},
 		"StartIndex": {strconv.Itoa(start)}, "Limit": {strconv.Itoa(limit)},
 		// 按加入时间排：新入库的排在最后，续扫断点（片目序号）不会因为新片插到中间而整体错位
 		"SortBy": {"DateCreated,SortName"}, "SortOrder": {"Ascending"}, "EnableUserData": {"false"},
@@ -598,6 +602,14 @@ type personRunner struct {
 	results  []personResult
 	handled  int
 	lastTMDB time.Time
+
+	// 同步本地 NFO（embypeoplenfo.go）。nfoSync 为假时整段不做
+	nfoSync    bool
+	root       string              // 本地媒体库根
+	mapPath    func(string) string // Emby 路径 → 本地路径
+	nfoStat    personNFOStat
+	nfoImgLeft int
+	imaged     map[string]bool // 本轮补上头像的人物 id：t.People 是补之前读的，看不出它现在有头像了
 }
 
 // tmdbPace TMDB 请求间隔：官方限速约每秒 40 次，这里慢慢来，别跟整理抢配额
@@ -813,7 +825,13 @@ type personJobResult struct {
 	States    map[string]int `json:"states,omitempty"`
 	Problems  []string       `json:"problems,omitempty"` // 没补全的人物，最多 200 条，出错的在前
 	Truncated bool           `json:"truncated,omitempty"`
+	// 同步本地 NFO：改写的 NFO、新存的演员头像（.actors）
+	NFOs        int `json:"nfos,omitempty"`
+	ActorImages int `json:"actor_images,omitempty"`
 }
+
+// idle 什么都没做：Emby 与本地 NFO 都没动
+func (o personJobResult) idle() bool { return o.Handled == 0 && o.NFOs == 0 && o.ActorImages == 0 }
 
 // newPersonRunner 校验配置、取 Emby 与 TMDB 客户端、装上记账里还没到期的人物
 func newPersonRunner(h *Handler) (*personRunner, error) {
@@ -834,7 +852,10 @@ func newPersonRunner(h *Handler) (*personRunner, error) {
 	}
 	r := &personRunner{
 		cfg: cfg, tc: tc, base: base, key: key,
-		skip: map[string]bool{}, done: map[string]bool{}, credits: map[string]*titleCredits{},
+		skip: map[string]bool{}, done: map[string]bool{}, credits: map[string]*titleCredits{}, imaged: map[string]bool{},
+		// 刮削方式为 Emby 时本站一样元数据都不写，NFO 也不改
+		nfoSync: cfg.NFOSync && (cfg.ZhName || cfg.Image) && loadScrapeCfg().stationScrapes(),
+		root:    localMediaRoot(), mapPath: h.mapFromEmbyPath, nfoImgLeft: personNFOImageBudget,
 	}
 	var marks []model.EmbyPersonMark
 	model.DB.Select("person_id").Where("next_at > ?", time.Now()).Find(&marks)
@@ -857,9 +878,14 @@ func (r *personRunner) runTitle(t embyTitleItem) (stopped, capped bool) {
 		r.handled++
 		personLane.setSub("人物", r.handled, r.cfg.MaxPerRun, p.Name)
 		res := r.handle(t, p)
+		if res.Image {
+			r.imaged[p.ID] = true
+		}
 		r.results = append(r.results, res)
 		logPersonResult(res)
 	}
+	// 停止 / 达到上限时这部没补完，下次从它接着来，到时再同步
+	r.syncTitleNFO(t)
 	return false, false
 }
 
@@ -932,9 +958,10 @@ scan:
 	}
 
 	out := summarizePersonRun(r.results, titles)
+	out.NFOs, out.ActorImages = r.nfoStat.NFOs, r.nfoStat.Images
 	msg := personRunMessage(out, total, stopAt, stopped, capped, broken)
 	partial := out.States[personStateFailed] > 0
-	idle := job.Priority == jobPriorityBackground && out.Handled == 0 && !stopped
+	idle := job.Priority == jobPriorityBackground && out.idle() && !stopped
 	return jobOutcome{Message: msg, Result: out, Canceled: stopped, Partial: partial, Idle: idle}, nil
 }
 
@@ -1038,6 +1065,9 @@ func personHandledMessage(out personJobResult) string {
 		if len(rest) > 0 {
 			msg += "；" + strings.Join(rest, "、")
 		}
+	}
+	if out.NFOs+out.ActorImages > 0 {
+		msg += fmt.Sprintf("；本地 NFO 改写 %d 个、演员头像存 %d 张", out.NFOs, out.ActorImages)
 	}
 	return msg
 }

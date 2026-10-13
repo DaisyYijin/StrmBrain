@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,6 +235,44 @@ type tmdbCastMember struct {
 	Name        string `json:"name"`
 	Character   string `json:"character"`
 	ProfilePath string `json:"profile_path"`
+}
+
+// tmdbAggregateCast aggregate_credits.cast 的一项：一个人在各季演过的角色分开列在 roles 里
+type tmdbAggregateCast struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	ProfilePath string `json:"profile_path"`
+	Order       int    `json:"order"`
+	Roles       []struct {
+		Character    string `json:"character"`
+		EpisodeCount int    `json:"episode_count"`
+	} `json:"roles"`
+}
+
+// nfoTVMaxCast 剧集 NFO 最多写几位演员。aggregate_credits 是所有季的汇总，长寿剧 / 番剧动辄几百人，
+// 后面几乎都是只出场一两集的龙套（TMDB 按出场集数排，order 即这个顺序）
+const nfoTVMaxCast = 50
+
+// aggregateCastOf aggregate_credits.cast → credits 的形状：按 order 排、截前 nfoTVMaxCast 位，
+// 角色取出场集数最多的那个
+func aggregateCastOf(in []tmdbAggregateCast) []tmdbCastMember {
+	sorted := append([]tmdbAggregateCast(nil), in...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
+	if len(sorted) > nfoTVMaxCast {
+		sorted = sorted[:nfoTVMaxCast]
+	}
+	out := make([]tmdbCastMember, 0, len(sorted))
+	for _, c := range sorted {
+		m := tmdbCastMember{ID: c.ID, Name: c.Name, ProfilePath: c.ProfilePath}
+		best := -1
+		for _, r := range c.Roles {
+			if r.Character != "" && r.EpisodeCount > best {
+				m.Character, best = r.Character, r.EpisodeCount
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // tmdbCrewMember credits.crew 里写 NFO 要用的字段
