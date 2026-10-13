@@ -127,6 +127,7 @@ func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 	// 平铺片目（几十上百部共用一个分类目录）共用一份目录索引：每部各读一遍的话，
 	// 一个放了一千部的目录要读一千遍。普通片目各用各的，读完就放掉，不把整库的目录都压在内存里
 	shared := localDirIndex{}
+	gaps := loadArtGaps()
 	for _, e := range ledger {
 		if e.Key == "" {
 			continue
@@ -135,7 +136,7 @@ func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 		if e.solo() {
 			idx = shared
 		}
-		d := inspectLocalTitleDetailIn(root, e, rows[e.Key], idx)
+		d := inspectLocalTitleDetailIn(root, e, rows[e.Key], idx, gaps)
 		t := d.localTitle
 		if t.HasPoster {
 			t.Poster = h.localPosterQuery(e.Key, d.posterV)

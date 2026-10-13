@@ -27,6 +27,7 @@ function mark(f?: LocalFile | null): Mark {
 function fileTip(f?: LocalFile | null, what = '') {
   if (!f) return `${what}不适用`
   if (f.exists) return `${f.name} · ${bytes(f.size)} · ${fullTime(f.mod_at)}`
+  if (f.note) return `${f.name}：未生成（${f.note}，刮削时确认过）`
   return f.optional ? `${f.name}：未生成（TMDB 上可能没有这张图，或按占位剧照跳过）` : `${f.name}：缺失，刮削会补上`
 }
 
@@ -146,6 +147,7 @@ function epLabel(e: LocalEntry) {
           </span>
           <span class="tile-state">
             <template v-if="f.exists"><Check :size="14" />已有</template>
+            <template v-else-if="f.note"><Minus :size="14" />TMDB 没有</template>
             <template v-else-if="f.optional"><Minus :size="14" />未生成</template>
             <template v-else><X :size="14" />缺失</template>
           </span>

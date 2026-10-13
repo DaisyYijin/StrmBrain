@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // ==================== 刮削核心 ====================
@@ -632,14 +634,28 @@ func (r *titleRun) images(body []byte) {
 	if json.Unmarshal(body, &d) != nil {
 		return
 	}
+	backdrop := d.BackdropPath
+	if backdrop == "" {
+		// 详情没给主背景时从 images 里挑一张（MoviePilot scraper.py 同款兜底），无语言的优先：
+		// 带字的那种是 landscape 的料。images 已随详情带回，不多发请求
+		backdrop = pickTMDBImage(d.Images.Backdrops, []string{"", "zh", "en"}, "")
+		if backdrop != "" {
+			r.logv("○ 详情没有主背景图，从 TMDB 图片列表里挑了一张")
+		}
+	}
+	r.noteArtGap(backdrop == "")
+	landscape := pickTMDBImage(d.Images.Backdrops, []string{"zh", "en"}, "")
+	if landscape == backdrop {
+		landscape = "" // 兜底挑中的就是带字的那张：别复制一份 fanart 充数
+	}
 	images := [][2]string{
 		{d.PosterPath, "poster.jpg"},
-		{d.BackdropPath, "fanart.jpg"},
+		{backdrop, "fanart.jpg"},
 		// clearlogo 只要 PNG：TMDB 的 logo 有一部分是 SVG，Emby 不认
 		{pickTMDBImage(d.Images.Logos, []string{"zh", "en", ""}, ".png"), "clearlogo.png"},
 		// landscape 是带片名字样的横图，只从有语言的背景里挑；
 		// 无语言的背景就是 fanart 那张，挑不到宁可不写，别复制一份 fanart 充数
-		{pickTMDBImage(d.Images.Backdrops, []string{"zh", "en"}, ""), "landscape.jpg"},
+		{landscape, "landscape.jpg"},
 	}
 	if t.Kind == "tv" {
 		have := map[int]bool{}
@@ -712,6 +728,19 @@ func (r *titleRun) images(body []byte) {
 	if t.Kind == "tv" {
 		r.episodeStills()
 	}
+}
+
+// noteArtGap 记下这一部 TMDB 有没有背景图（ScrapeArtGap）：没有的话海报墙把背景图降成提示，不算缺失。
+// 只在拿到详情之后调：下载失败不走这里，照常算缺、下次再补。有图了就删行（TMDB 后来补了图）
+func (r *titleRun) noteArtGap(noBackdrop bool) {
+	if r.t.Key == "" || model.DB == nil {
+		return
+	}
+	if !noBackdrop {
+		model.DB.Delete(&model.ScrapeArtGap{}, "key = ?", r.t.Key)
+		return
+	}
+	model.DB.Save(&model.ScrapeArtGap{Key: r.t.Key, TmdbID: r.tmdbID, NoBackdrop: true, CheckedAt: time.Now()})
 }
 
 // episodeStills 集剧照：xxx.strm → xxx-thumb.jpg 落在集文件旁，Emby 按这个名字配对成集缩略图。

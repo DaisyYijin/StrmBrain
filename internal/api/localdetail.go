@@ -36,6 +36,8 @@ type localFile struct {
 	Optional bool       `json:"optional,omitempty"`
 	Size     int64      `json:"size,omitempty"`
 	ModAt    *time.Time `json:"mod_at,omitempty"`
+	// Note 为什么缺了也不算（「TMDB 上没有这张图」）：刮削时记下的结论，见 ScrapeArtGap
+	Note string `json:"note,omitempty"`
 }
 
 // localEntry 片目里的一个视频（台账的一行）
@@ -141,11 +143,38 @@ func (x localDirIndex) findImage(dir, label, kind string, names ...string) local
 
 // inspectLocalTitleDetail 读片目目录，列出每个刮削产物在不在。rows 是台账里这个片目的视频行
 func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.SyncedFile) localTitleDetail {
-	return inspectLocalTitleDetailIn(root, e, rows, localDirIndex{})
+	return inspectLocalTitleDetailIn(root, e, rows, localDirIndex{}, loadArtGaps(e.Key))
+}
+
+// artGaps 刮削记下的「TMDB 没有的图」，按片目 key（ScrapeArtGap）
+type artGaps map[string]model.ScrapeArtGap
+
+// loadArtGaps 读记账；不给 key 读全部（卡片墙一次读完，别每个片目查一次）
+func loadArtGaps(keys ...string) artGaps {
+	out := artGaps{}
+	if model.DB == nil {
+		return out
+	}
+	var rows []model.ScrapeArtGap
+	q := model.DB.Model(&model.ScrapeArtGap{})
+	if len(keys) > 0 {
+		q = q.Where("key IN ?", keys)
+	}
+	q.Find(&rows)
+	for _, g := range rows {
+		out[g.Key] = g
+	}
+	return out
+}
+
+// noBackdrop 这个片目刮削时 TMDB 没有背景图吗。片目后来指定了别的条目（编号对不上）就不算数
+func (g artGaps) noBackdrop(e *ledgerTitleEntry) bool {
+	m, ok := g[e.Key]
+	return ok && m.NoBackdrop && (e.TmdbID <= 0 || m.TmdbID == e.TmdbID)
 }
 
 // inspectLocalTitleDetailIn 同 inspectLocalTitleDetail，目录从 idx 读（卡片墙让平铺片目共用一份）
-func inspectLocalTitleDetailIn(root string, e *ledgerTitleEntry, rows []model.SyncedFile, idx localDirIndex) localTitleDetail {
+func inspectLocalTitleDetailIn(root string, e *ledgerTitleEntry, rows []model.SyncedFile, idx localDirIndex, gaps artGaps) localTitleDetail {
 	it := inspectLocalTitleIn(root, e, idx) // 标题目录与下面共用一份目录索引，只读一遍
 	dirKey := e.dirKey()
 	titleAbs := filepath.Join(root, filepath.FromSlash(dirKey))
@@ -223,9 +252,16 @@ func inspectLocalTitleDetailIn(root string, e *ledgerTitleEntry, rows []model.Sy
 	if !tv {
 		d.perVersionArt(idx, titleAbs)
 	}
-	for _, f := range d.Files {
-		if f.Label == "背景图" && f.Exists {
+	noBackdrop := gaps.noBackdrop(e)
+	for i, f := range d.Files {
+		if f.Label != "背景图" {
+			continue
+		}
+		if f.Exists {
 			d.fanartV = f.ModAt.Unix()
+		} else if noBackdrop {
+			// TMDB 上就没有：重刮多少遍都补不上，降成提示（LitePan 同口径，背景图是可选资源）
+			d.Files[i].Optional, d.Files[i].Note = true, "TMDB 上没有背景图"
 		}
 	}
 
@@ -341,7 +377,8 @@ func (d *localTitleDetail) perVersionArt(idx localDirIndex, titleAbs string) {
 
 // grade 按详情里的产物定卡片状态：必需产物（片目级 NFO、海报、背景图、季 NFO、每集 NFO）缺一样就是 partial，
 // 一样都没有是 miss。可选的图（剧照、季海报）只记进 Soft 提示 —— TMDB 上不一定有，占位剧照还会被故意跳过，
-// 算进状态的话有些剧重刮多少遍都是「不完整」。Logo / 横版图更是常缺，只在详情里列
+// 算进状态的话有些剧重刮多少遍都是「不完整」。Logo / 横版图更是常缺，只在详情里列。
+// 背景图本来必需，刮削确认 TMDB 上没有（ScrapeArtGap）的同样降成 Soft
 func (d *localTitleDetail) grade() {
 	tv := d.MediaType == "tv"
 	have := 0
@@ -349,6 +386,9 @@ func (d *localTitleDetail) grade() {
 	for _, f := range d.Files {
 		switch {
 		case f.Optional:
+			if !f.Exists && f.Note != "" {
+				soft = append(soft, f.Label) // 本来必需、刮削确认 TMDB 没有的（背景图）
+			}
 		case f.Exists:
 			have++
 		default:

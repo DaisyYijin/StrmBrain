@@ -203,7 +203,7 @@ func localScrapeJobTitle(ledger map[string]*ledgerTitleEntry, keys []string) str
 // pick 非空 = 用户指定了 TMDB 条目；目录名里没有编号时按目录名识别一次。
 // strict = 同步后自动刮削：识别只认片名完全相等（recognizeStrict），认不准就不刮
 func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid string, pick *TmdbMedia, strict bool) (scrapeTitle, error) {
-	t := scrapeTitle{Kind: e.MediaType, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID}
+	t := scrapeTitle{Key: e.Key, Kind: e.MediaType, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID}
 	switch {
 	case pick != nil:
 		t.Kind, t.TmdbID, t.Title, t.Year = pick.MediaType, pick.TmdbID, pick.Title, pick.Year

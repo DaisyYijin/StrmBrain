@@ -280,6 +280,17 @@ type MetaFillMark struct {
 	TriedAt time.Time `json:"tried_at"`
 }
 
+// ScrapeArtGap 刮削时 TMDB 确实没有的片目级图（按台账片目 key，api/scrapecore.go 写、localdetail.go 读）。
+// 记下来海报墙就不把它算成「缺失」：TMDB 没有背景图的片目重刮多少遍都补不上，一直挂「部分」还会被补全反复白刮。
+// 只记「TMDB 没有」，不记「下载失败」（后者照常算缺、下次再补）；每次刮削按 TMDB 最新结果覆写，补上了图就删行。
+// TmdbID 记当时刮的条目：片目后来改指定了别的条目，这条结论就不算数（参考 LitePan strmscrape 的 no_backdrop）
+type ScrapeArtGap struct {
+	Key        string    `json:"key" gorm:"primaryKey;size:512"`
+	TmdbID     int       `json:"tmdb_id"`
+	NoBackdrop bool      `json:"no_backdrop"`
+	CheckedAt  time.Time `json:"checked_at"`
+}
+
 // Subscription 资源订阅：一部片一条（api/subscribe*.go，设计见 docs SUBSCRIBE-PLAN.md）。
 // 以 TMDB 条目为单位，定时回答「缺什么 → 哪条资源能补 → 补上了没有」。
 // 同一部只能订阅一次（tmdb_id + media_type 唯一），范围在条目内调整
@@ -544,6 +555,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&PersonMeta{},
 		&EmbyPersonMark{},
 		&MetaFillMark{},
+		&ScrapeArtGap{},
 		&Subscription{},
 		&SubAttempt{},
 	); err != nil {

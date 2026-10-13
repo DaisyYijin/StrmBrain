@@ -186,6 +186,8 @@ export interface LocalFile {
   optional?: boolean
   size?: number
   mod_at?: string
+  /** 缺了不算的原因：刮削时确认 TMDB 上没有（目前只有背景图） */
+  note?: string
 }
 
 /** 片目里的一个视频 */

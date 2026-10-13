@@ -542,6 +542,8 @@ type scrapeVideo struct {
 
 // scrapeTitle 一个待刮削片目
 type scrapeTitle struct {
+	// Key 台账片目 key：「TMDB 没有这张图」的结论按它记（ScrapeArtGap），海报墙按它读
+	Key    string
 	Kind   string // movie / tv
 	Title  string
 	Year   string
