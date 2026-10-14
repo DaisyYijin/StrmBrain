@@ -76,9 +76,9 @@ type ResourceItem struct {
 	Action string `json:"action"`
 	Title  string `json:"title"`
 	Via    string `json:"via,omitempty"`  // 来源里更细的出处：TG 的频道名
-	URL    string `json:"url,omitempty"`  // 直接可用的链接；观影要先去详情页取磁力、RE0 要先解锁，这两种为空
+	URL    string `json:"url,omitempty"`  // 直接可用的链接；观影按关键词搜到的种子要先去详情页取磁力、RE0 要先解锁，这两种为空
 	Code   string `json:"code,omitempty"` // 提取码
-	Ref    string `json:"ref,omitempty"`  // 需要服务端再换一次的引用：观影详情页路径 / RE0 slug
+	Ref    string `json:"ref,omitempty"`  // 需要服务端再换一次的引用：观影种子详情页路径（只有跳过 TMDB 时）/ RE0 slug
 
 	Size      string `json:"size,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
@@ -164,10 +164,46 @@ func gyReady() string {
 }
 
 func gyResSearch(h *Handler, q resQuery) (resResult, error) {
-	items, body, err := gySearchTorrents(q.Title, "")
-	if err == nil && len(items) == 0 && q.OrigTitle != "" && titleKey(q.OrigTitle) != titleKey(q.Title) {
-		items, body, err = gySearchTorrents(q.OrigTitle, "")
+	if q.TmdbID == 0 {
+		return gyResSearchKeyword(q)
 	}
+	list, err := gySearchTitles(q.Title)
+	if err != nil {
+		return resResult{}, err
+	}
+	t := gyPickTitle(q, list)
+	if t == nil && q.OrigTitle != "" && titleKey(q.OrigTitle) != titleKey(q.Title) {
+		more, err := gySearchTitles(q.OrigTitle)
+		if err != nil {
+			return resResult{}, err
+		}
+		list = append(list, more...)
+		t = gyPickTitle(q, list)
+	}
+	if t == nil {
+		if len(list) == 0 {
+			return resResult{}, nil
+		}
+		return resResult{Note: fmt.Sprintf("站内搜到 %d 部影片，但类型、片名、年份都对不上", len(list))}, nil
+	}
+	d, err := gyFetchDetail(*t)
+	if err != nil {
+		return resResult{}, err
+	}
+	note := "站内影片：" + t.Title
+	if t.Year != "" {
+		note += "（" + t.Year + "）"
+	}
+	out := gyDetailItems(d)
+	if len(out) == 0 {
+		note += "，暂无资源"
+	}
+	return resResult{Items: out, Note: note}, nil
+}
+
+// gyResSearchKeyword 跳过 TMDB 时没有影片可认，退回按关键词搜站内种子
+func gyResSearchKeyword(q resQuery) (resResult, error) {
+	items, body, err := gySearchTorrents(q.Title, "")
 	if err != nil {
 		return resResult{}, err
 	}
@@ -500,6 +536,14 @@ func resParseTime(s string) int64 {
 			}
 			return t.Unix()
 		}
+	}
+	switch s { // 观影的更新时间
+	case "今天", "刚刚":
+		return time.Now().Unix()
+	case "昨天":
+		return time.Now().Add(-24 * time.Hour).Unix()
+	case "前天":
+		return time.Now().Add(-48 * time.Hour).Unix()
 	}
 	if m := reResAgo.FindStringSubmatch(s); m != nil {
 		f, _ := strconv.ParseFloat(m[1], 64)

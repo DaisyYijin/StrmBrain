@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -702,4 +703,241 @@ func gyFetchMagnet(path string) (string, string, error) {
 	}
 	log.Printf("[观影] ✗ 详情页未找到磁力链接（path=%s, len=%d）", path, len(body))
 	return "", "", fmt.Errorf("详情页未找到磁力链接（站点可能已改版，请把这条日志发给开发者）")
+}
+
+// ==================== 按影片查资源 ====================
+//
+// 种子搜索（type=4）是按关键词搜全站种子名：「希望」会把《马萨卡的孩子：舞出希望》
+// 的种子一起搜出来，和选定的 TMDB 条目对不上。站点本身是「先搜影片、再看这部片的资源」，
+// 所以改成同样两步：type=0 搜影片（条目带类型与年份）→ 挑和 TMDB 条目对得上的那一部 →
+// /res/downurl/{类型}/{id} 读这部片的磁力与网盘清单（JSON，一次请求）。
+// 做法参考 fish2018/pansou 的 plugin/gying（只读思路）
+
+// gyTitle 站内一部影片（搜索页 _obj.search.l 的一行）
+type gyTitle struct {
+	D     string // mv 电影 / tv 剧集 / ac 动漫
+	ID    string
+	Title string // 站内片名，常是「中文名 原名」
+	Year  string
+}
+
+// gyDetail /res/downurl 的返回；各字段都是并行数组
+type gyDetail struct {
+	Code     int `json:"code"`
+	Downlist struct {
+		IMDB string `json:"imdb"`
+		List struct {
+			M []any `json:"m"` // 磁力 hash
+			T []any `json:"t"` // 资源名
+			S []any `json:"s"` // 大小
+			N []any `json:"n"` // 更新时间（「昨天」「3天前」这类相对时间）
+		} `json:"list"`
+	} `json:"downlist"`
+	Panlist struct {
+		Name  []any `json:"name"`
+		P     []any `json:"p"`   // 提取码
+		URL   []any `json:"url"` // 链接
+		Time  []any `json:"time"`
+		TName []any `json:"tname"` // 网盘类型名
+	} `json:"panlist"`
+}
+
+// gyGet 带 PoW 与会话失效重登一次的 GET
+func gyGet(path string) (string, error) {
+	cfg := loadGyCfg()
+	client := gyEnsureClient(cfg)
+	body, err := gyDo(client, cfg.BaseURL, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("连接观影失败: %w（站点换域名时请更新站点地址）", err)
+	}
+	if !gyIsNoLogin(body) && !gyCode403(body) {
+		return body, nil
+	}
+	if err := gyAutoLogin(cfg); err != nil {
+		return "", fmt.Errorf("观影需要登录（站点设置里填写账号密码，或登录已失效）: %w", err)
+	}
+	client = gyEnsureClient(cfg)
+	body, err = gyDo(client, cfg.BaseURL, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("重登后连接观影失败: %w", err)
+	}
+	if gyIsNoLogin(body) || gyCode403(body) {
+		return "", fmt.Errorf("重登后仍未通过（账号可能被封或需要验证码），请检查账号")
+	}
+	return body, nil
+}
+
+// gyCode403 详情接口未登录时回 JSON {code:403}
+func gyCode403(body string) bool {
+	b := strings.TrimSpace(body)
+	if !strings.HasPrefix(b, "{") {
+		return false
+	}
+	var r struct {
+		Code int `json:"code"`
+	}
+	return json.Unmarshal([]byte(b), &r) == nil && r.Code == 403
+}
+
+// gyParseTitles 解析影片搜索页内嵌的 _obj.search
+func gyParseTitles(body string) []gyTitle {
+	objStr, ok := gyObjJSON(body, "search")
+	if !ok {
+		return nil
+	}
+	var obj struct {
+		L struct {
+			D     []any `json:"d"`
+			I     []any `json:"i"`
+			Title []any `json:"title"`
+			Year  []any `json:"year"`
+		} `json:"l"`
+	}
+	if json.Unmarshal([]byte(objStr), &obj) != nil {
+		return nil
+	}
+	l := obj.L
+	var out []gyTitle
+	for i := range l.I {
+		t := gyTitle{ID: gyAnyStr(l.I[i]), D: gyAt(l.D, i), Title: strings.TrimSpace(gyAt(l.Title, i)), Year: gyAt(l.Year, i)}
+		if t.Year == "0" {
+			t.Year = ""
+		}
+		if t.ID == "" || t.Title == "" || t.D == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func gyAt(a []any, i int) string {
+	if i < len(a) {
+		return gyAnyStr(a[i])
+	}
+	return ""
+}
+
+// gySearchTitles 搜站内影片（type=0 全部影视，mode=2 适中）
+func gySearchTitles(query string) ([]gyTitle, error) {
+	body, err := gyGet("/search?q=" + url.QueryEscape(query) + "&type=0&mode=2")
+	if err != nil {
+		return nil, err
+	}
+	list := gyParseTitles(body)
+	if len(list) == 0 {
+		title := ""
+		if m := reTitle.FindStringSubmatch(body); m != nil {
+			title = gyHTMLUnescape(strings.TrimSpace(m[1]))
+		}
+		log.Printf("[观影] ○ 影片搜索未解析出条目（q=%s）: len=%d title=%q", query, len(body), title)
+	}
+	return list, nil
+}
+
+// gyFetchDetail 读一部影片的资源清单
+func gyFetchDetail(t gyTitle) (*gyDetail, error) {
+	body, err := gyGet("/res/downurl/" + url.PathEscape(t.D) + "/" + url.PathEscape(t.ID))
+	if err != nil {
+		return nil, err
+	}
+	var d gyDetail
+	if err := json.Unmarshal([]byte(strings.TrimSpace(body)), &d); err != nil {
+		log.Printf("[观影] ✗ 资源清单不是 JSON（%s/%s, len=%d）: %s", t.D, t.ID, len(body), truncateStr(body, 120))
+		return nil, fmt.Errorf("读取观影资源清单失败（站点可能已改版，请把这条日志发给开发者）")
+	}
+	return &d, nil
+}
+
+var reGyHash = regexp.MustCompile(`^[0-9a-fA-F]{40}$|^[A-Za-z2-7]{32}$`)
+
+// gyDetailItems 资源清单 → 统一的资源条目：磁力直接拼好链接（不用再进详情页），
+// 网盘链接按链接形态定类型（115 分享可直接转存）
+func gyDetailItems(d *gyDetail) []ResourceItem {
+	var out []ResourceItem
+	l := d.Downlist.List
+	for i := range l.M {
+		hash := strings.TrimSpace(gyAnyStr(l.M[i]))
+		if !reGyHash.MatchString(hash) {
+			continue
+		}
+		name := strings.TrimSpace(gyAt(l.T, i))
+		link := "magnet:?xt=urn:btih:" + strings.ToLower(hash)
+		if name != "" {
+			link += "&dn=" + url.QueryEscape(name)
+		}
+		tm := strings.TrimSpace(gyAt(l.N, i))
+		out = append(out, ResourceItem{
+			Source: "gy", Kind: "magnet", Action: "offline", Title: firstNonEmptyStr(name, hash), URL: link,
+			Size: strings.TrimSpace(gyAt(l.S, i)), Time: tm, TimeUnix: resParseTime(tm),
+		})
+	}
+	p := d.Panlist
+	for i := range p.URL {
+		raw := strings.TrimSpace(gyAt(p.URL, i))
+		if raw == "" {
+			continue
+		}
+		code := strings.TrimSpace(gyAt(p.P, i))
+		ri := ResourceItem{Source: "gy", Title: firstNonEmptyStr(strings.TrimSpace(gyAt(p.Name, i)), raw), URL: raw, Code: code}
+		ri.Kind, ri.Action, ri.Pan = resKindOf(raw, "")
+		if tm := strings.TrimSpace(gyAt(p.Time, i)); tm != "" {
+			ri.Time, ri.TimeUnix = tm, resParseTime(tm)
+		}
+		out = append(out, ri)
+	}
+	return out
+}
+
+// gyPickTitle 挑和 TMDB 条目对得上的那一部：类型要对（电影只认 mv，剧集认 tv / ac），
+// 片名相等优先于包含（站内片名常是「中文名 原名」，按空格拆开逐段也比一次），
+// 两边都有年份时差一年以上的不要（豆瓣按首映、TMDB 按上映，常差一年）。
+// 一部都对不上就不挑，免得把别的片的资源列出来
+func gyPickTitle(q resQuery, list []gyTitle) *gyTitle {
+	best, bestScore := -1, 0
+	qy, _ := strconv.Atoi(q.Year)
+	for i, t := range list {
+		switch q.Type {
+		case "movie":
+			if t.D != "mv" {
+				continue
+			}
+		case "tv":
+			if t.D != "tv" && t.D != "ac" {
+				continue
+			}
+		}
+		names := append([]string{t.Title}, strings.Fields(t.Title)...)
+		lvl := titleNone
+		for _, n := range q.allNames() {
+			nk := titleKey(n)
+			if nk == "" {
+				continue
+			}
+			if l := titleLevel(nk, names...); l > lvl {
+				lvl = l
+			}
+		}
+		if lvl == titleNone {
+			continue
+		}
+		score := lvl * 10
+		if ty, _ := strconv.Atoi(t.Year); qy > 0 && ty > 0 {
+			switch diff := ty - qy; {
+			case diff == 0:
+				score += 5
+			case diff == 1 || diff == -1:
+				score += 2
+			default:
+				continue
+			}
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	if best < 0 {
+		return nil
+	}
+	return &list[best]
 }

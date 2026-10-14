@@ -27,7 +27,7 @@ const { state, reload, setEnabled } = useTransferSources()
 type SubSec = 'check' | 'cond' | 'offline' | 'unlock' | 'notify'
 
 const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
-  { key: 'gy', title: '观影', hint: '站内种子 → 115 离线下载' },
+  { key: 'gy', title: '观影', hint: '按影片读站内磁力与网盘资源' },
   { key: 'pansou', title: '盘搜 PanSou', hint: '聚合全网网盘分享，免登录' },
   { key: 'tg', title: 'TG 频道', hint: '搜 Telegram 公开频道的网页版，不用登录' },
   { key: 'mukaku', title: '不太灵影视', hint: '站内资源需 VIP Token' },

@@ -139,3 +139,67 @@ func TestGyLoginFallsBackToSavedCredentials(t *testing.T) {
 		t.Fatalf("密码是掩码时应当用已存密码: %s", w.Body)
 	}
 }
+
+// TestGyParseTitles 影片搜索页的 _obj.search：年份是数字，类型 mv / tv / ac
+func TestGyParseTitles(t *testing.T) {
+	body := `<script>_obj.search={"q":"希望","n":"3","l":{"title":["希望 HOPE","希望 望み","马萨卡的孩子：舞出希望"],"year":[2026,2020,0],"d":["mv","mv","mv"],"i":["a1","b2","c3"]}};</script>`
+	got := gyParseTitles(body)
+	if len(got) != 3 || got[0].ID != "a1" || got[0].Year != "2026" || got[0].D != "mv" || got[2].Year != "" {
+		t.Fatalf("解析结果不对: %+v", got)
+	}
+}
+
+// TestGyPickTitle 现场：搜「希望」出来一串，只认类型、片名、年份都对得上的《希望 HOPE (2026)》
+func TestGyPickTitle(t *testing.T) {
+	list := []gyTitle{
+		{D: "mv", ID: "x", Title: "马萨卡的孩子：舞出希望", Year: "2025"},
+		{D: "mv", ID: "b", Title: "希望 望み", Year: "2020"},
+		{D: "mv", ID: "c", Title: "希望 Hope", Year: "2014"},
+		{D: "tv", ID: "d", Title: "希望", Year: "2026"},
+		{D: "mv", ID: "a", Title: "希望 HOPE", Year: "2026"},
+	}
+	q := resQuery{TmdbID: 1, Type: "movie", Title: "希望", OrigTitle: "호프", Year: "2026"}
+	if p := gyPickTitle(q, list); p == nil || p.ID != "a" {
+		t.Fatalf("挑错了: %+v", p)
+	}
+	// 年份差一年照认（豆瓣首映与 TMDB 上映常差一年）
+	if p := gyPickTitle(resQuery{TmdbID: 1, Type: "movie", Title: "希望", Year: "2025"}, list[4:]); p == nil {
+		t.Fatalf("差一年应当认")
+	}
+	// 一部都对不上就不挑
+	if p := gyPickTitle(resQuery{TmdbID: 1, Type: "movie", Title: "希望", Year: "2010"}, list); p != nil {
+		t.Fatalf("年份都对不上不该挑: %+v", p)
+	}
+	// 剧集认 tv / ac，不认 mv
+	if p := gyPickTitle(resQuery{TmdbID: 1, Type: "tv", Title: "希望", Year: "2026"}, list); p == nil || p.ID != "d" {
+		t.Fatalf("剧集挑错了: %+v", p)
+	}
+}
+
+// TestGyDetailItems /res/downurl 的磁力拼链接、网盘按链接形态定类型
+func TestGyDetailItems(t *testing.T) {
+	raw := `{"code":200,"downlist":{"imdb":"tt1","list":{"m":["0123456789ABCDEF0123456789ABCDEF01234567","bad"],"t":["Hope.2026.1080p.WEB-DL.mkv","x"],"s":["1.99GB","1G"],"n":["昨天","1天前"]}},
+	"panlist":{"name":["希望 4K"],"p":["abcd"],"url":["https://115cdn.com/s/swabc123"],"time":["2026-10-12"],"tname":["115"]}}`
+	var d gyDetail
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+	items := gyDetailItems(&d)
+	if len(items) != 2 {
+		t.Fatalf("条目数不对: %+v", items)
+	}
+	m := items[0]
+	if m.Kind != "magnet" || !strings.HasPrefix(m.URL, "magnet:?xt=urn:btih:0123456789abcdef") || m.Size != "1.99GB" || m.TimeUnix == 0 {
+		t.Errorf("磁力条目不对: %+v", m)
+	}
+	if s := items[1]; s.Kind != "share115" || s.Action != "transfer" || s.Code != "abcd" {
+		t.Errorf("115 分享条目不对: %+v", s)
+	}
+}
+
+// TestGyCode403 详情接口未登录回 JSON code=403，要触发重登
+func TestGyCode403(t *testing.T) {
+	if !gyCode403(`{"code":403,"msg":"x"}`) || gyCode403(`{"code":200}`) || gyCode403(`<html>`) {
+		t.Fatal("gyCode403 判断不对")
+	}
+}
