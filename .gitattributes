@@ -2,3 +2,4 @@
 *.png binary
 *.otf binary
 *.exe binary
+internal/api/testdata/cloak/* binary

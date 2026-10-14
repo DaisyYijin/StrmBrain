@@ -38,11 +38,13 @@ ARG APP_VERSION=dev
 # 编译（CGO 禁用，按目标架构交叉编译；注入版本标识）
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.BuildSHA=${BUILD_SHA} -X main.Version=${APP_VERSION}" -o 115-station .
 
-# 运行阶段：最小镜像
-FROM alpine:latest
-# ca-certificates（TLS）、tzdata（时区）。
+# 运行阶段：debian-slim（2026-10-14 起，原来是 alpine）
+# RE0 网页登录用的 CloakBrowser 只有 glibc 构建，alpine（musl）跑不了。浏览器本体（约 210MB）
+# 授权上不能随镜像分发，由程序在用户启用 RE0 网页登录时下载到 /data（re0browser.go）；
+# 这里只装它运行要的系统库（Playwright 给 Debian 12 列的 Chromium 依赖）和一套字体。
 # 不再带 ffmpeg：「媒体补全」与刮削「轨道探测」写 NFO 已删（2026-09-29），轨道信息交给 Emby 自己探测
-RUN apk add --no-cache ca-certificates tzdata
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends         ca-certificates tzdata fonts-liberation         libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3         libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1         libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

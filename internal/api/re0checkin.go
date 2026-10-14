@@ -75,13 +75,16 @@ type re0CheckinResult struct {
 	Points    int    `json:"points"`
 }
 
-// re0CheckinReady 能不能签：授权了、而且授权里有 write。不能就返回原因
+// re0CheckinReady 能不能签：OpenAPI 授权了、而且授权里有 write；或者配了网页登录、浏览器已就绪。不能就返回原因
 func re0CheckinReady(cfg *re0Cfg) string {
+	if re0Channel(cfg) == "web" {
+		return re0BrowserBlocked("RE0 签到时发现浏览器没装")
+	}
 	switch {
 	case cfg.ClientSecret == "":
-		return "未配置 RE0 应用"
+		return "未配置 RE0 账号密码"
 	case cfg.AccessToken == "":
-		return "未授权 RE0 账号"
+		return "未授权 RE0 账号（或改填账号密码走网页登录）"
 	case !cfg.grantedScopes()["write"]:
 		return "授权里没有签到需要的 write 权限，请在 RE0 设置里重新授权一次"
 	}
@@ -119,6 +122,14 @@ func (h *Handler) runRe0Checkin(notify bool) (ok bool, msg string) {
 	cfg := loadRe0Cfg()
 	if why := re0CheckinReady(cfg); why != "" {
 		return false, why
+	}
+	if re0Channel(cfg) == "web" {
+		// 网页签到：页面只给一条提示，没有积分数（插件同样只回提示文案）
+		wok, wmsg, err := re0WebCheckin()
+		if err != nil {
+			return false, "签到失败：" + err.Error()
+		}
+		return wok, wmsg
 	}
 	var res re0CheckinResult
 	if err := re0Call(h, cfg, http.MethodPost, "/api/open/checkin", nil, map[string]bool{"is_gambler": false}, &res); err != nil {

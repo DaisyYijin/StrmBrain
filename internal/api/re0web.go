@@ -1,0 +1,1338 @@
+package api
+
+// ==================== RE0 网页通道：浏览器里登录、签到、查资源、解锁 ====================
+//
+// 浏览器是 re0browser.go 下载的 CloakBrowser，用 go-rod 走 CDP 控制。页面上的做法（选择器、
+// 签到按钮怎么认、资源列表从 Next.js 内嵌数据里怎么读、解锁后怎么拿分享链接）参考
+// p115strmhelper `helper/hdhive/browser.py` 与 `utils/hdhive.py`（只读，Go 重写）。
+//
+// 与插件不同的一点：插件每次操作都开新上下文、重新登录一遍；这里浏览器常驻、用户数据目录持久化、
+// 指纹种子固定，只有被跳回 /login 才登录。订阅每轮都要查资源，次次登录既慢又容易触发风控。
+// 如果站点的会话绑定连这样都不认，表现就是每次都会走一遍登录，结果仍然正确，只是慢。
+//
+// 站点会校验点击的 isTrusted（插件注释），所以点按钮一律用 rod 的 Click（CDP 输入事件），
+// 不在页面里 el.click()。
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"math/rand"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/input"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/launcher/flags"
+	"github.com/go-rod/rod/lib/proto"
+	"github.com/ysmood/gson"
+)
+
+const (
+	re0BrowserIdle  = 10 * time.Minute // 浏览器空闲多久关掉（下次用再起，登录态在用户数据目录里）
+	re0LoginPath    = "/login"
+	re0AutoRetryGap = 30 * time.Minute // 下载失败后，被动入口多久之后才自动重试
+)
+
+// re0WebConfigured 配了网页登录（账号 + 密码）
+func re0WebConfigured(cfg *re0Cfg) bool {
+	return strings.TrimSpace(cfg.Username) != "" && cfg.Password != ""
+}
+
+// errRe0BrowserNotReady 浏览器还没下载好
+var errRe0BrowserNotReady = errors.New("RE0 网页登录用的浏览器还没准备好")
+
+// re0BrowserBlocked 浏览器不能用的原因（空 = 能用）。没装就顺手触发下载
+func re0BrowserBlocked(reason string) string {
+	st := cloakSnapshot()
+	switch st.State {
+	case "ready":
+		return ""
+	case "unsupported":
+		return st.Error
+	case "downloading", "verifying", "extracting":
+		if st.Total > 0 {
+			return fmt.Sprintf("浏览器下载中（%d%%），下载完才能用", st.Done*100/st.Total)
+		}
+		return "浏览器下载中，下载完才能用"
+	}
+	if st.State == "error" && time.Since(time.Unix(st.UpdatedAt, 0)) < re0AutoRetryGap {
+		// 刚失败过：被动入口（打开来源列表、定时签到）别一失败就重下，断网时会一直重试刷日志。
+		// 界面上的「下载浏览器」按钮不受这个限制
+		return "浏览器下载失败：" + st.Error + "（可在「影视转存 → 设置 → RE0」重新下载）"
+	}
+	ensureCloak(reason)
+	if st.State == "error" && st.Error != "" {
+		return "浏览器下载失败：" + st.Error + "（已重新开始下载）"
+	}
+	return "浏览器还没下载，已开始下载（约 210MB），可在「影视转存 → 设置 → RE0」看进度"
+}
+
+// ==================== 浏览器进程 ====================
+
+var (
+	re0OpMu sync.Mutex // 同一时间只做一件事：页面操作互相不干扰，也免得两个任务同时登录
+
+	re0BrMu       sync.Mutex
+	re0BrLauncher *launcher.Launcher
+	re0Br         *rod.Browser
+	re0BrLastUse  time.Time
+	re0BrJanitor  sync.Once
+)
+
+// re0StartBrowser 起浏览器（已经起着就复用）。调用方持有 re0OpMu
+func re0StartBrowser() (*rod.Browser, error) {
+	re0BrMu.Lock()
+	defer re0BrMu.Unlock()
+	re0BrLastUse = time.Now()
+	if re0Br != nil {
+		// 进程可能被杀了：探一下
+		if _, err := (proto.BrowserGetVersion{}).Call(re0Br); err == nil {
+			return re0Br, nil
+		}
+		log.Printf("[RE0浏览器] ○ 常驻浏览器已失联，重新启动")
+		re0killLocked()
+	}
+	bin, ok := cloakInstalled()
+	if !ok {
+		return nil, errRe0BrowserNotReady
+	}
+	cfg := loadRe0Cfg()
+	l := launcher.New().
+		Bin(bin).
+		Leakless(false). // leakless 会往临时目录释放一个守护程序；进程由我们自己管
+		Headless(true).
+		UserDataDir(cloakProfileDir()).
+		NoSandbox(true).
+		Delete("enable-automation"). // 暴露 navigator.webdriver（官方包装层同样去掉）
+		Set("fingerprint", cloakSeed()).
+		Set("fingerprint-platform", "windows").
+		Set("disable-dev-shm-usage") // 容器里 /dev/shm 默认只有 64MB
+	// rod 自带的一串默认参数里，关站点隔离（disable-site-isolation-trials / disable-features=site-per-process）
+	// 和 NetworkServiceInProcess 都不是真浏览器会有的，一并去掉；与 2026-10-14 实测能过 Cloudflare 的组合一致。
+	// 别加 --disable-gpu：没有 WebGL 是很明显的机器人特征
+	for _, f := range []string{"disable-site-isolation-trials", "disable-features", "enable-features",
+		"disable-background-networking", "disable-popup-blocking", "metrics-recording-only", "use-mock-keychain",
+		"force-color-profile", "disable-ipc-flooding-protection", "disable-renderer-backgrounding", "no-startup-window",
+		"disable-background-timer-throttling", "disable-backgrounding-occluded-windows", "disable-breakpad",
+		"disable-client-side-phishing-detection", "disable-component-extensions-with-background-pages",
+		"disable-default-apps", "disable-hang-monitor", "disable-prompt-on-repost", "disable-sync"} {
+		l.Delete(flags.Flag(f))
+	}
+	if tz := os.Getenv("TZ"); tz != "" {
+		l.Set("fingerprint-timezone", tz)
+	}
+	proxyNote := "直连"
+	if cfg.UseProxy {
+		if pu := getProxyURL(); pu != "" {
+			if u, err := url.Parse(pu); err == nil && u.Host != "" {
+				if u.User != nil {
+					log.Printf("[RE0浏览器] ⚠ 代理带账号密码，Chromium 的 --proxy-server 不支持，去掉账号部分照用（不通的话请换不带认证的代理）")
+				}
+				l.Proxy(u.Scheme + "://" + u.Host)
+				proxyNote = "代理 " + u.Scheme + "://" + u.Host
+			}
+		} else {
+			log.Printf("[RE0浏览器] ○ 勾了「通过代理访问」但系统配置里没填代理，按直连")
+		}
+	}
+	start := time.Now()
+	log.Printf("[RE0浏览器] ▶ 启动 CloakBrowser %s（%s，指纹种子 %s，用户目录 %s）", cloakVersion(), proxyNote, cloakSeed(), cloakProfileDir())
+	u, err := l.Launch()
+	if err != nil {
+		l.Kill()
+		return nil, fmt.Errorf("浏览器启动失败: %v（缺系统库时请用官方 Docker 镜像）", err)
+	}
+	// NoDefaultDevice：rod 默认给每个页面套一个「笔记本」设备，会把 UA 改成 Mac 上的 Chrome 114、
+	// 再改触控与屏幕方向，和 CloakBrowser 自己的 Windows / Chrome 146 指纹对不上，Cloudflare 一眼认出是机器人。
+	// 2026-10-14 实测：带着它点验证框永远重置成未勾选，去掉后点一次就过
+	b := rod.New().ControlURL(u).NoDefaultDevice()
+	if err := b.Connect(); err != nil {
+		l.Kill()
+		return nil, fmt.Errorf("连接浏览器失败: %v", err)
+	}
+	if v, err := (proto.BrowserGetVersion{}).Call(b); err == nil {
+		log.Printf("[RE0浏览器] ✓ 浏览器已启动（%s，pid %d，用时 %s）", v.Product, l.PID(), time.Since(start).Round(time.Millisecond))
+	}
+	re0BrLauncher, re0Br = l, b
+	re0BrJanitor.Do(func() { go re0BrowserJanitor() })
+	return b, nil
+}
+
+func re0killLocked() {
+	if re0Br != nil {
+		re0Br.Close()
+	}
+	if re0BrLauncher != nil {
+		re0BrLauncher.Kill() // 不调 Cleanup：那会删掉用户数据目录，登录态就没了
+	}
+	re0Br, re0BrLauncher = nil, nil
+}
+
+// re0CloseBrowser 关掉常驻浏览器（空闲 / 退出 / 换账号 / 重新下载）
+func re0CloseBrowser(why string) {
+	re0BrMu.Lock()
+	defer re0BrMu.Unlock()
+	if re0Br == nil {
+		return
+	}
+	re0killLocked()
+	log.Printf("[RE0浏览器] ■ 浏览器已关闭（%s）", why)
+}
+
+func re0BrowserJanitor() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-stopCh:
+			re0CloseBrowser("程序退出")
+			return
+		case <-t.C:
+		}
+		if !re0OpMu.TryLock() {
+			continue // 正在用
+		}
+		re0BrMu.Lock()
+		idle := re0Br != nil && time.Since(re0BrLastUse) > re0BrowserIdle
+		re0BrMu.Unlock()
+		if idle {
+			re0CloseBrowser(fmt.Sprintf("空闲超过 %d 分钟", int(re0BrowserIdle.Minutes())))
+		}
+		re0OpMu.Unlock()
+	}
+}
+
+// re0ResetProfile 换了账号：清掉旧的登录态（用户数据目录），指纹种子保留
+func re0ResetProfile() {
+	re0OpMu.Lock()
+	defer re0OpMu.Unlock()
+	re0CloseBrowser("RE0 账号变了")
+	if cloakRoot == "" {
+		return
+	}
+	if err := os.RemoveAll(cloakProfileDir()); err == nil {
+		log.Printf("[RE0浏览器] ○ 已清掉旧账号的登录态")
+	}
+}
+
+// ==================== 一次页面操作 ====================
+
+// re0Web 一次网页操作：打开 target（相对站点根的路径），被跳到登录页就登录再回来，然后交给 fn。
+// what 只用于日志
+func re0Web(what, target string, timeout time.Duration, fn func(p *rod.Page) error) error {
+	cfg := loadRe0Cfg()
+	if !re0WebConfigured(cfg) {
+		return fmt.Errorf("未配置 RE0 账号密码")
+	}
+	if why := re0BrowserBlocked("RE0 " + what + "时发现浏览器没装"); why != "" {
+		return errors.New(why)
+	}
+	re0OpMu.Lock()
+	defer re0OpMu.Unlock()
+	start := time.Now()
+	log.Printf("[RE0网页] ▶ %s：%s", what, target)
+	err := re0WebRun(cfg, what, target, timeout, fn)
+	re0BrMu.Lock()
+	re0BrLastUse = time.Now()
+	re0BrMu.Unlock()
+	if err != nil {
+		log.Printf("[RE0网页] ✗ %s 失败（用时 %s）: %v", what, time.Since(start).Round(time.Millisecond), err)
+		return err
+	}
+	log.Printf("[RE0网页] ✓ %s 完成（用时 %s）", what, time.Since(start).Round(time.Millisecond))
+	return nil
+}
+
+func re0WebRun(cfg *re0Cfg, what, target string, timeout time.Duration, fn func(p *rod.Page) error) (retErr error) {
+	b, err := re0StartBrowser()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	page, err := b.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		// 浏览器进程坏了：下次重起
+		re0CloseBrowser("开新页面失败")
+		return fmt.Errorf("开页面失败: %v", err)
+	}
+	defer page.Close()
+	defer func() {
+		if retErr != nil {
+			re0SaveDebug(page, what)
+		}
+	}()
+	p := page.Context(ctx)
+	// 无头时给一个固定的视口（官方包装层对 148 以下的版本也是这样，否则窗口尺寸前后对不上）
+	_ = (proto.EmulationSetDeviceMetricsOverride{Width: 1920, Height: 947, DeviceScaleFactor: 1}).Call(p)
+
+	full := cfg.BaseURL + target
+	if err := re0Goto(p, full); err != nil {
+		return err
+	}
+	// 没登录时站点是在页面加载完之后才在前端跳去 /login 的：等一下，看最后落在登录页还是出现了用户菜单
+	if re0AwaitAuth(p) == "login" {
+		log.Printf("[RE0网页] ○ 被跳到登录页，登录账号 %s", re0MaskUser(cfg.Username))
+		if err := re0Login(p, cfg); err != nil {
+			return err
+		}
+		if err := re0Goto(p, full); err != nil {
+			return err
+		}
+		if re0AwaitAuth(p) == "login" {
+			return fmt.Errorf("登录后仍被跳回登录页，请检查账号密码")
+		}
+	} else {
+		log.Printf("[RE0网页] ○ 登录态有效，不用重新登录")
+	}
+	err = fn(p)
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("操作超时（%s）: %v", timeout, err)
+	}
+	return err
+}
+
+// re0SaveDebug 失败时把当时的页面存一份截图与 HTML（DATA_DIR/cloakbrowser/debug，只留最近 10 份），
+// 站点改版后看图就知道卡在哪一步
+func re0SaveDebug(page *rod.Page, what string) {
+	if cloakRoot == "" || page == nil {
+		return
+	}
+	dir := filepath.Join(cloakRoot, "debug")
+	if os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	p := page.Timeout(10 * time.Second)
+	base := filepath.Join(dir, time.Now().Format("20060102-150405")+"-"+re0SafeName(what))
+	if img, err := p.Screenshot(false, nil); err == nil {
+		_ = os.WriteFile(base+".png", img, 0o644)
+	}
+	if html, err := p.HTML(); err == nil {
+		_ = os.WriteFile(base+".html", []byte(html), 0o644)
+	}
+	log.Printf("[RE0网页]   失败现场已存：%s.png / .html（%s）", base, re0URL(p))
+	if ents, err := os.ReadDir(dir); err == nil && len(ents) > 20 {
+		names := make([]string, 0, len(ents))
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		sort.Strings(names)
+		for _, n := range names[:len(names)-20] {
+			os.Remove(filepath.Join(dir, n))
+		}
+	}
+}
+
+func re0SafeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == ' ' || r == '*' || r == '?' {
+			return '_'
+		}
+		return r
+	}, s)
+}
+
+// re0AwaitAuth 最多等 10 秒：落在登录页回 "login"，出现用户菜单回 "in"，都没等到回 ""（交给后面的操作自己判断）
+func re0AwaitAuth(p *rod.Page) string {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if re0OnLogin(p) {
+			return "login"
+		}
+		if re0FindVisible(p, re0UserMenuSel) != nil {
+			return "in"
+		}
+		if time.Now().After(deadline) || p.GetContext().Err() != nil {
+			return ""
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func re0MaskUser(u string) string {
+	r := []rune(strings.TrimSpace(u))
+	if len(r) <= 2 {
+		return "**"
+	}
+	return string(r[:2]) + "***"
+}
+
+func re0URL(p *rod.Page) string {
+	info, err := p.Info()
+	if err != nil {
+		return ""
+	}
+	return info.URL
+}
+
+func re0OnLogin(p *rod.Page) bool {
+	u, err := url.Parse(re0URL(p))
+	return err == nil && strings.TrimRight(u.Path, "/") == re0LoginPath
+}
+
+// re0Goto 打开页面并等过 Cloudflare 验证
+func re0Goto(p *rod.Page, u string) error {
+	start := time.Now()
+	if err := p.Navigate(u); err != nil {
+		return fmt.Errorf("打开 %s 失败: %v", u, err)
+	}
+	// 等 load 事件最多 30 秒；Next.js 的流式页面可能迟迟不触发，不算失败
+	wctx, cancel := context.WithTimeout(p.GetContext(), 30*time.Second)
+	_ = p.Context(wctx).WaitLoad()
+	cancel()
+	if err := re0WaitCloudflare(p); err != nil {
+		return err
+	}
+	log.Printf("[RE0网页]   打开 %s → %s（%s）", u, re0URL(p), time.Since(start).Round(time.Millisecond))
+	return nil
+}
+
+const re0ChallengeJS = `() => Boolean(
+	window._cf_chl_opt ||
+	document.querySelector('#challenge-running, #challenge-form') ||
+	/^(Just a moment|Checking your browser|请稍候|请稍等)/i.test(document.title)
+)`
+
+// re0WaitCloudflare 有 Cloudflare 验证页就等它过（最长 90 秒），每 5 秒试着点一次复选框，最多 3 次
+func re0WaitCloudflare(p *rod.Page) error {
+	deadline := time.Now().Add(90 * time.Second)
+	detected, clicks := false, 0
+	var nextClick time.Time
+	for time.Now().Before(deadline) {
+		res, err := p.Eval(re0ChallengeJS)
+		if err != nil {
+			if p.GetContext().Err() != nil {
+				return p.GetContext().Err()
+			}
+			time.Sleep(500 * time.Millisecond) // 页面正在跳转
+			continue
+		}
+		if !res.Value.Bool() {
+			if detected {
+				log.Printf("[RE0网页] ✓ Cloudflare 验证已通过")
+			}
+			return nil
+		}
+		if !detected {
+			detected = true
+			log.Printf("[RE0网页] ○ 遇到 Cloudflare 验证（%s），等它自动通过或点验证框，最长 90 秒", re0URL(p))
+		}
+		if clicks < 3 && time.Now().After(nextClick) {
+			if re0ClickCFCheckbox(p) {
+				clicks++
+				log.Printf("[RE0网页]   已点 Cloudflare 验证框（第 %d 次）", clicks)
+			}
+			nextClick = time.Now().Add(5 * time.Second)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if detected {
+		return fmt.Errorf("Cloudflare 验证 90 秒内没通过（%s），检查网络 / 代理到 challenges.cloudflare.com 是否通畅", re0URL(p))
+	}
+	return fmt.Errorf("页面一直在跳转，读不出来（%s）", re0URL(p))
+}
+
+// re0ClickCFCheckbox 验证框在 challenges.cloudflare.com 的 iframe 里、还套着封闭的 Shadow DOM，
+// 选择器选不到：按无障碍树找 checkbox 再用坐标点（插件 _click_cf_checkbox 同思路）。
+// 开着站点隔离时这个 iframe 是独立进程（OOPIF），要附到它自己的 target 上找、在它自己的视口坐标里点；
+// 同进程时（关了隔离）直接在主页面按 FrameID 找
+func re0ClickCFCheckbox(p *rod.Page) bool {
+	// 独立进程的 iframe
+	if tg, err := (proto.TargetGetTargets{}).Call(p.Browser()); err == nil {
+		for _, ti := range tg.TargetInfos {
+			if ti.Type != "iframe" || !re0IsCFURL(ti.URL) {
+				continue
+			}
+			// PageFromTarget 会发只对顶层页面有效的命令，iframe 只能裸附加再按会话包一层
+			att, err := proto.TargetAttachToTarget{TargetID: ti.TargetID, Flatten: true}.Call(p.Browser())
+			if err != nil {
+				continue
+			}
+			fp := p.Browser().PageFromSession(att.SessionID)
+			x, y, ok := re0CFCheckboxAt(fp, "")
+			clicked := ok && re0HumanClick(fp, x, y) == nil
+			_ = proto.TargetDetachFromTarget{SessionID: att.SessionID}.Call(p.Browser())
+			if clicked {
+				return true
+			}
+		}
+	}
+	// 同进程的 iframe
+	tree, err := proto.PageGetFrameTree{}.Call(p)
+	if err != nil {
+		return false
+	}
+	var frames []*proto.PageFrame
+	var walk func(t *proto.PageFrameTree)
+	walk = func(t *proto.PageFrameTree) {
+		if t == nil {
+			return
+		}
+		if re0IsCFURL(t.Frame.URL) {
+			frames = append(frames, t.Frame)
+		}
+		for _, c := range t.ChildFrames {
+			walk(c)
+		}
+	}
+	walk(tree.FrameTree)
+	for _, f := range frames {
+		if x, y, ok := re0CFCheckboxAt(p, f.ID); ok && re0HumanClick(p, x, y) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func re0IsCFURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Hostname() == "challenges.cloudflare.com"
+}
+
+// re0CFCheckboxAt 在 p（或 p 里的 frameID）的无障碍树里找没勾上的 checkbox，返回点击坐标（框内随机偏一点）
+func re0CFCheckboxAt(p *rod.Page, frameID proto.PageFrameID) (float64, float64, bool) {
+	ax, err := proto.AccessibilityGetFullAXTree{FrameID: frameID}.Call(p)
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, n := range ax.Nodes {
+		if n.Ignored || n.Role == nil || n.Role.Value.Str() != "checkbox" || n.BackendDOMNodeID == 0 {
+			continue
+		}
+		skip := false
+		for _, prop := range n.Properties {
+			if prop.Value == nil {
+				continue
+			}
+			v := prop.Value.Value
+			if (prop.Name == "disabled" && v.Bool()) || (prop.Name == "checked" && (v.Bool() || v.Str() == "true")) {
+				skip = true
+			}
+		}
+		if skip {
+			continue
+		}
+		box, err := proto.DOMGetBoxModel{BackendNodeID: n.BackendDOMNodeID}.Call(p)
+		if err != nil || box.Model == nil || len(box.Model.Content) < 8 {
+			continue
+		}
+		q := box.Model.Content
+		x, y := (q[0]+q[2]+q[4]+q[6])/4, (q[1]+q[3]+q[5]+q[7])/4
+		if x <= 0 || y <= 0 {
+			continue
+		}
+		// 落点在框内随机偏一点：Turnstile 看鼠标轨迹，每次都点正中心不像人
+		return x + float64(rand.Intn(9)-4), y + float64(rand.Intn(7)-3), true
+	}
+	return 0, 0, false
+}
+
+// re0HumanClick 像人一样点一下：从旁边分几段移过去，停顿后按下、松开。
+// 直接发 CDP 的 Input.dispatchMouseEvent（isTrusted=true），这样附加到 iframe 会话的页面也能用（它没有 rod 的 Mouse）
+func re0HumanClick(p *rod.Page, x, y float64) error {
+	sx, sy := x-180-float64(rand.Intn(120)), y+90+float64(rand.Intn(80))
+	steps := 18 + rand.Intn(10)
+	for i := 0; i <= steps; i++ {
+		f := float64(i) / float64(steps)
+		f = f * f * (3 - 2*f) // 先快后慢
+		if err := (proto.InputDispatchMouseEvent{Type: proto.InputDispatchMouseEventTypeMouseMoved,
+			X: sx + (x-sx)*f, Y: sy + (y-sy)*f}).Call(p); err != nil {
+			return err
+		}
+		time.Sleep(time.Duration(8+rand.Intn(14)) * time.Millisecond)
+	}
+	time.Sleep(time.Duration(120+rand.Intn(200)) * time.Millisecond)
+	if err := (proto.InputDispatchMouseEvent{Type: proto.InputDispatchMouseEventTypeMousePressed, X: x, Y: y,
+		Button: proto.InputMouseButtonLeft, Buttons: gson.Int(1), ClickCount: 1}).Call(p); err != nil {
+		return err
+	}
+	time.Sleep(time.Duration(60+rand.Intn(90)) * time.Millisecond)
+	return proto.InputDispatchMouseEvent{Type: proto.InputDispatchMouseEventTypeMouseReleased, X: x, Y: y,
+		Button: proto.InputMouseButtonLeft, ClickCount: 1}.Call(p)
+}
+
+// re0Visible 按 CSS 选择器找第一个看得见的元素（找不到立刻返回 nil，不等）
+const re0VisibleJS = `(sel) => [...document.querySelectorAll(sel)].find(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden') || null`
+
+func re0FindVisible(p *rod.Page, sel string) *rod.Element {
+	el, err := p.Sleeper(rod.NotFoundSleeper).ElementByJS(rod.Eval(re0VisibleJS, sel))
+	if err != nil {
+		return nil
+	}
+	return el
+}
+
+// re0WaitVisible 等一个看得见的元素出现
+func re0WaitVisible(p *rod.Page, sel string, d time.Duration) (*rod.Element, error) {
+	deadline := time.Now().Add(d)
+	for {
+		if el := re0FindVisible(p, sel); el != nil {
+			return el, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("等 %s 出现超时", sel)
+		}
+		if err := p.GetContext().Err(); err != nil {
+			return nil, err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// re0Click 真实点击（CDP 鼠标事件，isTrusted=true）
+func re0Click(el *rod.Element) error {
+	return el.Timeout(10*time.Second).Click(proto.InputMouseButtonLeft, 1)
+}
+
+// ==================== 登录 ====================
+
+const (
+	re0UserSel = `input[name='username'], input[name='email'], input[type='email'], input[autocomplete='username'], input[placeholder*='邮箱'], input[placeholder*='email'], input[placeholder*='用户名']`
+	re0PassSel = `input[name='password'], input[type='password']`
+)
+
+// re0NativeSetJS 受控输入框（React）的值没留住时：用原生 setter 写值再发 input / change，通知 React 更新
+const re0NativeSetJS = `function(v) {
+	const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+	setter.call(this, v);
+	this.dispatchEvent(new Event('input', {bubbles: true}));
+	this.dispatchEvent(new Event('change', {bubbles: true}));
+}`
+
+const re0LoginHintJS = `() => {
+	for (const sel of ['[role="alert"]', '[data-slot="toast"]', '.error', '[class*="error"]', '[class*="Error"]']) {
+		const el = document.querySelector(sel);
+		const t = el && (el.innerText || '').trim();
+		if (t) return t;
+	}
+	return '';
+}`
+
+func re0Login(p *rod.Page, cfg *re0Cfg) error {
+	start := time.Now()
+	user, err := re0WaitVisible(p, re0UserSel, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("登录页上没找到账号输入框（%s）", re0URL(p))
+	}
+	pass, err := re0WaitVisible(p, re0PassSel, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("登录页上没找到密码输入框")
+	}
+	fields := []struct {
+		label string
+		el    *rod.Element
+		val   string
+	}{{"账号", user, strings.TrimSpace(cfg.Username)}, {"密码", pass, cfg.Password}}
+	ok := false
+	for attempt := 1; attempt <= 3 && !ok; attempt++ {
+		for _, f := range fields {
+			if re0InputValue(f.el) == f.val {
+				continue
+			}
+			_ = f.el.SelectAllText()
+			if err := f.el.Input(f.val); err != nil {
+				log.Printf("[RE0网页]   %s常规填写出错（%v），检查实际值", f.label, err)
+			}
+			if re0InputValue(f.el) != f.val {
+				if _, err := f.el.Eval(re0NativeSetJS, f.val); err == nil {
+					log.Printf("[RE0网页]   %s值没留住，改用原生输入事件写入", f.label)
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond) // 受控表单重渲染后两项一起复核，免得填密码时把账号清掉
+		ok = true
+		for _, f := range fields {
+			if re0InputValue(f.el) != f.val {
+				ok = false
+				log.Printf("[RE0网页]   第 %d 次复核：%s没填上", attempt, f.label)
+			}
+		}
+	}
+	if !ok {
+		return fmt.Errorf("登录表单填不上，已停止提交")
+	}
+	// 账号密码错误之类的提示是一闪而过的 toast：提交前装好观察器，等的时候一起看
+	_, _ = p.Eval(re0ToastObserverJS)
+	defer re0StopToasts(p)
+	submitted := false
+	if btn := re0FindVisible(p, `button[type='submit']`); btn != nil {
+		submitted = re0Click(btn) == nil
+	}
+	if !submitted {
+		if btn, err := p.Sleeper(rod.NotFoundSleeper).ElementR("button", `^\s*(登录|登 录|Login|Sign in)\s*$`); err == nil {
+			submitted = re0Click(btn) == nil
+		}
+	}
+	if !submitted {
+		_ = pass.Type(input.Enter)
+	}
+	log.Printf("[RE0网页]   已提交登录表单，等离开登录页")
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if !re0OnLogin(p) {
+			log.Printf("[RE0网页] ✓ 登录成功（用时 %s）", time.Since(start).Round(time.Millisecond))
+			return nil
+		}
+		for _, t := range re0ReadToasts(p) {
+			if t.Status == "error" || strings.Contains(t.Text, "错误") || strings.Contains(t.Text, "失败") || strings.Contains(t.Text, "不正确") {
+				return fmt.Errorf("登录失败：%s", truncateStr(strings.ReplaceAll(strings.TrimSpace(t.Text), "\n", " "), 120))
+			}
+		}
+		if err := p.GetContext().Err(); err != nil {
+			return err
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	hint := ""
+	if res, err := p.Eval(re0LoginHintJS); err == nil {
+		hint = strings.TrimSpace(res.Value.Str())
+	}
+	if hint != "" {
+		return fmt.Errorf("登录失败：%s", truncateStr(hint, 120))
+	}
+	return fmt.Errorf("登录超时（30 秒还在登录页），请检查账号密码")
+}
+
+func re0InputValue(el *rod.Element) string {
+	v, err := el.Property("value")
+	if err != nil {
+		return ""
+	}
+	return v.Str()
+}
+
+// ==================== 签到 ====================
+
+const (
+	re0UserMenuSel = `button[aria-label="打开用户菜单"], button[aria-label="Open user menu"]`
+	// 每日签到按钮按图标认（插件 CHECKIN_BUTTON_SELECTORS[False]）。赌狗签到不开放（会扣分，见 re0checkin.go）
+	re0CheckinBtnSel = `button:has(path[d^="M11.5 21h-5.5"])`
+)
+
+// re0ToastObserverJS 装一个观察者，收集之后新出现 / 变化的提示（toast / alert）
+const re0ToastObserverJS = `() => {
+	window.__s115Obs?.disconnect();
+	window.__s115Toasts = [];
+	const sel = '[data-slot="toast"], [role="alert"], [role="alertdialog"]';
+	const prev = new WeakMap(), seen = new Map();
+	const boxes = () => [...new Set([...document.querySelectorAll(sel)].map(el => el.closest('[data-slot="toast"]') || el))];
+	const read = el => ({
+		text: (el.innerText || '').trim(),
+		status: el.classList.contains('toast--success') ? 'success' : el.classList.contains('toast--danger') ? 'error' : ''
+	});
+	for (const el of boxes()) prev.set(el, JSON.stringify(read(el)));
+	const collect = () => {
+		for (const el of boxes()) {
+			const r = read(el), v = JSON.stringify(r);
+			if (!r.text || !el.getClientRects().length || prev.get(el) === v) continue;
+			prev.set(el, v);
+			seen.set(el, r);
+		}
+		window.__s115Toasts = [...seen.values()];
+	};
+	window.__s115Obs = new MutationObserver(collect);
+	window.__s115Obs.observe(document.body, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class']});
+}`
+
+type re0Toast struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
+}
+
+func re0ReadToasts(p *rod.Page) []re0Toast {
+	res, err := p.Eval(`() => window.__s115Toasts || []`)
+	if err != nil {
+		return nil
+	}
+	var out []re0Toast
+	_ = res.Value.Unmarshal(&out)
+	return out
+}
+
+func re0StopToasts(p *rod.Page) { _, _ = p.Eval(`() => window.__s115Obs?.disconnect()`) }
+
+// parseRe0CheckinToast 签到提示 → 结果。done=false 表示这不是签到结果（别的提示），继续等
+func parseRe0CheckinToast(text, status string) (ok bool, msg string, done bool) {
+	var lines []string
+	for _, l := range strings.Split(text, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	clean := strings.Join(lines, " ")
+	if clean == "" {
+		return false, "", false
+	}
+	low := strings.ToLower(clean)
+	has := func(ws ...string) bool {
+		for _, w := range ws {
+			if strings.Contains(low, w) {
+				return true
+			}
+		}
+		return false
+	}
+	if has("已经签到", "已签到", "签到过", "明天再来", "already checked in", "already checked-in", "already signed in") {
+		var rest []string
+		for _, l := range lines {
+			if l != "签到失败" && l != "Check-in failed" {
+				rest = append(rest, l)
+			}
+		}
+		return true, "今日已签到：" + firstNonEmpty(strings.Join(rest, " "), clean), true
+	}
+	if status == "error" || has("失败", "错误", "异常", "请先登录", "未登录", "error", "failed") {
+		return false, clean, true
+	}
+	if status == "success" || has("签到成功", "check-in successful", "check in successful") {
+		return true, clean, true
+	}
+	return false, "", false
+}
+
+// re0WebCheckin 网页签到（每日签到，不赌）
+func re0WebCheckin() (ok bool, msg string, err error) {
+	err = re0Web("每日签到", "/", 4*time.Minute, func(p *rod.Page) error {
+		if err := re0DismissDialogs(p); err != nil {
+			return err
+		}
+		menu, err := re0WaitVisible(p, re0UserMenuSel, 15*time.Second)
+		if err != nil {
+			return fmt.Errorf("没找到用户菜单，页面可能改版了")
+		}
+		if err := re0Click(menu); err != nil {
+			return fmt.Errorf("点开用户菜单失败: %v", err)
+		}
+		btn, err := re0WaitVisible(p, re0CheckinBtnSel, 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("用户菜单里没找到签到按钮，页面可能改版了")
+		}
+		if _, err := p.Eval(re0ToastObserverJS); err != nil {
+			return fmt.Errorf("装提示观察器失败: %v", err)
+		}
+		defer re0StopToasts(p)
+		if err := re0Click(btn); err != nil {
+			return fmt.Errorf("点签到按钮失败: %v", err)
+		}
+		log.Printf("[RE0网页]   已点每日签到，等结果提示")
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			ts := re0ReadToasts(p)
+			for i := len(ts) - 1; i >= 0; i-- {
+				if o, m, done := parseRe0CheckinToast(ts[i].Text, ts[i].Status); done {
+					ok, msg = o, m
+					log.Printf("[RE0网页]   签到提示：%s", truncateStr(strings.ReplaceAll(ts[i].Text, "\n", " "), 120))
+					return nil
+				}
+			}
+			if err := p.GetContext().Err(); err != nil {
+				return err
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return fmt.Errorf("等签到结果超时（60 秒没有提示）")
+	})
+	return ok, msg, err
+}
+
+var re0DialogBtnRe = regexp.MustCompile(`^(我知道了(\s*[（(].*?[)）])?|保存并启用推荐|Got it|Save and enable recommendations)$`)
+
+// re0DismissDialogs 首页的公告 / 首次登录的偏好设置弹窗会挡住用户菜单：逐个关掉（插件 _dismiss_home_dialogs 同流程）。
+// 偏好设置要求选一个偏好网盘才能保存，没选过就选 115
+func re0DismissDialogs(p *rod.Page) error {
+	if _, err := re0WaitVisible(p, re0UserMenuSel, 30*time.Second); err != nil {
+		return fmt.Errorf("首页没加载出用户菜单（%s）", re0URL(p))
+	}
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		res, err := p.Eval(`() => [...document.querySelectorAll('[role="dialog"]')].filter(d => d.getClientRects().length).length`)
+		if err == nil && res.Value.Int() == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("首页弹窗关不掉，请先在网页上手动处理一次公告或首次登录设置")
+		}
+		btns, _ := p.Sleeper(rod.NotFoundSleeper).Elements(`[role="dialog"] button`)
+		clicked := false
+		for _, b := range btns {
+			txt, _ := b.Text()
+			txt = strings.TrimSpace(txt)
+			if !re0DialogBtnRe.MatchString(txt) {
+				continue
+			}
+			if vis, _ := b.Visible(); !vis {
+				continue
+			}
+			save := txt == "保存并启用推荐" || txt == "Save and enable recommendations"
+			if save {
+				if err := re0EnsureProvider115(p, b); err != nil {
+					log.Printf("[RE0网页]   偏好设置选 115 网盘失败: %v", err)
+					continue
+				}
+				p.Eval(re0ToastObserverJS)
+			}
+			if err := re0Click(b); err != nil {
+				log.Printf("[RE0网页]   弹窗按钮「%s」暂时点不了: %v", txt, err)
+				continue
+			}
+			clicked = true
+			if save {
+				log.Printf("[RE0网页]   已保存偏好设置（偏好网盘 115），等站点确认")
+				err := re0WaitPrefSaved(p)
+				re0StopToasts(p)
+				if err != nil {
+					return err
+				}
+			} else {
+				log.Printf("[RE0网页]   已关掉首页公告「%s」", txt)
+			}
+			break
+		}
+		if !clicked {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+}
+
+func re0EnsureProvider115(p *rod.Page, btn *rod.Element) error {
+	res, err := btn.Eval(`function() {
+		const d = this.closest('[role="dialog"]');
+		const grid = d && d.querySelector('[class*="UserPreferenceDialog_providerGrid"]');
+		if (!grid) return 'none';
+		return grid.querySelector('input[type="checkbox"]:checked') ? 'checked' : 'unchecked';
+	}`)
+	if err != nil {
+		return err
+	}
+	if res.Value.Str() != "unchecked" {
+		return nil
+	}
+	cb, err := p.Sleeper(rod.NotFoundSleeper).ElementByJS(rod.Eval(`() => {
+		const grid = document.querySelector('[role="dialog"] [class*="UserPreferenceDialog_providerGrid"]');
+		if (!grid) return null;
+		const box = [...grid.querySelectorAll('[data-slot="checkbox"]')].find(e => /^115\s*(网盘|Drive)$/i.test((e.innerText || '').trim()));
+		return box ? box.querySelector('input[type="checkbox"]') : null;
+	}`))
+	if err != nil {
+		return fmt.Errorf("没找到「115 网盘」选项")
+	}
+	// 嵌套 label 的鼠标点击切不准状态，用键盘空格（插件注释）
+	if err := cb.Focus(); err != nil {
+		return err
+	}
+	if err := cb.Type(input.Space); err != nil {
+		return err
+	}
+	time.Sleep(300 * time.Millisecond)
+	if v, err := cb.Property("checked"); err != nil || !v.Bool() {
+		return fmt.Errorf("勾选后仍未选中")
+	}
+	log.Printf("[RE0网页]   偏好设置里没选网盘，已选 115 网盘")
+	return nil
+}
+
+func re0WaitPrefSaved(p *rod.Page) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, t := range re0ReadToasts(p) {
+			if t.Status == "error" {
+				return fmt.Errorf("偏好设置保存失败：%s", t.Text)
+			}
+		}
+		res, err := p.Eval(`() => [...document.querySelectorAll('[role="dialog"]')].some(d => d.getClientRects().length && /保存并启用推荐|Save and enable/.test(d.innerText))`)
+		if err == nil && !res.Value.Bool() {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return fmt.Errorf("偏好设置提交后弹窗没关，没收到保存成功的结果")
+}
+
+// re0WebCheck 测一下能不能登录（打开首页，需要就登录）
+func re0WebCheck() error {
+	return re0Web("检查登录", "/", 3*time.Minute, func(p *rod.Page) error {
+		if _, err := re0WaitVisible(p, re0UserMenuSel, 20*time.Second); err != nil {
+			return fmt.Errorf("登录后首页没出现用户菜单（%s），可能没登录成功或页面改版了", re0URL(p))
+		}
+		return nil
+	})
+}
+
+// ==================== 查资源 ====================
+
+// re0ChunksJS 读页面内嵌的 Next.js 数据分片（self.__next_f.push([1, "..."])），不执行脚本
+const re0ChunksJS = `() => [...document.scripts].flatMap(s => {
+	const t = (s.textContent || '').trim(), pre = 'self.__next_f.push(';
+	if (!t.startsWith(pre)) return [];
+	try {
+		const c = JSON.parse(t.slice(pre.length, t.lastIndexOf(')')));
+		return c[0] === 1 && typeof c[1] === 'string' ? [c[1]] : [];
+	} catch { return []; }
+})`
+
+// re0WebResources 网页查一部影片的 115 资源
+func re0WebResources(mediaType string, tmdbID int) ([]re0Resource, error) {
+	if (mediaType != "movie" && mediaType != "tv") || tmdbID <= 0 {
+		return nil, fmt.Errorf("RE0 按 TMDB 条目查资源，需要有效的类型与编号")
+	}
+	var out []re0Resource
+	target := fmt.Sprintf("/tmdb/%s/%d", mediaType, tmdbID)
+	err := re0Web("查资源 "+mediaType+"/"+strconv.Itoa(tmdbID), target, 3*time.Minute, func(p *rod.Page) error {
+		// 兜底：页面自己发的 JSON 请求里也可能带着资源列表
+		var capMu sync.Mutex
+		var reqIDs []proto.NetworkRequestID
+		_ = proto.NetworkEnable{}.Call(p)
+		wait := p.EachEvent(func(e *proto.NetworkResponseReceived) {
+			if e.Response != nil && e.Response.Status == 200 && strings.Contains(e.Response.MIMEType, "json") {
+				capMu.Lock()
+				reqIDs = append(reqIDs, e.RequestID)
+				capMu.Unlock()
+			}
+		})
+		go wait()
+		var lastChunks string
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if re0OnLogin(p) {
+				return fmt.Errorf("登录态失效（被跳回登录页）")
+			}
+			if res, err := p.Eval(re0ChunksJS); err == nil {
+				var chunks []string
+				_ = res.Value.Unmarshal(&chunks)
+				if j := strings.Join(chunks, ""); j != lastChunks {
+					lastChunks = j
+					if rows, ok := parseRe0PageResources(j); ok {
+						out = rows
+						log.Printf("[RE0网页]   页面数据里读到 %d 条 115 资源", len(rows))
+						return nil
+					}
+				}
+			}
+			capMu.Lock()
+			ids := append([]proto.NetworkRequestID(nil), reqIDs...)
+			reqIDs = nil
+			capMu.Unlock()
+			for _, id := range ids {
+				body, err := proto.NetworkGetResponseBody{RequestID: id}.Call(p)
+				if err != nil || body.Base64Encoded {
+					continue
+				}
+				if rows := parseRe0JSONResources([]byte(body.Body)); len(rows) > 0 {
+					out = rows
+					log.Printf("[RE0网页]   接口响应里读到 %d 条 115 资源", len(rows))
+					return nil
+				}
+			}
+			if err := p.GetContext().Err(); err != nil {
+				return err
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return fmt.Errorf("20 秒内没读到资源列表（%s），页面可能改版了", re0URL(p))
+	})
+	return out, err
+}
+
+var (
+	re0HexKeyRe = regexp.MustCompile(`^[0-9a-fA-F]+$`)
+	re0RefRe    = regexp.MustCompile(`^\$[0-9a-fA-F]+$`)
+	re0SlugRe   = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	re0HrefRe   = regexp.MustCompile(`/resource/115/([A-Za-z0-9_-]+)/?$`)
+)
+
+type re0Unresolved struct{}
+
+// parseRe0PageResources 从 Next.js 的 RSC 数据里找资源分组（带 groupData 的对象，按网盘分组，取 "115"）。
+// 数据是 `十六进制id:JSON` 一行一条，值里的 "$3a" 引用另一条（插件 extract_hdhive_page_resources 同思路）。
+// ok=false 表示还没读全（有引用解析不出来 / 还没出现分组），调用方接着等页面流式输出
+func parseRe0PageResources(raw string) ([]re0Resource, bool) {
+	records := map[string]any{}
+	for _, line := range strings.Split(raw, "\n") {
+		key, val, found := strings.Cut(line, ":")
+		if !found || !re0HexKeyRe.MatchString(key) {
+			continue
+		}
+		var v any
+		if json.Unmarshal([]byte(val), &v) == nil {
+			records[key] = v
+		}
+	}
+	var resolve func(v any, seen map[string]bool) any
+	resolve = func(v any, seen map[string]bool) any {
+		s, ok := v.(string)
+		if !ok || !re0RefRe.MatchString(s) {
+			return v
+		}
+		k := s[1:]
+		rec, has := records[k]
+		if !has || seen[k] {
+			return re0Unresolved{}
+		}
+		next := map[string]bool{k: true}
+		for kk := range seen {
+			next[kk] = true
+		}
+		return resolve(rec, next)
+	}
+	var groups []map[string]any
+	keys := make([]string, 0, len(records))
+	for k := range records {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // 结果稳定
+	for _, k := range keys {
+		stack := []any{records[k]}
+		for len(stack) > 0 {
+			v := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			switch t := v.(type) {
+			case []any:
+				stack = append(stack, t...)
+			case map[string]any:
+				if gd, ok := t["groupData"]; ok {
+					g := resolve(gd, nil)
+					if _, bad := g.(re0Unresolved); bad {
+						return nil, false
+					}
+					if gm, ok := g.(map[string]any); ok {
+						groups = append(groups, gm)
+					}
+				}
+				for _, vv := range t {
+					stack = append(stack, vv)
+				}
+			}
+		}
+	}
+	if len(groups) == 0 {
+		return nil, false
+	}
+	var rows []map[string]any
+	for _, g := range groups {
+		list, ok := resolve(g["115"], nil).([]any)
+		if !ok {
+			if g["115"] == nil {
+				continue // 这一组没有 115 资源
+			}
+			return nil, false
+		}
+		for _, r := range list {
+			rv := resolve(r, nil)
+			if _, bad := rv.(re0Unresolved); bad {
+				return nil, false
+			}
+			m, ok := rv.(map[string]any)
+			if !ok {
+				continue
+			}
+			full := map[string]any{}
+			for k, v := range m {
+				x := resolve(v, nil)
+				if _, bad := x.(re0Unresolved); bad {
+					return nil, false
+				}
+				full[k] = x
+			}
+			rows = append(rows, full)
+		}
+	}
+	return re0NormalizeRows(rows), true
+}
+
+// parseRe0JSONResources 接口响应 {data: [...]} 里的资源
+func parseRe0JSONResources(body []byte) []re0Resource {
+	var env struct {
+		Data []map[string]any `json:"data"`
+	}
+	if json.Unmarshal(body, &env) != nil {
+		return nil
+	}
+	return re0NormalizeRows(env.Data)
+}
+
+// re0NormalizeRows 页面数据 → re0Resource。只留 115（website 写了别的就丢），按 slug 去重。
+// unlock_points 为空按免费算（插件同口径）
+func re0NormalizeRows(rows []map[string]any) []re0Resource {
+	var out []re0Resource
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if w, ok := r["website"]; ok && w != nil && fmt.Sprint(w) != "115" {
+			continue
+		}
+		slug, _ := r["slug"].(string)
+		if !re0SlugRe.MatchString(slug) {
+			href, _ := r["href"].(string)
+			m := re0HrefRe.FindStringSubmatch(href)
+			if m == nil {
+				continue
+			}
+			slug = m[1]
+		}
+		if seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		points := 0
+		if n, ok := looseInt(r["unlock_points"]); ok {
+			points = n
+		}
+		item := re0Resource{
+			Slug:            slug,
+			Title:           firstNonEmpty(re0Str(r["remark"]), re0Str(r["title"]), "未命名"),
+			PanType:         "115",
+			ShareSize:       firstNonEmpty(re0Str(r["share_size"]), re0Str(r["size"])),
+			VideoResolution: re0StrList(r["video_resolution"]),
+			Source:          re0StrList(r["source"]),
+			SubtitleLang:    re0StrList(r["subtitle_language"]),
+			UnlockPoints:    &points,
+			CreatedAt:       firstNonEmpty(re0Str(r["submitted_at"]), re0Str(r["created_at"]), re0Str(r["posted_at"])),
+		}
+		for _, k := range []string{"is_unlocked", "unlocked", "is_owned", "already_owned"} {
+			if b, ok := r[k].(bool); ok && b {
+				item.IsUnlocked = true
+			}
+		}
+		if len(item.VideoResolution) == 0 {
+			if s := re0Str(r["resolution"]); s != "" {
+				item.VideoResolution = []string{s}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func re0Str(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	}
+	return ""
+}
+
+func re0StrList(v any) []string {
+	switch t := v.(type) {
+	case []any:
+		var out []string
+		for _, x := range t {
+			if s := re0Str(x); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if s := strings.TrimSpace(t); s != "" {
+			return []string{s}
+		}
+	}
+	return nil
+}
+
+// ==================== 解锁 ====================
+
+// re0ShareJS 从页面上找 115 分享链接（链接 / 输入框 / 正文）
+const re0ShareJS = `() => {
+	const ok = v => {
+		try {
+			const u = new URL(v);
+			return ['http:', 'https:'].includes(u.protocol) && ['115.com', '115cdn.com', 'anxia.com'].includes(u.hostname) &&
+				/^\/s\/[^/\s]+\/?$/.test(u.pathname) && !u.username && !u.password;
+		} catch { return false; }
+	};
+	for (const el of document.querySelectorAll('a[href], input, textarea')) {
+		const v = el.tagName === 'A' ? el.href : el.value;
+		if (v && ok(v.trim())) return v.trim();
+	}
+	for (const v of (document.body?.innerText || '').match(/https?:\/\/[^\s<>"']+/g) || []) if (ok(v)) return v;
+	return '';
+}`
+
+// isRe0ShareURL 是不是 115 分享链接
+func isRe0ShareURL(v string) bool {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "115.com", "115cdn.com", "anxia.com":
+	default:
+		return false
+	}
+	return regexp.MustCompile(`^/s/[^/\s]+/?$`).MatchString(u.Path)
+}
+
+var re0ConfirmRe = regexp.MustCompile(`^\s*(确认解锁|确定解锁|Confirm unlock)\s*$`)
+
+// re0WebUnlock 网页解锁一条资源。已解锁过的页面直接显示链接，不会再点按钮（不扣积分）。
+// 只能从 resolveResourceLink 的 confirm 分支进来
+func re0WebUnlock(slug string) (link, code string, err error) {
+	if !re0SlugRe.MatchString(slug) {
+		return "", "", fmt.Errorf("RE0 资源编号无效")
+	}
+	submitted := false
+	err = re0Web("解锁 "+truncateStr(slug, 16), "/resource/115/"+slug, 3*time.Minute, func(p *rod.Page) error {
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if re0OnLogin(p) {
+				return fmt.Errorf("登录态失效（被跳回登录页）")
+			}
+			cur := re0URL(p)
+			if isRe0ShareURL(cur) {
+				link = cur // 解锁后整页跳到了 115
+				return nil
+			}
+			if res, err := p.Eval(re0ShareJS); err == nil {
+				if s := res.Value.Str(); isRe0ShareURL(s) {
+					link = s
+					return nil
+				}
+			}
+			if el := re0FindVisible(p, `[data-slot="toast"].toast--danger`); el != nil {
+				t, _ := el.Text()
+				return fmt.Errorf("RE0 解锁失败：%s", strings.TrimSpace(t))
+			}
+			if !submitted {
+				if btn, err := p.Sleeper(rod.NotFoundSleeper).ElementR("button", re0ConfirmRe.String()); err == nil {
+					if vis, _ := btn.Visible(); vis {
+						if dis, _ := btn.Attribute("disabled"); dis == nil {
+							if err := re0Click(btn); err == nil {
+								submitted = true
+								deadline = time.Now().Add(30 * time.Second)
+								log.Printf("[RE0网页]   已点「确认解锁」（花积分），等分享链接")
+							}
+						}
+					}
+				}
+			}
+			if err := p.GetContext().Err(); err != nil {
+				return err
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if submitted {
+			return fmt.Errorf("点了解锁但 30 秒内没拿到 115 链接（%s）", re0URL(p))
+		}
+		return fmt.Errorf("页面上既没有分享链接也没有「确认解锁」按钮（%s）", re0URL(p))
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if u, perr := url.Parse(link); perr == nil {
+		code = firstNonEmpty(u.Query().Get("password"), u.Query().Get("pwd"))
+	}
+	log.Printf("[RE0] ✦ 网页解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), map[bool]string{true: "这次花了积分", false: "之前已解锁"}[submitted])
+	return link, code, nil
+}

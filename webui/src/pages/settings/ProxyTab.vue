@@ -6,12 +6,15 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
+import SecretInput from '@/components/ui/SecretInput.vue'
 import { configApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
 import { useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
 const { model, saving, save, reset } = useSetting('proxy', { url: '' })
+// GitHub Token（setting github）：更新检测与 RE0 浏览器下载都走 GitHub，匿名访问容易被限流
+const { model: ghModel, saving: ghSaving, save: ghSave } = useSetting('github', { token: '' })
 
 const banner = ref<BannerState | null>(null)
 /** 网络连接测试一次探多个目标，所以单独一组横幅，不复用 banner */
@@ -79,5 +82,22 @@ async function networkCheck() {
 
     <TestBanner :state="banner" />
     <TestBanner v-for="(r, i) in netResults" :key="i" :state="r" />
+  </SectionCard>
+
+  <SectionCard title="GitHub 访问" hint="检查更新、下载 RE0 网页登录用的浏览器">
+    <FieldRow
+      label="GitHub Token"
+      tip="可选。访问 GitHub 一律走上面的代理；匿名访问每小时只有 60 次接口额度，下载大文件也可能被限流。填一个 Personal Access Token（不需要勾任何权限，fine-grained 选 Public repositories 只读即可）可以避开。"
+    >
+      <SecretInput
+        v-model="ghModel.token"
+        name="github-token"
+        :reveal="{ key: 'github', field: 'token' }"
+        placeholder="ghp_… / github_pat_…，留空匿名访问"
+      />
+    </FieldRow>
+    <FormActions>
+      <HButton variant="primary" :loading="ghSaving" @click="ghSave()">保存</HButton>
+    </FormActions>
   </SectionCard>
 </template>

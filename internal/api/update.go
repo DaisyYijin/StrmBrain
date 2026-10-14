@@ -96,16 +96,12 @@ var (
 )
 
 // fetchGithubLatestRelease 读 GitHub 的 latest release（不含预发布与草稿）。
-// 走全局代理：国内直连 api.github.com 经常超时，和 TMDB 同一个处境
+// 走全局代理：国内直连 api.github.com 经常超时，和 TMDB 同一个处境（github.go）
 func fetchGithubLatestRelease() (*githubRelease, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	if pu := getProxyURL(); pu != "" {
-		if p, err := parseProxyURL(pu); err == nil {
-			client.Transport = &http.Transport{Proxy: p}
-		}
-	}
+	client := githubHTTPClient(15 * time.Second)
 	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+updateRepo+"/releases/latest", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	githubAuth(req) // 配了 GitHub Token 就带上，匿名每小时只有 60 次
 	req.Header.Set("User-Agent", "115-station/"+buildVersion)
 	resp, err := client.Do(req)
 	if err != nil {

@@ -7,6 +7,7 @@ package api
 // 只给文件名不给链接），预览不可用时只能看标题。
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 	"strconv"
@@ -336,6 +337,11 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 						}
 						cand.Exact, cand.Covers, cand.Reach = covered, len(covered), maxEpKey(covered)
 						cands = append(cands, cand)
+						continue
+					}
+					// 网页登录方式根本没有预览：看不到文件就不花积分（维护者定的），留给用户在找资源里手动解锁
+					if errors.Is(err, errRe0NoPreview) {
+						c.skip("要花积分、网页登录方式看不到文件预览")
 						continue
 					}
 					// 预览不可用（没开放 / 这个网盘不支持 / 出错）：退回按标题判

@@ -19,6 +19,10 @@ package api
 //   - OPENAPI_REAUTH_REQUIRED / INVALID_OPENAPI_USER_TOKEN 刷新也救不回来：清掉 Token、提示重新授权
 //   - 换 Token 的返回不再带 user，用户名改由授权后读一次 /me 拿
 //   - 2026-08-24 起只对有效 V / 长期 V 用户开放，403 时把这一条说出来
+//
+// 2026-10-14 起 RE0 不再开放 OpenAPI 申请，新增「网页登录」通道（re0browser.go / re0web.go：
+// 账号密码 + CloakBrowser）。OpenAPI 保留为第二通道：已授权的继续走 OpenAPI，其余走网页（re0Channel）。
+// 网页通道拿不到文件预览（errRe0NoPreview），订阅因此不自动付费解锁
 
 import (
 	"bytes"
@@ -60,6 +64,33 @@ type re0Cfg struct {
 	AuthorizedAs string `json:"authorized_as"` // 授权用户展示名
 	RedirectURI  string `json:"redirect_uri"`  // 上次授权的回调地址（code 交换必须一致）
 	Scope        string `json:"scope"`         // 这次授权实际给的权限（空格分隔）；老 Token 为空，按 re0LegacyScope 算
+
+	// 网页登录（2026-10-14 起，re0web.go）
+	Username string `json:"username"`
+	Password string `json:"password"`
+	UseProxy bool   `json:"use_proxy"` // 浏览器访问 RE0 走全局代理（默认直连，和原来的 OpenAPI 一致）
+}
+
+// re0Channel 这次用哪条通道：已授权的 OpenAPI 优先（老用户不受影响），否则网页登录；都没有返回空
+func re0Channel(cfg *re0Cfg) string {
+	switch {
+	case cfg.ClientSecret != "" && cfg.AccessToken != "":
+		return "openapi"
+	case re0WebConfigured(cfg):
+		return "web"
+	}
+	return ""
+}
+
+// errRe0NoPreview 网页通道没有「不解锁先看文件」的数据：订阅据此不自动付费解锁（维护者定的）
+var errRe0NoPreview = errors.New("网页登录方式看不到 RE0 文件预览")
+
+// maskIfSet 有值就回掩码（界面原样回传 = 没改）
+func maskIfSet(v string) string {
+	if v == "" {
+		return ""
+	}
+	return settingMask
 }
 
 // grantedScopes 当前 Token 拿到的权限
@@ -558,15 +589,22 @@ func (h *Handler) Re0GetConfig(c *gin.Context) {
 		"authorized_as": cfg.AuthorizedAs,
 		// 授权给的权限不够本站用（2026-10 之前的授权没有 meta / write）：要重新点一次「授权」
 		"missing_scopes": cfg.missingScopes(),
+		"username":       cfg.Username,
+		"password":       maskIfSet(cfg.Password),
+		"use_proxy":      cfg.UseProxy,
+		"channel":        re0Channel(cfg),
 	})
 }
 
-// Re0SaveConfig POST /re0/config {base_url, client_id, client_secret}
+// Re0SaveConfig POST /re0/config {base_url, client_id, client_secret, username, password, use_proxy}
 func (h *Handler) Re0SaveConfig(c *gin.Context) {
 	var req struct {
 		BaseURL      string `json:"base_url"`
 		ClientID     string `json:"client_id"`
 		ClientSecret string `json:"client_secret"`
+		Username     string `json:"username"`
+		Password     string `json:"password"`
+		UseProxy     bool   `json:"use_proxy"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -580,12 +618,32 @@ func (h *Handler) Re0SaveConfig(c *gin.Context) {
 	if s := strings.TrimSpace(req.ClientSecret); s != settingMask {
 		cfg.ClientSecret = s
 	}
+	oldUser, oldProxy := cfg.Username, cfg.UseProxy
+	cfg.Username = strings.TrimSpace(req.Username)
+	if req.Password != settingMask {
+		cfg.Password = req.Password // 密码不 trim：空格可能是密码的一部分
+	}
+	cfg.UseProxy = req.UseProxy
 	if err := saveRe0Cfg(cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[RE0] ✓ 配置已保存（%s）", cfg.BaseURL)
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	log.Printf("[RE0] ✓ 配置已保存（%s，通道：%s）", cfg.BaseURL, firstNonEmpty(re0Channel(cfg), "未配置"))
+	if oldUser != "" && oldUser != cfg.Username {
+		re0ResetProfile() // 换账号：旧账号的登录态不能留着
+	} else if oldProxy != cfg.UseProxy {
+		re0CloseBrowser("代理设置变了") // 代理是启动参数，下次用时按新设置重起
+	}
+	msg := "保存成功"
+	if re0WebConfigured(cfg) {
+		// 启用网页登录时检查本地有没有浏览器，没有就开始下载（已有 / 下载中不会重复下）
+		if !ensureCloak("保存 RE0 配置：启用网页登录") {
+			if st := cloakSnapshot(); st.State != "ready" && st.State != "unsupported" {
+				msg = "保存成功，正在下载浏览器（约 210MB，只下一次）"
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"message": msg})
 }
 
 // Re0Check GET /re0/check —— 应用 Secret 是否有效 + 授权状态 + 账号信息（/me）
@@ -595,6 +653,16 @@ func (h *Handler) Re0SaveConfig(c *gin.Context) {
 // 有 meta 权限时再 ping 一次拿应用名
 func (h *Handler) Re0Check(c *gin.Context) {
 	cfg := loadRe0Cfg()
+	if cfg.AccessToken == "" && re0WebConfigured(cfg) {
+		// 网页通道：真的打开首页登录一次
+		if err := re0WebCheck(); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "网页登录检查失败: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"app_ok": true, "authorized": true, "channel": "web", "user": cfg.Username,
+			"message": "网页登录有效：" + cfg.Username})
+		return
+	}
 	if cfg.ClientSecret == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置应用 Secret"})
 		return
@@ -779,6 +847,9 @@ type re0Resource struct {
 // re0ListResources 按 TMDB 条目查 RE0 资源列表（带解锁积分 / 是否已解锁）
 func re0ListResources(h *Handler, mediaType string, tmdbID int) ([]re0Resource, error) {
 	cfg := loadRe0Cfg()
+	if re0Channel(cfg) == "web" {
+		return re0WebResources(mediaType, tmdbID)
+	}
 	var resources []re0Resource
 	err := re0Call(h, cfg, http.MethodGet, "/api/open/resources/"+mediaType+"/"+strconv.Itoa(tmdbID), nil, nil, &resources)
 	return resources, err
@@ -787,6 +858,9 @@ func re0ListResources(h *Handler, mediaType string, tmdbID int) ([]re0Resource, 
 // re0UnlockSlug 解锁一条资源，拿到分享链接与访问码。已解锁过的再调一次不扣积分（already_owned）
 func re0UnlockSlug(h *Handler, slug string) (link, code string, err error) {
 	cfg := loadRe0Cfg()
+	if re0Channel(cfg) == "web" {
+		return re0WebUnlock(slug)
+	}
 	var data struct {
 		URL          string `json:"url"`
 		AccessCode   string `json:"access_code"`
@@ -836,6 +910,9 @@ type re0PreviewHit struct {
 
 // re0PreviewFiles 预览一条资源的文件列表（带缓存）。预览没开 / 这个网盘不支持预览时返回错误，调用方退回按标题判
 func re0PreviewFiles(h *Handler, slug string) (*re0Preview, error) {
+	if re0Channel(loadRe0Cfg()) == "web" {
+		return nil, errRe0NoPreview
+	}
 	now := time.Now()
 	re0PreviewCache.Lock()
 	if hit, ok := re0PreviewCache.m[slug]; ok {

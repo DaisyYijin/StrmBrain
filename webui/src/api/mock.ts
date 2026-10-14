@@ -334,7 +334,8 @@ const subRoutes: Record<string, unknown> = {
   '/guanying/check': { logged_in: true },
   '/pansou/config': { base_url: 'https://pansou.app' },
   '/mukaku/config': { base_url: 'https://www.mukaku.com', has_token: false },
-  '/re0/config': { base_url: 'https://re0.me', client_id: 'demo', client_secret: '••••', authorized: true, authorized_as: 'demo' },
+  '/re0/config': { base_url: 'https://re0.me', client_id: '', client_secret: '', authorized: false, username: 'demo', password: '••••', use_proxy: false, channel: 'web' },
+  '/re0/browser': { browser: { state: 'downloading', version: '146.0.7680.177.5', platform: 'linux-x64', done: 98566144, total: 216890134, speed: 5242880, source: 'GitHub Releases' }, running: false, channel: 'web' },
   '/re0/check': { app_ok: true, app_name: 'StrmStation', authorized: true, user: 'demo', level: 'V3', points: 128 },
   '/re0/checkin': { enabled: true, done_today: true, hour: 8, last_result: '签到成功 +3 积分' },
 }

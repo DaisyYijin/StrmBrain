@@ -106,7 +106,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
-	StartRe0CheckinScheduler(h) // RE0 每日签到：08:00 后今天没签成就签
+	re0BrowserInit(h.Config.DataDir) // RE0 网页登录：查本地有没有浏览器，配了网页登录又没有就后台下载（re0browser.go）
+	StartRe0CheckinScheduler(h)     // RE0 每日签到：08:00 后今天没签成就签
 	StartCoverGenScheduler(h)
 	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
@@ -401,6 +402,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/re0/checkin", h.Re0CheckinGet)
 		protected.POST("/re0/checkin", h.Re0CheckinSave)
 		protected.POST("/re0/checkin/run", h.Re0CheckinRun)
+		protected.GET("/re0/browser", h.Re0BrowserStatus)          // 网页登录用的浏览器：本地有没有、下载进度
+		protected.POST("/re0/browser/download", h.Re0BrowserDownload) // 没有就下载；force 删掉重下
 
 		// 分享链接转存（转存到接收文件夹后由整理+增量接管）
 		protected.POST("/share/receive", h.ShareReceive)
@@ -1557,6 +1560,7 @@ var sensitiveSettingKeys = map[string]bool{
 	"message":     true, // 企微 Secret/Token/AESKey、TG token、OneBot/飞书/QQ 密钥
 	"emby":        true, // api_key
 	"emby-notify": true, // webhook token
+	"github":      true, // GitHub Token（github.go）
 }
 
 var sensitiveFieldRe = regexp.MustCompile(`(?i)secret|token|api_?key|aes_?key|password`)
@@ -1655,6 +1659,8 @@ func (h *Handler) RevealSecret(c *gin.Context) {
 		value = loadGyCfg().Password
 	case key == "re0" && field == "client_secret":
 		value = loadRe0Cfg().ClientSecret
+	case key == "re0" && field == "password":
+		value = loadRe0Cfg().Password
 	case sensitiveSettingKeys[key]:
 		var root any
 		if raw := h.settingValueRaw(key); raw != "" && json.Unmarshal([]byte(raw), &root) != nil {

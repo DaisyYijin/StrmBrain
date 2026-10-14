@@ -31,7 +31,7 @@ const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
   { key: 'pansou', title: '盘搜 PanSou', hint: '聚合全网网盘分享，免登录' },
   { key: 'tg', title: 'TG 频道', hint: '搜 Telegram 公开频道的网页版，不用登录' },
   { key: 'mukaku', title: '不太灵影视', hint: '站内资源需 VIP Token' },
-  { key: 're0', title: 'RE0', hint: '官方 OpenAPI，解锁花站内积分' },
+  { key: 're0', title: 'RE0', hint: '账号密码网页登录，解锁花站内积分' },
 ]
 const SUB_SECS: { key: SubSec; title: string }[] = [
   { key: 'check', title: '检查' },

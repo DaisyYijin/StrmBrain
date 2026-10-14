@@ -333,13 +333,13 @@ func mukakuPickVideo(q resQuery, videos []mukakuVideo) *mukakuVideo {
 
 func re0Ready() string {
 	cfg := loadRe0Cfg()
-	if cfg.ClientSecret == "" {
-		return "未配置 RE0 应用"
+	switch re0Channel(cfg) {
+	case "openapi":
+		return ""
+	case "web":
+		return re0BrowserBlocked("找资源时发现 RE0 浏览器没装")
 	}
-	if cfg.AccessToken == "" {
-		return "未授权 RE0 账号"
-	}
-	return ""
+	return "未配置 RE0（在设置里填账号密码）"
 }
 
 func re0ResSearch(h *Handler, q resQuery) (resResult, error) {
@@ -1011,6 +1011,14 @@ func (h *Handler) TransferSaveSources(c *gin.Context) {
 	if err := h.Config.SaveSetting("transfer_hub", string(b)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
+	}
+	// 打开 RE0 参与搜索、又配了网页登录：检查本地有没有浏览器，没有就下（已有 / 下载中不重复）
+	re0On := true
+	for _, d := range req.Disabled {
+		re0On = re0On && d != "re0"
+	}
+	if re0On && re0WebConfigured(loadRe0Cfg()) {
+		ensureCloak("启用 RE0 来源")
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }

@@ -70,9 +70,22 @@ export const re0Config = () =>
     authorized_as?: string
     /** 授权里缺的权限（2026-10 之前的授权没有 meta / write），非空要重新授权 */
     missing_scopes?: string[] | null
+    /** 网页登录（2026-10-14 起，RE0 不再开放 OpenAPI 申请） */
+    username?: string
+    password?: string
+    use_proxy?: boolean
+    /** 当前走哪条通道：openapi（已授权的老用户优先）/ web / 空 = 未配置 */
+    channel?: '' | 'openapi' | 'web'
   }>('/re0/config')
-export const re0SaveConfig = (body: { base_url: string; client_id: string; client_secret: string }) =>
-  http.post('/re0/config', body)
+export interface Re0SaveBody {
+  base_url: string
+  client_id: string
+  client_secret: string
+  username: string
+  password: string
+  use_proxy: boolean
+}
+export const re0SaveConfig = (body: Re0SaveBody) => http.post<{ message?: string }>('/re0/config', body)
 export interface Re0CheckResult {
   app_ok: boolean
   app_name?: string
@@ -83,8 +96,28 @@ export interface Re0CheckResult {
   banned?: boolean
   missing_scopes?: string[] | null
   message?: string
+  /** web = 这次检查的是网页登录 */
+  channel?: string
 }
-export const re0Check = () => http.get<Re0CheckResult>('/re0/check')
+// 网页通道要真开浏览器登录一次，可能要过 Cloudflare 验证（最长 90 秒）
+export const re0Check = () => http.get<Re0CheckResult>('/re0/check', { timeoutMs: 200_000 })
+/** 网页登录用的浏览器（CloakBrowser）：本地状态与下载进度 */
+export interface Re0BrowserState {
+  state: 'missing' | 'downloading' | 'verifying' | 'extracting' | 'ready' | 'error' | 'unsupported'
+  version: string
+  platform: string
+  path?: string
+  done: number
+  total: number
+  speed: number
+  source?: string
+  error?: string
+  reason?: string
+}
+export const re0Browser = () =>
+  http.get<{ browser: Re0BrowserState; running: boolean; channel: string }>('/re0/browser')
+export const re0BrowserDownload = (force = false) =>
+  http.post<{ message: string; browser: Re0BrowserState }>('/re0/browser/download', { force })
 export interface Re0Checkin {
   enabled: boolean
   last_done?: string
@@ -97,7 +130,8 @@ export interface Re0Checkin {
 }
 export const re0Checkin = () => http.get<Re0Checkin>('/re0/checkin')
 export const re0SaveCheckin = (enabled: boolean) => http.post('/re0/checkin', { enabled })
-export const re0RunCheckin = () => http.post<{ message: string }>('/re0/checkin/run', {}, { timeoutMs: 60_000 })
+// 网页签到要开浏览器、可能要登录与过验证
+export const re0RunCheckin = () => http.post<{ message: string }>('/re0/checkin/run', {}, { timeoutMs: 260_000 })
 export const re0OAuthStart = (redirectUri: string) =>
   http.get<{ authorize_url?: string }>('/re0/oauth/start', { params: { redirect_uri: redirectUri } })
 export const re0EgressIP = () => http.get<{ ip: string; ipv6: boolean; exact: boolean }>('/re0/egress-ip')
