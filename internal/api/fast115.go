@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -117,6 +118,11 @@ func fetch115FlatPage(cookie, cid string, offset int) ([]map[string]interface{},
 			Error string                   `json:"error"`
 			Data  []map[string]interface{} `json:"data"`
 			Count int                      `json:"count"`
+			// 身份核对用（verify115Listing）：失效的 cid 会被 115 换成网盘根，空结果也要说得清是哪个目录
+			Cid  json.RawMessage `json:"cid"`
+			Path []struct {
+				Cid json.RawMessage `json:"cid"`
+			} `json:"path"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
 			lastErr = fmt.Errorf("解析递归文件列表失败: %s", truncateStr(string(body), 200))
@@ -128,6 +134,20 @@ func fetch115FlatPage(cookie, cid string, offset int) ([]map[string]interface{},
 			if strings.Contains(result.Error, "登录") || strings.Contains(result.Error, "acc") {
 				return nil, 0, "", lastErr
 			}
+			continue
+		}
+		// 不核对的话：媒体库根目录被删 / 失效时 115 拿网盘根冒充，快速全量会把整个网盘生成 STRM；
+		// 空结果说不清是哪个目录时，又会把整个台账判成失效。核不准就报错，调用方降级成标准模式
+		var pathCid json.RawMessage
+		if n := len(result.Path); n > 0 {
+			pathCid = result.Path[n-1].Cid
+		}
+		if verr := verify115Listing(cid, result.Cid, pathCid, len(result.Data) == 0); verr != nil {
+			if errors.Is(verr, errDirGone) {
+				return nil, 0, "", verr
+			}
+			lastErr = verr
+			log.Printf("[同步] ○ %s 递归列表%v（cid=%s），换镜像", origin, verr, cid)
 			continue
 		}
 		return result.Data, result.Count, origin, nil

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -197,6 +198,32 @@ func TestAssert115SameDir(t *testing.T) {
 	for _, c := range cases {
 		if got := assert115SameDir(c.want, c.resp, c.pathCid); got != c.ok {
 			t.Errorf("%s: 期望 %v，实际 %v", c.name, c.ok, got)
+		}
+	}
+}
+
+// 空结果要拿得出身份证明：镜像在网络抖动时回的 count=0、又不带 cid / path，
+// 被当真的话空目录清理会删掉一个有内容的目录、快速全量会把整个台账判失效
+func TestVerify115ListingEmpty(t *testing.T) {
+	raw := func(s string) json.RawMessage { return json.RawMessage(s) }
+	cases := []struct {
+		name          string
+		want          string
+		resp, pathCid json.RawMessage
+		empty         bool
+		err           error
+	}{
+		{"非空且没带标识：沿用老规则放行", "123", nil, nil, false, nil},
+		{"空结果带着对得上的 cid", "123", raw(`"123"`), nil, true, nil},
+		{"空结果只有 path 末级对得上", "123", nil, raw(`123`), true, nil},
+		{"空结果什么标识都没有", "123", nil, nil, true, errEmptyUnverified},
+		{"空结果 cid 是 null", "123", raw(`null`), nil, true, errEmptyUnverified},
+		{"空结果是别的目录", "123", raw(`"0"`), nil, true, errDirGone},
+		{"请求根目录的空结果", "0", nil, nil, true, nil},
+	}
+	for _, c := range cases {
+		if got := verify115Listing(c.want, c.resp, c.pathCid, c.empty); !errors.Is(got, c.err) || (c.err == nil && got != nil) {
+			t.Errorf("%s: 期望 %v，实际 %v", c.name, c.err, got)
 		}
 	}
 }

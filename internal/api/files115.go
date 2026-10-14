@@ -55,7 +55,7 @@ func isHTTPStatus(err error, code int) bool {
 type remoteFile struct {
 	Fid      string `json:"fid"`
 	Name     string `json:"name"`
-	Path     string `json:"path"`     // 相对媒体库根目录的路径
+	Path     string `json:"path"` // 相对媒体库根目录的路径
 	Size     int64  `json:"size"`
 	PickCode string `json:"pickcode"` // 下载直链用
 	Sha1     string `json:"sha1"`     // 文件 sha1（整理去重用）
@@ -166,8 +166,14 @@ func fetch115FilesPage(cookie, ua, cid string, offset int) ([]map[string]interfa
 		if n := len(result.Path); n > 0 {
 			pathCid = result.Path[n-1].Cid
 		}
-		if !assert115SameDir(cid, result.Cid, pathCid) {
-			return nil, 0, "", errDirGone // 换镜像也是同样的结果
+		if err := verify115Listing(cid, result.Cid, pathCid, len(result.Data) == 0); err != nil {
+			if errors.Is(err, errDirGone) {
+				return nil, 0, "", err // 换镜像也是同样的结果
+			}
+			// 空结果说不清是哪个目录：换个镜像再问，都这样就按「读不出来」返回
+			lastErr = err
+			log.Printf("[诊断] %s %v（cid=%s）", origin, err, cid)
+			continue
 		}
 		// state=true 但 count>0 而 data 为空：响应异常，换镜像
 		if result.Count > 0 && len(result.Data) == 0 {
@@ -180,6 +186,24 @@ func fetch115FilesPage(cookie, ua, cid string, offset int) ([]map[string]interfa
 		return result.Data, result.Count, origin, nil
 	}
 	return nil, 0, "", lastErr
+}
+
+// errEmptyUnverified 列目录成功但一个条目都没有，响应里又没有 cid / path 能证明说的是哪个目录。
+// 空结果是破坏性动作的依据（空目录清理会直接删、快速全量会把整个台账判失效），
+// 证明不了就当「读不出来」，调用方本来就都按「不知道就不动」处理
+var errEmptyUnverified = errors.New("列目录返回空结果，但响应里没有目录标识，无法确认")
+
+// verify115Listing 列目录结果的身份核对：cid / path 对不上 → errDirGone（assert115SameDir）；
+// 结果为空时更严 —— cid 或 path 至少要有一个、而且对得上，才相信「这个目录真是空的」。
+// 2026-10-14 现场：主域名超时、镜像接手回了 count=0，空结果被直接当真就可能删掉一个有内容的目录
+func verify115Listing(want string, respCid, pathCid json.RawMessage, empty bool) error {
+	if !assert115SameDir(want, respCid, pathCid) {
+		return errDirGone
+	}
+	if empty && want != "" && want != "0" && rawStr(respCid) == "" && rawStr(pathCid) == "" {
+		return errEmptyUnverified
+	}
+	return nil
 }
 
 // assert115SameDir 核对「列出来的确实是我请求的那个目录」。
@@ -414,8 +438,8 @@ func downloadAssetBytes(rawURL string, cdnHeaders map[string]string, loginCookie
 		attempts = append(attempts, attempt{dlUA, setCookie}) // 同 UA + 直链下发 Cookie（f=3）
 	}
 	attempts = append(attempts,
-		attempt{dlUA, ""},          // openStrm 实战组合：同 UA，不带 Cookie
-		attempt{dlUA, combined},    // 直链 Cookie + 登录 Cookie
+		attempt{dlUA, ""},       // openStrm 实战组合：同 UA，不带 Cookie
+		attempt{dlUA, combined}, // 直链 Cookie + 登录 Cookie
 		attempt{dlUA, loginCookie},
 	)
 	var lastErr error
@@ -453,4 +477,3 @@ func httpDownloadUA(rawURL, ua, cookieHeader string) ([]byte, error) {
 	}
 	return io.ReadAll(resp.Body)
 }
-
