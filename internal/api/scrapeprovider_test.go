@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"115-station/internal/config"
@@ -134,8 +135,15 @@ func TestCheckEmbyLib(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := checkEmbyLib(lib)
-	if !c.Known || !c.NfoReader || len(c.EmbyIssues) != 0 || len(c.StationIssues) != 2 {
-		t.Fatalf("开着下载器：Emby 刮削没问题、本站刮削提示两条：%+v", c)
+	if !c.Known || !c.NfoReader || len(c.EmbyIssues) != 0 || len(c.StationIssues) != 3 {
+		t.Fatalf("开着下载器：Emby 刮削没问题、本站刮削提示三条（含人物）：%+v", c)
+	}
+	if !strings.Contains(c.StationIssues[2], "人物启用了 TheMovieDb 元数据下载器") {
+		t.Fatalf("人物下载器的提示不对：%v", c.StationIssues)
+	}
+	// 人物的下载器不混进片目的下载器列表
+	if !reflect.DeepEqual(c.MetaFetchers, []string{"TheMovieDb"}) {
+		t.Fatalf("元数据下载器 = %v", c.MetaFetchers)
 	}
 	if !reflect.DeepEqual(c.ImageFetchers, []string{"FanArt", "TheMovieDb"}) {
 		t.Fatalf("图像获取器 = %v", c.ImageFetchers)

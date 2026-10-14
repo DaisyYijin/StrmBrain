@@ -71,6 +71,22 @@ func chineseNameOK(s string) bool {
 	return true
 }
 
+// cleanPersonName 中日韩名字去掉中间的空白：TMDB 上常见「周 星驰」「周　星驰」（全角空格）。
+// 夹着拉丁字母的不动（「Angelababy 杨颖」去掉空格就粘成一团了）。
+// 参考神医助手 LanguageUtility.CleanPersonName（只读参考，未复制代码）
+func cleanPersonName(s string) string {
+	s = strings.TrimSpace(s)
+	if !hasHan(s) && !strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.In(r, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
+	}) {
+		return s
+	}
+	if strings.ContainsFunc(s, func(r rune) bool { return r < unicode.MaxASCII && unicode.IsLetter(r) }) {
+		return s
+	}
+	return strings.Join(strings.FieldsFunc(s, unicode.IsSpace), "")
+}
+
 // tmdbPersonDetail /person/{id}?append_to_response=translations 的有用部分
 type tmdbPersonDetail struct {
 	ID           int      `json:"id"`
@@ -121,10 +137,10 @@ func pickChineseName(d tmdbPersonDetail) string {
 		}
 	}
 	if best != "" {
-		return toSimplified(best)
+		return cleanPersonName(toSimplified(best))
 	}
 	if chineseNameOK(d.Name) {
-		return toSimplified(strings.TrimSpace(d.Name))
+		return cleanPersonName(toSimplified(d.Name))
 	}
 	first := ""
 	for _, n := range d.AlsoKnownAs {
@@ -133,13 +149,13 @@ func pickChineseName(d tmdbPersonDetail) string {
 			continue
 		}
 		if toSimplified(n) == n {
-			return n
+			return cleanPersonName(n)
 		}
 		if first == "" {
 			first = n
 		}
 	}
-	return toSimplified(first)
+	return cleanPersonName(toSimplified(first))
 }
 
 // pickChineseBio 中文简介：请求带了 language=zh-CN，biography 有汉字就是中文；否则看 zh 翻译
@@ -179,6 +195,7 @@ func loadPersonMeta(tc *TmdbClient, id int, beforeFetch func()) (m model.PersonM
 		return m, fmt.Errorf("无效的 TMDB 人物 id")
 	}
 	if model.DB.First(&m, id).Error == nil && personMetaFresh(m, time.Now()) {
+		m.ZhName = cleanPersonName(m.ZhName) // 去空白之前缓存的
 		return m, nil
 	}
 	if beforeFetch != nil {
@@ -211,7 +228,7 @@ func cachedZhNames(ids []int) map[int]string {
 	var rows []model.PersonMeta
 	model.DB.Select("tmdb_id", "zh_name").Where("tmdb_id IN ? AND zh_name <> ''", ids).Find(&rows)
 	for _, r := range rows {
-		out[r.TmdbID] = r.ZhName
+		out[r.TmdbID] = cleanPersonName(r.ZhName)
 	}
 	return out
 }

@@ -68,6 +68,9 @@ type personFillCfg struct {
 	// NFOSync 补完一部后把本地 NFO 的演职人员名换成中文、演员头像存进 .actors（embypeoplenfo.go）。
 	// 直接读媒体目录的播放器看的是 NFO，不改的话与 Emby 里两个样
 	NFOSync bool `json:"nfo_sync"`
+	// MergeDups 全库扫描开头合并重复人物：同一个 TMDB 人物在 Emby 里有好几个条目（embypeoplemerge.go）。
+	// 默认关：要改写片目的演职人员表、删人物条目，用户看过预览再开
+	MergeDups bool `json:"merge_dups"`
 }
 
 const personFillSetting = "personfill"
@@ -555,6 +558,15 @@ func planPerson(cfg personFillCfg, name, overview string, hasImage, hasTmdbID bo
 		default:
 			p.newName = meta.ZhName
 		}
+	} else if cfg.ZhName {
+		// 已是中文名但中间夹着空白（「周 星驰」）：去掉。被占了就不动，那多半是重复人物，交给合并
+		if c := cleanPersonName(name); c != name {
+			if nameTaken {
+				missing = append(missing, personStateNameTaken) // 记账暂缓，否则每轮都来查一次同名
+			} else {
+				p.newName = c
+			}
+		}
 	}
 	if cfg.ZhBio && !hasHan(overview) {
 		if meta.ZhBio != "" {
@@ -648,7 +660,7 @@ func (r *personRunner) eligible(p embyPersonRef) bool {
 
 // needsListed 列表里就看得出的缺口：没头像、名字不是中文
 func (r *personRunner) needsListed(p embyPersonRef) bool {
-	return (r.cfg.Image && p.PrimaryImageTag == "") || (r.cfg.ZhName && !hasHan(p.Name))
+	return (r.cfg.Image && p.PrimaryImageTag == "") || (r.cfg.ZhName && (!hasHan(p.Name) || cleanPersonName(p.Name) != p.Name))
 }
 
 // candidates 片目里这一轮要处理的人物：前 MaxCast 位演员 + 导演 / 编剧。
@@ -763,9 +775,18 @@ func (r *personRunner) handle(t embyTitleItem, ref embyPersonRef) personResult {
 		return fail(tmdbID, fmt.Errorf("TMDB 人物详情: %v", err))
 	}
 
+	// 要改成的名字：英文名换中文名，或中文名去掉中间的空白
+	want := ""
+	if r.cfg.ZhName {
+		if !hasHan(name) {
+			want = meta.ZhName
+		} else if c := cleanPersonName(name); c != name {
+			want = c
+		}
+	}
 	taken := false
-	if r.cfg.ZhName && !hasHan(name) && meta.ZhName != "" && meta.ZhName != name {
-		if taken, err = embyPersonNameTaken(r.base, r.key, meta.ZhName, ref.ID); err != nil {
+	if want != "" && want != name {
+		if taken, err = embyPersonNameTaken(r.base, r.key, want, ref.ID); err != nil {
 			return fail(tmdbID, fmt.Errorf("查同名人物失败: %v", err))
 		}
 	}
@@ -828,10 +849,15 @@ type personJobResult struct {
 	// 同步本地 NFO：改写的 NFO、新存的演员头像（.actors）
 	NFOs        int `json:"nfos,omitempty"`
 	ActorImages int `json:"actor_images,omitempty"`
+	// 合并重复人物：删掉的重复条目、改写的片目
+	Merged   int `json:"merged,omitempty"`
+	Relinked int `json:"relinked,omitempty"`
 }
 
 // idle 什么都没做：Emby 与本地 NFO 都没动
-func (o personJobResult) idle() bool { return o.Handled == 0 && o.NFOs == 0 && o.ActorImages == 0 }
+func (o personJobResult) idle() bool {
+	return o.Handled == 0 && o.NFOs == 0 && o.ActorImages == 0 && o.Merged == 0 && o.Relinked == 0
+}
 
 // newPersonRunner 校验配置、取 Emby 与 TMDB 客户端、装上记账里还没到期的人物
 func newPersonRunner(h *Handler) (*personRunner, error) {
@@ -911,6 +937,12 @@ func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	log.Printf("[演职人员] ▶ 开始补全：从第 %d/%d 部片目起（记账中暂缓 %d 个人物，单次上限 %d）",
 		cur+1, total, len(r.skip), cfg.MaxPerRun)
 
+	// 先合并重复人物：合并后留下的那个才是补全的对象，删掉的不用再补
+	var merge personMergeStat
+	if cfg.MergeDups {
+		merge = r.mergeDuplicates()
+	}
+
 	// 从断点扫到末尾，再从头扫到断点，绕满一圈。中途因单次上限 / 停止 / 出错退出时，
 	// 把停下的那部片目记成新断点（那部片目下次重看一遍：已处理的人物补全了或进了记账，不会重复处理）
 	stopped, capped, broken := false, false, false
@@ -959,7 +991,24 @@ scan:
 
 	out := summarizePersonRun(r.results, titles)
 	out.NFOs, out.ActorImages = r.nfoStat.NFOs, r.nfoStat.Images
+	out.Merged, out.Relinked = merge.Merged, merge.Relinked
+	if len(merge.Problems) > 0 {
+		lines := make([]string, len(merge.Problems))
+		for i, p := range merge.Problems {
+			lines[i] = "合并重复人物：" + p
+		}
+		out.Problems = append(lines, out.Problems...)
+		if len(out.Problems) > 200 {
+			out.Problems, out.Truncated = out.Problems[:200], true
+		}
+	}
 	msg := personRunMessage(out, total, stopAt, stopped, capped, broken)
+	if cfg.MergeDups && merge.Groups > 0 {
+		msg += fmt.Sprintf("；重复人物 %d 组，合并 %d 个条目（改写片目 %d 个）", merge.Groups, merge.Merged, merge.Relinked)
+		if merge.capped {
+			msg += "，剩下的下次接着合并"
+		}
+	}
 	partial := out.States[personStateFailed] > 0
 	idle := job.Priority == jobPriorityBackground && out.idle() && !stopped
 	return jobOutcome{Message: msg, Result: out, Canceled: stopped, Partial: partial, Idle: idle}, nil
@@ -1191,8 +1240,8 @@ func (h *Handler) PersonFillSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})
 		return
 	}
-	log.Printf("[配置] 演职人员补全：刮削后 %v，定时 %v（%s），类型 %v，头像 %v / 中文名 %v / 简介 %v",
-		req.AfterScrape, req.Enabled, req.Cron, req.Types, req.Image, req.ZhName, req.ZhBio)
+	log.Printf("[配置] 演职人员补全：刮削后 %v，定时 %v（%s），类型 %v，头像 %v / 中文名 %v / 简介 %v，合并重复人物 %v",
+		req.AfterScrape, req.Enabled, req.Cron, req.Types, req.Image, req.ZhName, req.ZhBio, req.MergeDups)
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 

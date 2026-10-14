@@ -121,7 +121,21 @@ func checkEmbyLib(lib embyVirtualFolder) embyLibCheck {
 	out := embyLibCheck{Name: lib.Name, CollectionType: lib.CollectionType, NfoReader: true,
 		MetaFetchers: []string{}, ImageFetchers: []string{}}
 	meta, img := map[string]bool{}, map[string]bool{}
+	var personTMDB []string // 人物类型启用的 TheMovieDb 下载器（元数据 / 图像）
 	for _, t := range lib.LibraryOptions.TypeOptions {
+		if t.Type == "Person" {
+			for _, f := range t.MetadataFetchers {
+				if strings.EqualFold(f, "TheMovieDb") {
+					personTMDB = append(personTMDB, "元数据")
+				}
+			}
+			for _, f := range t.ImageFetchers {
+				if strings.EqualFold(f, "TheMovieDb") {
+					personTMDB = append(personTMDB, "图像")
+				}
+			}
+			continue
+		}
 		if t.Type != "Movie" && t.Type != "Series" {
 			continue
 		}
@@ -162,6 +176,12 @@ func checkEmbyLib(lib embyVirtualFolder) embyLibCheck {
 	}
 	if !out.NfoReader {
 		out.StationIssues = append(out.StationIssues, "没勾 Nfo 元数据读取器，本站写的 NFO Emby 不读")
+	}
+	// 只在 Emby 真的给了 Person 这一项时才说：没给就不知道它把人物下载器放在哪，不下结论。
+	// Emby 自己刮人物不记账，TMDB 上没头像的人每次刷新都再去问一遍，连不上 TMDB 时一个人卡 20 秒超时
+	if len(personTMDB) > 0 {
+		out.StationIssues = append(out.StationIssues, "人物启用了 TheMovieDb "+strings.Join(personTMDB, "、")+
+			"下载器，Emby 会自己去 TMDB 刮演职人员（连不上时日志里是一串超时）；头像、中文名、简介可交给本站的演职人员补全")
 	}
 	return out
 }

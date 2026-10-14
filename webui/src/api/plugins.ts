@@ -66,6 +66,8 @@ export interface PersonFillConfig {
   max_per_run: number
   /** 补完后同步本地 NFO：演职人员名换中文、演员头像存进 .actors */
   nfo_sync: boolean
+  /** 全库扫描开头合并重复人物（同一个 TMDB 人物在 Emby 里有多个条目） */
+  merge_dups: boolean
 }
 export interface PersonFillInfo {
   config: PersonFillConfig
@@ -83,6 +85,21 @@ export const personFillConfig = () => http.get<{ data?: PersonFillInfo }>('/pers
 export const savePersonFill = (body: PersonFillConfig) => http.post('/personfill/config', body)
 export const runPersonFill = () => http.post<{ message?: string; job_id?: number }>('/personfill/run')
 export const resetPersonFill = () => http.post<{ message?: string }>('/personfill/reset')
+export interface PersonDupBrief {
+  id: string
+  name: string
+  image: boolean
+}
+export interface PersonDupGroup {
+  tmdb_id: number
+  keep: PersonDupBrief
+  drop: PersonDupBrief[]
+  /** 重复条目同名：Emby 按名字认人，合并不了 */
+  same_name?: boolean
+}
+/** 预览重复人物（只读 Emby）。total 是组数，groups 最多列 200 组 */
+export const personFillDups = () =>
+  http.get<{ data?: { total: number; persons: number; groups: PersonDupGroup[] } }>('/personfill/dups')
 
 // ---- 媒体信息补全 ----
 export interface MetaFillConfig {

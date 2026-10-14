@@ -426,6 +426,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/personfill/config", h.PersonFillSaveConfig)
 		protected.POST("/personfill/run", h.PersonFillRun)
 		protected.POST("/personfill/reset", h.PersonFillResetMarks)
+		protected.GET("/personfill/dups", h.PersonFillDups)
 		protected.GET("/metafill/config", h.MetaFillGetConfig)
 		protected.POST("/metafill/config", h.MetaFillSaveConfig)
 		protected.POST("/metafill/run", h.MetaFillRun)

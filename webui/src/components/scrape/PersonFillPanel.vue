@@ -12,7 +12,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import { pluginsApi } from '@/api'
-import type { PersonFillConfig, PersonFillInfo, PersonType } from '@/api/plugins'
+import type { PersonDupGroup, PersonFillConfig, PersonFillInfo, PersonType } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
 import { useQueueStore } from '@/stores/queue'
@@ -34,6 +34,7 @@ const DEFAULTS: PersonFillConfig = {
   max_cast: 20,
   max_per_run: 300,
   nfo_sync: true,
+  merge_dups: false,
 }
 
 const TYPES: { v: PersonType; label: string }[] = [
@@ -136,6 +137,21 @@ async function run() {
   }
 }
 
+// 重复人物预览：只读 Emby，看清会留哪个再打开开关
+const dups = ref<{ total: number; persons: number; groups: PersonDupGroup[] } | null>(null)
+const dupsLoading = ref(false)
+async function loadDups() {
+  dupsLoading.value = true
+  try {
+    const d = await pluginsApi.personFillDups()
+    dups.value = d.data ?? { total: 0, persons: 0, groups: [] }
+  } catch (e) {
+    toastError(e, '读取重复人物失败')
+  } finally {
+    dupsLoading.value = false
+  }
+}
+
 function openLastJob() {
   const id = info.value?.last_job?.id
   if (!id) return
@@ -199,6 +215,33 @@ function openLastJob() {
     >
       <HSwitch v-model="form.nfo_sync" :disabled="embyScrapes" aria-label="同步到本地 NFO" />
     </FieldRow>
+    <FieldRow
+      label="合并重复人物"
+      tip="同一个 TMDB 人物在 Emby 里有好几个条目时（常见：老片挂着英文名的，新刮的片按中文名又建了一个），每次全库扫描开头把它们并成一个：留下中文名、有头像的那个，把挂着重复条目的片目改成挂留下的，确认没有片目再挂着重复条目后才删掉它。名字对不上这个 TMDB 人物的、重复条目同名的不合并。每次最多 50 组。刮削后补全不做这一步。"
+    >
+      <div class="dup-row">
+        <HSwitch v-model="form.merge_dups" aria-label="合并重复人物" />
+        <HButton variant="tertiary" size="sm" :loading="dupsLoading" @click="loadDups">检查重复</HButton>
+      </div>
+    </FieldRow>
+    <div v-if="dups" class="dups">
+      <div v-if="!dups.total">{{ dups.persons }} 个人物里没有重复的</div>
+      <template v-else>
+        <div>
+          {{ dups.persons }} 个人物里，{{ dups.total }} 组同一个 TMDB 人物有多个条目<span
+            v-if="dups.total > dups.groups.length"
+            >（只列前 {{ dups.groups.length }} 组）</span
+          >：
+        </div>
+        <ul>
+          <li v-for="g in dups.groups" :key="g.tmdb_id">
+            <span class="keep">{{ g.keep.name }}</span>
+            <span class="muted"> ← {{ g.drop.map((d) => d.name).join('、') }}</span>
+            <span v-if="g.same_name" class="warn">（同名，不合并）</span>
+          </li>
+        </ul>
+      </template>
+    </div>
     <FieldRow label="每部片演员" tip="每部片只看演员表前 N 位（导演、编剧不占名额）。龙套在 TMDB 上多半既无头像也无中文名。0 = 不限。">
       <HNumberInput v-model="form.max_cast" :min="0" :max="200" aria-label="每部片演员数">
         <template #suffix>位</template>
@@ -264,6 +307,31 @@ function openLastJob() {
   font-size: 13px;
   line-height: 1.7;
   color: var(--foreground);
+}
+.dup-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dups {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-lg);
+  background: var(--surface-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  max-height: 240px;
+  overflow: auto;
+}
+.dups ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.keep {
+  font-weight: 600;
+}
+.warn {
+  color: var(--warning);
 }
 .marks .mark {
   margin-right: 10px;
