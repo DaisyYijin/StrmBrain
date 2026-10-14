@@ -205,6 +205,7 @@ type fakePerson struct {
 	Tmdb     string
 	Image    string
 	Locked   []string
+	Remote   string // Emby 里 Primary 图片还是远程链接（NFO <thumb> 建的人物，还没下载）
 }
 
 type fakePeopleServer struct {
@@ -220,10 +221,15 @@ type fakePeopleServer struct {
 	// paths 片目 id → Emby 里的路径（同步本地 NFO 用）；imgGets 读人物头像的次数
 	paths   map[string]string
 	imgGets map[string]int
+	// only 设了就只列这几部片（不带默认那两部）
+	only []map[string]any
 }
 
 // titles 假库里的片目（按加入时间）。有 p7 时多一部片：两位已有头像、已是中文名、只缺中文简介的演员
 func (f *fakePeopleServer) titles() []map[string]any {
+	if f.only != nil {
+		return f.only
+	}
 	out := []map[string]any{
 		{"Id": "m1", "Name": "阿甘正传", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "13"}, "People": []any{
 			f.ref("p1", "Actor"), f.ref("p2", "Actor"), f.ref("p5", "Actor"), f.ref("p4", "Actor"), f.ref("p3", "Director"),
@@ -347,6 +353,18 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		js(map[string]any{"Items": items})
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/Items/") && strings.HasSuffix(path, "/Images"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/Items/"), "/Images")
+		p := f.persons[id]
+		if p == nil || p.Image == "" {
+			js([]any{})
+			return
+		}
+		img := "/config/metadata/people/x/" + id + "/folder.jpg"
+		if p.Remote != "" {
+			img = p.Remote
+		}
+		js([]any{map[string]any{"ImageType": "Primary", "Path": img}})
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/Images/Primary"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/Items/"), "/Images/Primary")
 		if f.imgGets != nil {
@@ -366,6 +384,7 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.uploads[id]++
 		f.persons[id].Image = "img"
+		f.persons[id].Remote = ""
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/Items/"):
 		id := strings.TrimPrefix(path, "/Items/")
@@ -623,5 +642,52 @@ func TestPersonFillAfterScrape(t *testing.T) {
 	}
 	if c := h.loadPersonFillCursor(); c != 1 {
 		t.Fatalf("刮削后补全不该动续扫断点: %d", c)
+	}
+}
+
+// NFO <thumb> 建出来的人物：ImageTags 有 Primary，图片却还是 TMDB 链接，Emby 要等打开详情页才自己去下。
+// 补全要把这种当作没头像、本站下好传上去；已经记账暂缓的人物（TMDB 无中文名）也一样
+func TestPersonFillRemoteImage(t *testing.T) {
+	newTestDB(t, "person-remote.db")
+	f := &fakePeopleServer{
+		persons: map[string]*fakePerson{
+			// 名字、简介都齐了，只是头像没下
+			"r1": {Name: "汤唯", Tmdb: "70", Image: "x", Overview: "汤唯，中国内地女演员。", Remote: "https://image.tmdb.org/t/p/h632/tw.jpg"},
+			// 记账暂缓（无中文名）；TMDB 人物详情没头像，用链接里的那张
+			"r2": {Name: "Robert Zemeckis", Tmdb: "24", Image: "x", Overview: "x", Remote: "https://image.tmdb.org/t/p/h632/rz.jpg"},
+			// 头像已是本地文件：不动
+			"r3": {Name: "巩俐", Tmdb: "80", Image: "x", Overview: "巩俐，中国女演员。"},
+		},
+		uploads: map[string]int{}, updates: map[string]int{}, tmdbHit: map[string]int{},
+	}
+	f.only = []map[string]any{{"Id": "m9", "Name": "色戒", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "14"},
+		"People": []any{f.ref("r1", "Actor"), f.ref("r2", "Director"), f.ref("r3", "Actor")}}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+
+	model.DB.Create(&model.TmdbConfig{ApiKey: "k", ApiUrl: srv.URL, ImageApiUrl: srv.URL, Language: "zh-CN"})
+	model.DB.Create(&model.EmbyPersonMark{PersonID: "r2", Name: "Robert Zemeckis", TmdbID: 24, State: personStateNoZh,
+		Tries: 1, NextAt: time.Now().Add(20 * 24 * time.Hour)})
+	dir := t.TempDir()
+	h := &Handler{DB: model.DB, Config: &config.Config{ConfigDir: dir, DataDir: dir}}
+	emby, _ := json.Marshal(map[string]string{"server_url": srv.URL, "api_key": "ek"})
+	if err := h.Config.SaveSetting("emby", string(emby)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := execPersonJob(h, &model.TaskJob{Kind: jobKindPerson, Priority: jobPriorityManual}); err != nil {
+		t.Fatal(err)
+	}
+	if f.uploads["r1"] != 1 || f.uploads["r2"] != 1 {
+		t.Fatalf("远程头像要换成本站上传的: uploads=%v", f.uploads)
+	}
+	if f.tmdbHit["/t/p/h632/rz.jpg"] == 0 {
+		t.Fatal("TMDB 人物详情没头像时应取链接里的那张")
+	}
+	if f.uploads["r3"]+f.updates["r3"] != 0 {
+		t.Fatal("本地头像、资料齐全的人物不该碰")
+	}
+	if f.updates["r1"] != 0 {
+		t.Fatalf("r1 只缺本地头像，不该回写条目: %d", f.updates["r1"])
 	}
 }

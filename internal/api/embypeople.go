@@ -364,6 +364,52 @@ func embyUploadPrimary(base, key, id string, data []byte) error {
 	return nil
 }
 
+// personImgLocal 确认过头像已是 Emby 本地文件的人物 id（进程内）：每个人只查一次，重启后再查一遍
+var personImgLocal sync.Map
+
+// remotePrimary 人物的头像是不是还挂着远程链接，是的话记进 r.remote。
+//
+// 本站刮削的 NFO 给演员写了 <thumb>（TMDB 链接），Emby 读 NFO 建人物时只记下这个链接、不下载，
+// ImageTags 里照样有 Primary，列表上看不出缺头像；等用户打开详情页、客户端来要人物图片时
+// Emby 才当场去 TMDB 下（ProviderManager「Saving image to …/people/…/folder.jpg」，2026-10-14 现场，
+// 刮削后补全刚跑完半小时）。连不上 TMDB 的服务器上详情页的演员头像就一直是空的。
+// 列表查询带不出图片路径，只能逐个读 /Items/{id}/Images；读失败按本地算，不为它拦住别的
+func (r *personRunner) remotePrimary(pid string) bool {
+	if _, ok := personImgLocal.Load(pid); ok {
+		return false
+	}
+	path, err := embyPrimaryImagePath(r.base, r.key, pid)
+	if err != nil {
+		return false
+	}
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		personImgLocal.Store(pid, true)
+		return false
+	}
+	if r.remote == nil {
+		r.remote = map[string]string{}
+	}
+	r.remote[pid] = tmdbProfileFromThumb(path)
+	return true
+}
+
+// embyPrimaryImagePath 人物 Primary 图片在 Emby 里记的路径：本地文件路径，或还没下载的远程链接
+func embyPrimaryImagePath(base, key, pid string) (string, error) {
+	var imgs []struct {
+		ImageType string `json:"ImageType"`
+		Path      string `json:"Path"`
+	}
+	if err := embyGetJSON(base, key, "/Items/"+url.PathEscape(pid)+"/Images", nil, &imgs); err != nil {
+		return "", err
+	}
+	for _, im := range imgs {
+		if im.ImageType == "Primary" {
+			return im.Path, nil
+		}
+	}
+	return "", nil
+}
+
 // ---- 片目 credits 与按名字对号 ----
 
 // creditEntry 片目演职员表里的一个人。Group：cast / Directing / Writing / 其他部门名
@@ -622,6 +668,7 @@ type personRunner struct {
 	nfoStat    personNFOStat
 	nfoImgLeft int
 	imaged     map[string]bool // 本轮补上头像的人物 id：t.People 是补之前读的，看不出它现在有头像了
+	remote     map[string]string // 头像还是远程链接的人物 id → 链接里的 TMDB 图片路径（可能为空），见 embyRemotePrimary
 }
 
 // tmdbPace TMDB 请求间隔：官方限速约每秒 40 次，这里慢慢来，别跟整理抢配额
@@ -684,11 +731,24 @@ func (r *personRunner) candidates(t embyTitleItem) []embyPersonRef {
 				continue
 			}
 		}
-		if seen[p.ID] || !r.eligible(p) {
+		if seen[p.ID] {
+			continue
+		}
+		// 记账暂缓的人物（TMDB 无中文名之类，30 天）也要看头像：欧美演员大多带着这种记账，
+		// 跳过的话他们的远程头像一个月都没人管
+		if r.skip[p.ID] && !r.done[p.ID] && p.ID != "" && r.cfg.personTypeWanted(p.Type) &&
+			r.cfg.Image && p.PrimaryImageTag != "" && r.remotePrimary(p.ID) {
+			seen[p.ID] = true
+			out = append(out, p)
+			continue
+		}
+		if !r.eligible(p) {
 			continue
 		}
 		seen[p.ID] = true
-		if r.needsListed(p) {
+		if r.cfg.Image && p.PrimaryImageTag != "" && r.remotePrimary(p.ID) {
+			out = append(out, p)
+		} else if r.needsListed(p) {
 			out = append(out, p)
 		} else if r.cfg.ZhBio {
 			rest = append(rest, p)
@@ -790,7 +850,15 @@ func (r *personRunner) handle(t embyTitleItem, ref embyPersonRef) personResult {
 			return fail(tmdbID, fmt.Errorf("查同名人物失败: %v", err))
 		}
 	}
-	plan := planPerson(r.cfg, name, item.str("Overview"), item.hasPrimaryImage(), hasTmdbID, meta, taken)
+	// 头像还是 NFO 里的 TMDB 链接时当作没有：本站下好传上去，免得 Emby 打开详情页时自己去 TMDB 下
+	hasImage := item.hasPrimaryImage()
+	if prof, ok := r.remote[ref.ID]; ok {
+		hasImage = false
+		if meta.ProfilePath == "" {
+			meta.ProfilePath = prof
+		}
+	}
+	plan := planPerson(r.cfg, name, item.str("Overview"), hasImage, hasTmdbID, meta, taken)
 
 	if plan.uploadImage {
 		data, err := fetchTMDBImage("h632", meta.ProfilePath)
@@ -801,6 +869,7 @@ func (r *personRunner) handle(t embyTitleItem, ref embyPersonRef) personResult {
 			return fail(tmdbID, err)
 		}
 		res.Image = true
+		personImgLocal.Store(ref.ID, true)
 	}
 	if plan.newName != "" || plan.newBio != "" || plan.setTmdbID {
 		if plan.newName != "" {
