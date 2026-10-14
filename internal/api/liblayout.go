@@ -99,6 +99,9 @@ func (l libCategoryLayout) knownTops() map[string]bool {
 // loadLibCategoryLayout 按当前分类规则与其他媒体库目录算出所有分类目录。
 // 直接读表不走 classifyRules 的缓存：调用方（台账扫描）自己有 30 秒缓存
 func loadLibCategoryLayout() libCategoryLayout {
+	if active, rows := libraryDirsState(); active {
+		return compileLibraryDirs(rows, libDirLibNames(rows))
+	}
 	return loadRuleLayout().withExtraDirs(loadLibExtraDirs())
 }
 

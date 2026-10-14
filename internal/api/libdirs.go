@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"115-station/internal/model"
 )
@@ -14,9 +16,10 @@ import (
 // 规则里的 library 键。每行 = 一个 115 目录 + 适用类型 + 条件 + 是否参与整理 + 是否兜底，行的顺序就是优先级。
 // 识别只看表里有哪些目录（片目在它下一层，编译成 libCategoryLayout）；整理按顺序找第一个类型与条件都匹配的行。
 //
-// 阶段 1（本文件）只有编译与迁移规划，**还没接上**：识别与整理仍读老的两份配置。
+// 启用前（setting library_dirs_active 不是 "1"）识别与整理都读老的两份配置，这里的代码只被测试用到：
 // 每次提交 master 都会发 latest 镜像，半截切过去的话，用户在老界面改的规则新表看不到。
-// 阶段 3 和新界面一起启用（迁移 + 切识别 + 切整理），见设计文档 §7。
+// 阶段 3 和新界面一起启用（迁移 + 打开关），见设计文档 §7。分派点：pickOrgTarget / classifyMedia / categoryDir /
+// orgTargetOf / loadLibCategoryLayout。
 
 // libDirTypeAll 对电影、剧集都适用
 const libDirTypeAll = "all"
@@ -87,7 +90,11 @@ type libDirMigration struct {
 //     没有 is_default 的类型在组末加一行「类型/未分类」兜底；分类名为空的规则落 电影 / 剧集（老 categoryDir 的退回）。
 //   - 识别：老布局里规则与不限定库的其他目录对**所有库**生效。新表按库，所以凡是台账里某个库在这个路径下有视频的，
 //     那个库补一行「仅识别」—— 对现有台账的识别结果不变；以后才在别的库出现的同名目录要用户自己加（海报墙会提示认不出）。
-func planLibraryDirMigration(rules []model.CategoryRule, extras []libExtraDir, roots []libRoot, videos []string) (libDirMigration, error) {
+//   - 来源定库：老逻辑是「按全局规则算分类路径，库换成来源绑定的库」；新表来源定库时只在那个库的行里挑。
+//     bound 是来源绑定过的库（cid：转存子目录绑定表 + 按来源入库过的整理记录），每一行参与整理的行都在它后面
+//     紧跟一份复制到这些库的副本：只看库 L 的行时，顺序与条件和全局完全对应，第一个命中的正是老逻辑命中那条的同路径副本；
+//     不看来源时，原行总排在副本前面、条件相同，副本永远轮不到，所以不改变非来源的结果。
+func planLibraryDirMigration(rules []model.CategoryRule, extras []libExtraDir, roots []libRoot, videos []string, bound []string) (libDirMigration, error) {
 	var out libDirMigration
 	if len(roots) == 0 || roots[0].Cid == "" {
 		return out, fmt.Errorf("未配置媒体库目录")
@@ -119,10 +126,39 @@ func planLibraryDirMigration(rules []model.CategoryRule, extras []libExtraDir, r
 
 	type key struct{ lib, path string }
 	have := map[key]bool{}
+	identical := map[string]bool{}
+	identKey := func(r model.LibraryDir) string {
+		return strings.Join([]string{r.LibCid, r.Path, r.MediaType, fmt.Sprint(r.Organize, r.Fallback), r.GenreIds, r.OriginalLanguage,
+			r.OriginCountry, r.ProductionCountries, r.ReleaseYear, r.CustomRegex, r.Unsupported}, "\x1f")
+	}
 	add := func(r model.LibraryDir) {
 		r.Priority = len(out.Rows) + 1
 		out.Rows = append(out.Rows, r)
 		have[key{r.LibName, r.Path}] = true
+		identical[identKey(r)] = true
+	}
+	// addOrganized 参与整理的行，后面紧跟复制到各来源绑定库的副本
+	var boundRoots []libRoot
+	for _, cid := range bound {
+		if name := rootName(roots, cid); name != "" {
+			boundRoots = append(boundRoots, libRoot{Cid: cid, Name: name})
+		} else {
+			out.Notes = append(out.Notes, fmt.Sprintf("来源绑定的媒体库 cid=%s 不在媒体库配置里：没有为它复制目录", cid))
+		}
+	}
+	addOrganized := func(r model.LibraryDir) {
+		add(r)
+		for _, b := range boundRoots {
+			if b.Cid == r.LibCid {
+				continue
+			}
+			c := r
+			c.LibCid, c.LibName = b.Cid, b.Name
+			c.Note = "迁移时为来源绑定的库复制（转存子目录绑定了这个库时，只在它的目录里挑）"
+			if !identical[identKey(c)] {
+				add(c)
+			}
+		}
 	}
 
 	// 1. 分类规则：参与整理的行
@@ -167,7 +203,7 @@ func planLibraryDirMigration(rules []model.CategoryRule, extras []libExtraDir, r
 			}
 			hasDefault = hasDefault || r.IsDefault
 			organized = append(organized, row)
-			add(row)
+			addOrganized(row)
 		}
 		if !hasDefault {
 			// 老 classifyTarget 的最后一档：没有兜底规则时落「类型/未分类」，进主库
@@ -176,7 +212,7 @@ func planLibraryDirMigration(rules []model.CategoryRule, extras []libExtraDir, r
 				LibCid: main.Cid, LibName: main.Name, Note: "迁移时补的兜底（原来没有兜底规则时落这里）",
 			}
 			organized = append(organized, row)
-			add(row)
+			addOrganized(row)
 		}
 	}
 
@@ -258,4 +294,216 @@ func rootName(roots []libRoot, cid string) string {
 		}
 	}
 	return ""
+}
+
+// ---- 整理：选目录（阶段 2，随 libraryDirsActive 启用）----
+
+// matchLibraryDir 行的条件是否命中条目：与老分类规则同一套语义（matchCategory），没有 ext
+func matchLibraryDir(r *model.LibraryDir, media *TmdbMedia) bool {
+	return matchCategory(&model.CategoryRule{
+		GenreIds: r.GenreIds, OriginalLanguage: r.OriginalLanguage, OriginCountry: r.OriginCountry,
+		ProductionCountries: r.ProductionCountries, ReleaseYear: r.ReleaseYear, CustomRegex: r.CustomRegex,
+		Unsupported: r.Unsupported,
+	}, media)
+}
+
+// libDirTypeOK 行的类型对这个媒体类型适用
+func libDirTypeOK(r *model.LibraryDir, mediaType string) bool {
+	return r.MediaType == mediaType || r.MediaType == libDirTypeAll
+}
+
+// pickDir 按目录表选整理去处（设计文档 §3.3）：
+//  1. 候选 = 参与整理、类型相符的行；src 非空（来源子目录绑定了库）时只看那个库的行；
+//  2. 按顺序第一个条件命中的（兜底行同样先按自己的条件参与）；
+//  3. 都没中：按顺序第一个兜底行；
+//  4. 还没有：报错，不落表外的目录（§4 R2 / R3）。
+//
+// 选中的行库认不出（迁移时 library 写的库已不在配置里）也报错停下，同老规则（pickRuleLib）
+func pickDir(rows []model.LibraryDir, media *TmdbMedia, src string) (model.LibraryDir, error) {
+	mt := "movie"
+	if media.MediaType == "tv" {
+		mt = "tv"
+	}
+	var cands []*model.LibraryDir
+	for i := range rows {
+		r := &rows[i]
+		if r.Organize && libDirTypeOK(r, mt) && (src == "" || r.LibCid == src) {
+			cands = append(cands, r)
+		}
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Priority < cands[j].Priority })
+	var hit *model.LibraryDir
+	for _, r := range cands {
+		if matchLibraryDir(r, media) {
+			hit = r
+			break
+		}
+	}
+	if hit == nil {
+		for _, r := range cands {
+			if r.Fallback {
+				hit = r
+				break
+			}
+		}
+	}
+	if hit == nil {
+		where := "媒体库目录表里"
+		if src != "" {
+			where = "来源绑定的媒体库里"
+		}
+		return model.LibraryDir{}, fmt.Errorf("%s没有能放%s的目录（也没有兜底目录）：到「账号与媒体库 → 媒体库目录」添加", where, mediaTypeLabel(mt))
+	}
+	if hit.LibName == "" {
+		return *hit, fmt.Errorf("目录「%s」所属的媒体库「%s」不在媒体库配置里（到「账号与媒体库」添加附加媒体库，或改这一行的媒体库）", hit.Path, hit.LibCid)
+	}
+	return *hit, nil
+}
+
+func mediaTypeLabel(mt string) string {
+	if mt == "tv" {
+		return "剧集"
+	}
+	return "电影"
+}
+
+// ---- 保存校验（阶段 3 的保存接口用）----
+
+// libDirCheck 校验结果：Errors 不让存，Warnings 只提示
+type libDirCheck struct {
+	Errors   []string `json:"errors"`
+	Warnings []string `json:"warnings"`
+}
+
+// libDirLabel 给人看的一行：「库 / 路径」，库根写「库（库根）」
+func libDirLabel(r *model.LibraryDir) string {
+	lib := r.LibName
+	if lib == "" {
+		lib = r.LibCid
+	}
+	if r.Path == "" {
+		return lib + "（库根）"
+	}
+	return lib + " / " + r.Path
+}
+
+// validateLibraryDirs 纯函数（设计文档 §4 R2 / R9 / R12）：
+//   - 电影、剧集各至少一个参与整理、库认得出的兜底行；
+//   - 每个来源绑定的库（bound，cid）对电影、剧集各有自己的兜底行（来源定库时只在那个库里挑）；
+//   - 参与整理的行要选库；
+//   - 完全相同的行（库、路径、类型、开关、条件都一样）只能有一行；
+//
+// 提示：没写任何条件、又不是兜底的参与整理行，会吞掉排在它后面同类型的行；库认不出的行。
+func validateLibraryDirs(rows []model.LibraryDir, bound []string) libDirCheck {
+	out := libDirCheck{Errors: []string{}, Warnings: []string{}}
+	sorted := append([]model.LibraryDir(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Priority < sorted[j].Priority })
+
+	hasFallback := func(mt, lib string) bool {
+		for i := range sorted {
+			r := &sorted[i]
+			if r.Organize && r.Fallback && r.LibName != "" && libDirTypeOK(r, mt) && (lib == "" || r.LibCid == lib) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, mt := range []string{"movie", "tv"} {
+		if !hasFallback(mt, "") {
+			out.Errors = append(out.Errors, fmt.Sprintf("没有能放%s的兜底目录：条件都不匹配的%s会无处可放", mediaTypeLabel(mt), mediaTypeLabel(mt)))
+		}
+		for _, lib := range bound {
+			if !hasFallback(mt, lib) {
+				out.Errors = append(out.Errors, fmt.Sprintf("媒体库 cid=%s 绑定了转存子目录，但没有能放%s的兜底目录", lib, mediaTypeLabel(mt)))
+			}
+		}
+	}
+
+	seen := map[string]int{}
+	for i := range sorted {
+		r := &sorted[i]
+		if r.Organize && strings.TrimSpace(r.LibCid) == "" {
+			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 行「%s」参与整理但没选媒体库", i+1, r.Path))
+		}
+		k := strings.Join([]string{r.LibCid, libSubPath(r.Path), r.MediaType, fmt.Sprint(r.Organize, r.Fallback),
+			r.GenreIds, r.OriginalLanguage, r.OriginCountry, r.ProductionCountries, r.ReleaseYear, r.CustomRegex, r.Unsupported}, "\x1f")
+		if j, dup := seen[k]; dup {
+			out.Errors = append(out.Errors, fmt.Sprintf("第 %d 行和第 %d 行「%s」完全相同", j+1, i+1, libDirLabel(r)))
+		} else {
+			seen[k] = i
+		}
+		if r.LibName == "" && r.LibCid != "" {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("第 %d 行「%s」所属的媒体库不在配置里：不参与识别，整理选中它时会报错", i+1, libDirLabel(r)))
+		}
+		if r.Organize && !r.Fallback && r.CustomRegex == "" && r.Unsupported == "" && !hasCond(*r) {
+			later := 0
+			for j := i + 1; j < len(sorted); j++ {
+				o := &sorted[j]
+				if o.Organize && (o.MediaType == r.MediaType || o.MediaType == libDirTypeAll || r.MediaType == libDirTypeAll) {
+					later++
+				}
+			}
+			if later > 0 {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("第 %d 行「%s」没写条件，排在它后面的 %d 行同类型目录永远轮不到", i+1, libDirLabel(r), later))
+			}
+		}
+	}
+	return out
+}
+
+// ---- 启用开关与缓存 ----
+
+// libraryDirsActiveKey setting：值为 "1" 时识别与整理都用目录表。阶段 3 迁移成功后才写，之前一律走老配置
+const libraryDirsActiveKey = "library_dirs_active"
+
+// 目录表缓存：整理循环每个条目都要查一次（同老 classifyRules 的 10 秒）。改表时 forgetLibraryDirs
+var libDirsCache struct {
+	sync.Mutex
+	at     time.Time
+	active bool
+	rows   []model.LibraryDir
+}
+
+const libDirsTTL = 10 * time.Second
+
+// libraryDirsState 是否启用了目录表、以及当前的行（按 Priority 排好；调用方只读）
+func libraryDirsState() (bool, []model.LibraryDir) {
+	libDirsCache.Lock()
+	defer libDirsCache.Unlock()
+	if !libDirsCache.at.IsZero() && time.Since(libDirsCache.at) < libDirsTTL {
+		return libDirsCache.active, libDirsCache.rows
+	}
+	active := strings.TrimSpace(settingValueCompat(libraryDirsActiveKey)) == "1"
+	var rows []model.LibraryDir
+	if active && model.DB != nil {
+		model.DB.Order("priority ASC, id ASC").Find(&rows)
+	}
+	libDirsCache.active, libDirsCache.rows, libDirsCache.at = active, rows, time.Now()
+	return active, rows
+}
+
+func libraryDirsActive() bool {
+	active, _ := libraryDirsState()
+	return active
+}
+
+// forgetLibraryDirs 目录表或开关变了：整理与识别的缓存都作废
+func forgetLibraryDirs() {
+	libDirsCache.Lock()
+	libDirsCache.at = time.Time{}
+	libDirsCache.Unlock()
+	forgetLibLayoutCaches()
+}
+
+// libDirLibNames 目录表里出现的库名（编译识别用：哪些第一段算库）
+func libDirLibNames(rows []model.LibraryDir) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range rows {
+		if r.LibName != "" && !seen[r.LibName] {
+			seen[r.LibName] = true
+			out = append(out, r.LibName)
+		}
+	}
+	return out
 }

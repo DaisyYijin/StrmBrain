@@ -106,8 +106,7 @@ type orgCtx struct {
 // sink 切过去、ctx.libAbs 换成那个库的路径。之后的 ensurePath / 洗版 / 落盘都用 libCid()。
 // 库认不出时返回错误，调用方要在任何网盘写之前停下
 func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
-	category, val := classifyTarget(media)
-	cid, bySource, err := c.pickLib(val)
+	category, cid, bySource, err := c.target(media)
 	if err != nil {
 		return category, err
 	}
@@ -116,18 +115,38 @@ func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
 	return category, nil
 }
 
-// pickLib 选库：来源子目录 > 规则 library > 主库。bySource 表示是按来源定的（记进整理记录，重新整理沿用）
-func (c *orgCtx) pickLib(ruleVal string) (cid string, bySource bool, err error) {
-	if cid, ok, err := sourceLibOf(c.cfg); ok || err != nil {
-		return cid, ok, err
+// target 选分类目录与库：来源子目录绑定了库时按来源定库（stagingsub.go），否则按分类规则 / 媒体库目录表。
+// bySource 表示是按来源定的（记进整理记录，重新整理沿用）
+func (c *orgCtx) target(media *TmdbMedia) (category, cid string, bySource bool, err error) {
+	src, bySource, err := sourceLibOf(c.cfg)
+	if err != nil {
+		return classifyMedia(media), "", true, err
 	}
-	cid, err = c.ruleLib(ruleVal)
-	return cid, false, err
+	if !bySource {
+		src = ""
+	}
+	category, cid, err = pickOrgTarget(c.cfg, c.sink, media, src)
+	return category, cid, bySource, err
 }
 
-// ruleLib 分类规则的库值 → 库 cid
-func (c *orgCtx) ruleLib(val string) (string, error) {
-	return ruleLibOf(c.cfg, c.sink, val)
+// pickOrgTarget 整理去处：分类目录（库内路径）+ 库 cid。src 非空 = 来源已定库。
+//
+// 两套实现由 libraryDirsActive 分派（docs/115-station-notes/LIBRARY-DIRS-PLAN.md）：
+//   - 老的：按类型的分类规则算分类路径（classifyTarget）；来源定库时库就是来源的，否则按规则的 library（主库兜底）；
+//   - 目录表：pickDir，来源定库时只在那个库的行里挑。迁移给来源绑定的库复制过行，两者结果逐条相同（libdirs_test 的 G1）。
+//
+// 出错时仍尽量带回分类路径（整理记录要记）
+func pickOrgTarget(cfg *OrgConfig, sink *orgSink, media *TmdbMedia, src string) (category, cid string, err error) {
+	if active, rows := libraryDirsState(); active {
+		row, err := pickDir(rows, media, src)
+		return row.Path, row.LibCid, err
+	}
+	category, val := classifyTarget(media)
+	if src != "" {
+		return category, src, nil
+	}
+	cid, err = ruleLibOf(cfg, sink, val)
+	return category, cid, err
 }
 
 // ruleLibOf 分类规则的库值 → 库 cid。没写就是主库，不为它解析任何库名。
@@ -709,6 +728,11 @@ func classifyRules(mediaType string) []model.CategoryRule {
 //
 // 返回空串表示「不要分类子目录」，由 categoryDir 退回媒体类型默认目录。
 func classifyMedia(media *TmdbMedia) string {
+	if active, rows := libraryDirsState(); active {
+		// 只要路径的两处（云端查重、洗版策略）：不分来源。来源绑定库里是复制的同路径行，结果相同
+		row, _ := pickDir(rows, media, "")
+		return row.Path
+	}
 	category, _ := classifyTarget(media)
 	return category
 }
@@ -746,6 +770,10 @@ func classifyTarget(media *TmdbMedia) (category, library string) {
 func categoryDir(mediaType, category string) string {
 	if c := libSubPath(category); c != "" {
 		return c
+	}
+	if libraryDirsActive() {
+		// 目录表里路径为空就是库根本身（迁移时已把空名的老规则转成 电影 / 剧集，不靠这里退回）
+		return ""
 	}
 	return mediaTypeCategory(mediaType)
 }

@@ -57,7 +57,7 @@ func TestLibraryDirsRecognitionEquivalence(t *testing.T) {
 		"电影/华语电影/老片 (1990)/老片.strm",
 	}
 	old := buildLibCategoryLayout(rules).withExtraDirs(extras)
-	mig, err := planLibraryDirMigration(rules, extras, testRoots, videos)
+	mig, err := planLibraryDirMigration(rules, extras, testRoots, videos, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestPlanLibraryDirMigration(t *testing.T) {
 		{ID: 5, MediaType: "movie", Name: "光盘", Ext: "iso", Priority: 5},
 		{ID: 6, MediaType: "movie", Name: "动画", GenreIds: "16", Library: "200", Priority: 6}, // 按 cid 指库
 	}
-	mig, err := planLibraryDirMigration(rules, nil, testRoots, nil)
+	mig, err := planLibraryDirMigration(rules, nil, testRoots, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestPlanLibraryDirMigration(t *testing.T) {
 	}
 
 	// 电影有规则但没有兜底：组末补「电影/未分类」（老 classifyTarget 的最后一档）
-	mig, _ = planLibraryDirMigration([]model.CategoryRule{{ID: 1, MediaType: "movie", Name: "电影/A", GenreIds: "16"}}, nil, testRoots, nil)
+	mig, _ = planLibraryDirMigration([]model.CategoryRule{{ID: 1, MediaType: "movie", Name: "电影/A", GenreIds: "16"}}, nil, testRoots, nil, nil)
 	if r := mig.Rows[1]; r.Path != "电影/未分类" || !r.Fallback || r.MediaType != "movie" {
 		t.Errorf("没有兜底规则时补未分类: %+v", mig.Rows)
 	}
@@ -138,10 +138,10 @@ func TestPlanLibraryDirMigration(t *testing.T) {
 	}
 
 	// 库名拿不到：不迁移
-	if _, err := planLibraryDirMigration(rules, nil, []libRoot{{Cid: "100"}}, nil); err == nil {
+	if _, err := planLibraryDirMigration(rules, nil, []libRoot{{Cid: "100"}}, nil, nil); err == nil {
 		t.Error("库名为空时应拒绝迁移")
 	}
-	if _, err := planLibraryDirMigration(rules, nil, nil, nil); err == nil {
+	if _, err := planLibraryDirMigration(rules, nil, nil, nil, nil); err == nil {
 		t.Error("没配媒体库时应拒绝迁移")
 	}
 }
@@ -157,7 +157,7 @@ func TestPlanLibraryDirMigrationExtras(t *testing.T) {
 		{Dir: "电影", Type: "tv"},
 	}
 	videos := []string{"影视/收藏/a/a.strm", "动漫库/收藏/b/b.strm"}
-	mig, err := planLibraryDirMigration(rules, extras, testRoots, videos)
+	mig, err := planLibraryDirMigration(rules, extras, testRoots, videos, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

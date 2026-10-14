@@ -224,6 +224,18 @@ func (h *Handler) ruleLibCid(val string) (string, error) {
 	return pickRuleLib(val, roots)
 }
 
+// orgTargetOf 没有整理上下文的地方（网盘文件页）算整理去处：分类目录 + 库 cid，不看来源。
+// 老的分类规则只在写了 library 时才解析库名（走路径缓存）；目录表直接给 cid
+func (h *Handler) orgTargetOf(media *TmdbMedia) (category, cid string, err error) {
+	if active, rows := libraryDirsState(); active {
+		row, err := pickDir(rows, media, "")
+		return row.Path, row.LibCid, err
+	}
+	category, val := classifyTarget(media)
+	cid, err = h.ruleLibCid(val)
+	return category, cid, err
+}
+
 // checkRuleLibraries 分类规则里写的 library 都要对得上一个媒体库（保存分类规则时调用）。
 // 没有规则写 library 时零请求
 func (h *Handler) checkRuleLibraries(rows []model.CategoryRule) error {
