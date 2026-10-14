@@ -136,13 +136,13 @@ func TestResNormalizeAndSort(t *testing.T) {
 	items := resNormalize(q, []ResourceItem{
 		{Source: "pansou", Kind: "pan", Pan: "quark", Action: "open", Title: "Dune.Part.Two.2024.2160p", URL: "https://pan.quark.cn/s/x"},
 		{Source: "pansou", Kind: "pan", Pan: "baidu", Action: "open", Title: "Dune.Part.Two.2024.2160p.DV [58.3G]", URL: "https://pan.baidu.com/s/1"},
-		{Source: "gy", Kind: "magnet", Action: "offline", Title: "Dune.Part.Two.2024.1080p.WEB-DL", Size: "8.2G"},
+		{Source: "gy", Kind: "magnet", Action: "offline", Title: "Dune.Part.Two.2024.1080p.WEB-DL [8.2G]"},
 		{Source: "gy", Kind: "magnet", Action: "offline", Title: "Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR", Size: "20G"},
 		{Source: "pansou", Kind: "share115", Action: "transfer", Title: "流浪地球2 4K", URL: "https://115.com/s/zz"},
 		{Source: "gy", Kind: "magnet", Action: "offline", Title: "Dune.Part.Two.2024.2160p.WEB-DL.HDR", Size: "18G"},
 	})
-	if len(items) != 5 {
-		t.Fatalf("夸克应当被过滤: %d 条", len(items))
+	if len(items) != 4 {
+		t.Fatalf("夸克、百度应当被过滤: %d 条", len(items))
 	}
 	resSortDefault(items)
 	var order []string
@@ -152,15 +152,14 @@ func TestResNormalizeAndSort(t *testing.T) {
 	want := []string{
 		"Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR|0|true",
 		"Dune.Part.Two.2024.2160p.WEB-DL.HDR|1|true",
-		"Dune.Part.Two.2024.1080p.WEB-DL|2|true",
-		"Dune.Part.Two.2024.2160p.DV [58.3G]|0|true", // 其他网盘要手动处理，沉在能直接转存的后面
+		"Dune.Part.Two.2024.1080p.WEB-DL [8.2G]|2|true",
 		"流浪地球2 4K|1|false",
 	}
 	if strings.Join(order, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("排序不符:\n%s\n预期:\n%s", strings.Join(order, "\n"), strings.Join(want, "\n"))
 	}
-	if items[3].Size != "58.3G" || items[3].SizeBytes == 0 {
-		t.Errorf("标题里的大小应当兜底取出: %+v", items[3])
+	if items[2].Size != "8.2G" || items[2].SizeBytes == 0 {
+		t.Errorf("标题里的大小应当兜底取出: %+v", items[2])
 	}
 	if items[0].Tags.Pix != "2160p" || items[0].Tags.Effect == "" {
 		t.Errorf("画质标签: %+v", items[0].Tags)
@@ -221,16 +220,13 @@ func TestSearchResourcesPansou(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(r.Items) != 2 {
-		t.Fatalf("夸克应当被过滤: %+v", r.Items)
+	if len(r.Items) != 1 {
+		t.Fatalf("夸克、百度应当被过滤: %+v", r.Items)
 	}
 	first := r.Items[0]
 	if first.Kind != "share115" || first.Action != "transfer" || first.Code != "x1y2" || !first.Relevant ||
 		first.Tags.Season != "S01" || !first.Tags.Zh || first.Time != "2026-02-01" {
 		t.Fatalf("115 分享归一不符: %+v", first)
-	}
-	if r.Items[1].Relevant {
-		t.Fatalf("流浪地球不是三体: %+v", r.Items[1])
 	}
 	// 再搜一次走缓存，但提交状态要现查
 	model.DB.Create(&model.DownloadLink{Kind: "share", Hash: linkHashOf("https://115.com/s/a1")})

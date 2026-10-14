@@ -159,7 +159,6 @@ const kindOptions = computed(() => {
     { label: '全部', value: 'all' as const },
     { label: `115 分享 ${n('share115')}`, value: 'share115' as const },
     { label: `磁力 / ed2k ${n('download')}`, value: 'download' as const },
-    { label: `其他网盘 ${n('pan')}`, value: 'pan' as const },
   ]
 })
 const PIX_OPTIONS = [

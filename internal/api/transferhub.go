@@ -645,11 +645,13 @@ func resWashRank(mediaType, title string) int {
 	return -1
 }
 
-// resNormalize 统一补齐标签、相关性、洗版排名，并过滤已移除的网盘
+// resNormalize 统一补齐标签、相关性、洗版排名，并过滤掉进不了 115 的资源
 func resNormalize(q resQuery, items []ResourceItem) []ResourceItem {
 	out := items[:0]
 	for _, it := range items {
-		if removedCloudResource(it.Pan, it.URL) {
+		// 其他网盘（百度 / 迅雷 / UC …）只能打开原链接手动处理，本站转存不了，
+		// 维护者要求不列（2026-10-14）；RE0 上非 115 的资源解锁了也一样没用
+		if it.Kind == "pan" || removedCloudResource(it.Pan, it.URL) {
 			continue
 		}
 		// 来源自己给的标签（RE0 的字幕语言、TG 的话题标签）只补标题里解析不出来的
