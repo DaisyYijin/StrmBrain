@@ -1,6 +1,5 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
-import type { ExtraDir, ExtraDirType } from './library'
 
 export type { QueuedReply }
 
@@ -12,17 +11,7 @@ export const runPipeline = () => http.post<QueuedReply>('/organize/pipeline')
 
 // ---- 二级分类 / 洗版规则（YAML） ----
 export const getCategories = () => http.get<{ config?: string }>('/scrape/categories')
-export const saveCategories = (yaml: string, keep?: ExtraDir[]) => http.post('/scrape/categories', { yaml, keep })
-
-/** 这次规则里去掉了、底下还有片目的分类目录（保存前问用户要不要留作其他媒体库目录） */
-export interface CategoryDrop {
-  dir: string
-  type: ExtraDirType
-  titles: number
-  samples: string[] | null
-}
-export const previewCategories = (yaml: string) =>
-  http.post<{ dropped: CategoryDrop[] }>('/scrape/categories/preview', { yaml })
+export const saveCategories = (yaml: string) => http.post('/scrape/categories', { yaml })
 
 export const getWash = () => http.get<{ config?: string }>('/scrape/wash')
 export const saveWash = (yaml: string) => http.post('/scrape/wash', { yaml })

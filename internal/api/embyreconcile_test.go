@@ -169,29 +169,3 @@ func TestReconcileEmbyMappingBroken(t *testing.T) {
 		t.Fatal("一个都对不上应判映射有问题")
 	}
 }
-
-// 分类规则外的目录：平铺电影目录本身就是该加的目录，多版本（同名）不算平铺；Extra 去掉库名
-func TestReconcileUncategorizedDirs(t *testing.T) {
-	layout := libCategoryLayout{"电影": "movie"}
-	items := []embyReconItem{
-		{Type: "Movie", Name: "英雄本色", Path: "/m/115/LGNB/港片/英雄本色.strm"},
-		{Type: "Movie", Name: "无间道", Path: "/m/115/LGNB/港片/无间道.strm"},
-		{Type: "Movie", Name: "双版本", Path: "/m/115/自建/双版本 (2020)/a.strm"},
-		{Type: "Movie", Name: "双版本", Path: "/m/115/自建/双版本 (2020)/b.strm"},
-		{Type: "Movie", Name: "库根下", Path: "/m/115/库根下 (2001)/x.strm"},
-	}
-	r := reconcileEmby(items, nil, layout, "/m", func(p string) string { return p }, func(string) bool { return true })
-	got := map[string]embyReconDir{}
-	for _, d := range r.Movie.UncategorizedBy {
-		got[d.Dir] = d
-	}
-	if d := got["115/LGNB/港片"]; !d.Flat || d.Extra != "LGNB/港片" || d.Count != 2 {
-		t.Errorf("平铺目录: %+v", d)
-	}
-	if d := got["115/自建"]; d.Flat || d.Extra != "自建" || d.Count != 2 {
-		t.Errorf("多版本不算平铺: %+v", d)
-	}
-	if d, ok := got["115"]; !ok || d.Extra != "" {
-		t.Errorf("库根下的片目加不进去: %+v", d)
-	}
-}

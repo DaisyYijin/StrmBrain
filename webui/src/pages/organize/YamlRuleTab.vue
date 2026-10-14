@@ -22,7 +22,6 @@ const props = defineProps<{
   hint?: string
   note: string
   load: () => Promise<{ config?: string; default_config?: string }>
-  /** 返回 false 表示调用方取消了保存（不提示成功） */
   persist: (yaml: string) => Promise<unknown>
   /** 库里没有配置时填入编辑器的起始模板。洗版不传：后端首次部署就播种了真实
       配置，这里再兜底显示一份默认策略只会让「清空=不洗版」看着像还在生效 */
@@ -57,8 +56,7 @@ async function save() {
   saving.value = true
   try {
     // 后端会解析 YAML，格式错误时返回带行号的错误信息，直接透传给用户
-    // persist 返回 false = 用户在它弹出的确认里取消了，什么都没存
-    if ((await props.persist(yaml.value)) === false) return
+    await props.persist(yaml.value)
     message.success('保存成功')
   } catch (e) {
     toastError(e, '保存失败：请检查 YAML 缩进与格式')
