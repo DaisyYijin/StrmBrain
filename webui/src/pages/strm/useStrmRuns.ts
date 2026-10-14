@@ -54,7 +54,7 @@ export function useStrmRuns(full: FullSetting) {
     }
     const cid = src.cid.trim()
     if (!cid || cid === '0') {
-      message.error('请先到「账号与媒体库」配置并保存 115 媒体库目录')
+      message.error('请先到「账号与媒体库 → 媒体库」配置并保存 115 媒体库目录')
       return null
     }
     return src

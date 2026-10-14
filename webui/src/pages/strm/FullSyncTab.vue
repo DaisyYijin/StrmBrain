@@ -121,7 +121,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
         <span class="loc-label">本地</span>
         <span class="loc-path" :class="{ 'is-empty': !cfg.local_path }">{{ cfg.local_path || '未配置' }}</span>
       </span>
-      <RouterLink :to="{ name: 'accounts' }" class="loc-edit">在「账号与媒体库」修改</RouterLink>
+      <RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }" class="loc-edit">在「账号与媒体库」修改</RouterLink>
       <button type="button" class="loc-help" @click="helpVisible = true">
         <BookOpen :size="14" />功能介绍
       </button>

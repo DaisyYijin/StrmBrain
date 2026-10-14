@@ -93,7 +93,7 @@ onMounted(load)
                 {{ media.model.value.local_path || '未配置' }}
               </div>
             </div>
-            <RouterLink :to="{ name: 'accounts' }" class="fact-link">修改<ChevronRight :size="13" /></RouterLink>
+            <RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }" class="fact-link">修改<ChevronRight :size="13" /></RouterLink>
           </div>
           <div class="fact">
             <span class="fact-icon"><Upload :size="15" /></span>

@@ -388,7 +388,7 @@ const TRIGGERS: { name: string; text: string }[] = [
         <p class="dir-note">
           <Info :size="14" />
           <span>
-            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」。
+            媒体库目录在「<RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }">账号与媒体库</RouterLink>」。
             第一次用之前，先配好二级分类策略并跑一次全量同步。
           </span>
         </p>

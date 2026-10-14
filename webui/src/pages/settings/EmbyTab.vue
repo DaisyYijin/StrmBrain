@@ -268,7 +268,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
           <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
           <span v-if="detectNote" class="detect-note">{{ detectNote }}</span>
         </div>
-        <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
+        <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
           前往「账号与媒体库」修改本地目录
         </HButton>
       </FieldRow>

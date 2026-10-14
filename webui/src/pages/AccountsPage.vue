@@ -6,7 +6,8 @@ import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
-import { Info, Plus, QrCode, ShieldCheck, X } from '@lucide/vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import { ChevronRight, Info, Plus, QrCode, ShieldCheck, X } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -23,9 +24,24 @@ import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
 import type { StorageCheck } from '@/types/storage'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useTabQuery } from '@/composables/useTabQuery'
 
 const { message, dialog } = useFeedback()
 const media = useFullSetting()
+
+/**
+ * 两个页签：account（账号与连接设置）/ library（媒体库位置与工作目录）。
+ * 别处跳「改媒体库目录」带 ?tab=library；页签值别改，收藏和站内链接都认它。
+ */
+const tab = useTabQuery('account')
+const TAB_ITEMS = computed(() => [
+  { value: 'account', label: '115 账号' },
+  { value: 'library', label: '媒体库', dot: libUnset.value },
+])
+/** 媒体库还没保存过：读完配置之后才下结论，免得进页面先闪一下引导 */
+const libUnset = computed(() => !media.loading.value && (!media.saved.value.cid || media.saved.value.cid === '0'))
+/** 账号还没绑定：媒体库页签里选不了 115 目录，提示先回账号页签扫码 */
+const accountUnbound = computed(() => !accountLoading.value && !account.value)
 const cidInput = ref<InstanceType<typeof Cid115Input> | null>(null)
 const cidValue = ref({ cid: '', path: '' })
 
@@ -351,18 +367,34 @@ onMounted(() => {
 
 <template>
   <div class="page">
-    <AccountHero
-      :account="account"
-      :loading="accountLoading"
-      :checking="checking"
-      @check="check"
-      @scan="qrShow = true"
-    />
+    <HTabs v-model="tab" :items="TAB_ITEMS" />
 
-    <div class="cols">
-      <!-- ==== 左：连接设置 + 媒体库位置（都是表单） ==== -->
-      <div class="col">
-        <SectionCard title="连接设置" hint="Cookie 文件 · 登录设备 · 开放平台 · 风控间隔" class="col-conn">
+    <Transition name="tab" mode="out-in">
+      <div v-if="tab !== 'library'" key="account" class="pane">
+        <AccountHero
+          :account="account"
+          :loading="accountLoading"
+          :checking="checking"
+          @check="check"
+          @scan="qrShow = true"
+        />
+
+        <!-- 没设媒体库时同步、整理、刮削都跑不起来，在账号页签就引导过去 -->
+        <HAlert v-if="libUnset" status="warning" title="还没有设置媒体库">
+          <template v-if="accountUnbound">先扫码登录 115 账号，再到「媒体库」页签选择 115 媒体库目录和本地 STRM 根目录。</template>
+          <template v-else>同步、整理、刮削都要先知道 115 媒体库目录和本地 STRM 根目录，请到「媒体库」页签设置。</template>
+          <template #actions>
+            <HButton v-if="accountUnbound" variant="primary" size="sm" @click="qrShow = true">
+              <template #icon><QrCode :size="15" /></template>
+              扫码登录
+            </HButton>
+            <HButton :variant="accountUnbound ? 'secondary' : 'primary'" size="sm" @click="tab = 'library'">
+              去设置媒体库<ChevronRight :size="15" />
+            </HButton>
+          </template>
+        </HAlert>
+
+        <SectionCard title="连接设置" hint="Cookie 文件 · 登录设备 · 开放平台 · 风控间隔">
           <FieldRow
             label="Cookie 路径"
             tip="指定 115 Cookie 文件路径，扫码登录后自动写入该文件。"
@@ -422,81 +454,95 @@ onMounted(() => {
             <HButton variant="tertiary" @click="reset">重置配置</HButton>
           </FormActions>
         </SectionCard>
-
-        <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
-          <p class="media-note">
-            <Info :size="14" />全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共用这一处位置配置。
-          </p>
-
-          <FieldRow
-            label="115 媒体库目录"
-            required
-            tip="主媒体库。分类规则没写 library 的都整理到这里；全量同步、增量同步与洗版判定都以各库为准。"
-          >
-            <Cid115Input ref="cidInput" v-model="cidValue" />
-          </FieldRow>
-
-          <FieldRow
-            label="附加媒体库"
-            tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。要把某一类整理进附加库，在「自动整理 → 二级分类」的规则里写 library: 库目录名（规则生成器里可以直接选）。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
-          >
-            <div class="extra-libs">
-              <div v-for="(_row, i) in extraLibs" :key="i" class="extra-lib">
-                <Cid115Input
-                  :ref="(el) => (extraInputs[i] = el as InstanceType<typeof Cid115Input> | null)"
-                  v-model="extraLibs[i]"
-                  placeholder="选择另一个 115 媒体库目录"
-                  class="extra-lib-input"
-                />
-                <HButton variant="ghost" icon-only :aria-label="`移除第 ${i + 1} 个附加媒体库`" @click="removeExtraLib(i)">
-                  <template #icon><X :size="15" /></template>
-                </HButton>
-              </div>
-              <HButton variant="secondary" size="sm" @click="addExtraLib">
-                <template #icon><Plus :size="15" /></template>
-                添加媒体库
-              </HButton>
-            </div>
-          </FieldRow>
-
-          <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
-            这些目录是移出配置的媒体库（或 115 上改过名的库）留下的，同步不再管它们，海报墙和 Emby 里还看得到。
-            <ul class="leftover-list">
-              <li v-for="l in leftovers" :key="l.name">
-                <span>
-                  <b>{{ l.name }}</b>：台账 {{ l.files }} 行（视频 {{ l.videos }} 个）<template v-if="!l.local">，本地目录已不在</template>
-                </span>
-                <HButton variant="tertiary" size="sm" @click="cleanLeftover(l)">清理本地</HButton>
-              </li>
-            </ul>
-          </HAlert>
-
-          <FieldRow
-            label="本地媒体库根目录"
-            required
-            tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
-          >
-            <LocalPathInput v-model="media.model.value.local_path" />
-          </FieldRow>
-
-          <FormActions>
-            <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
-          </FormActions>
-        </SectionCard>
       </div>
 
-      <!-- ==== 右：工作目录一览（宽屏吸顶，左边表单滚动时一直看得见） ==== -->
-      <div class="col col-side">
-        <WorkspaceCard
-          :slots="wsSlots"
-          :can-create="!!media.saved.value.cid && missingWs.length > 0"
-          :creating="creatingWs"
-          :legacy="wsLegacy"
-          @create="createWs"
-          @dismiss-legacy="dismissLegacy"
-        />
+      <div v-else key="library" class="pane">
+        <HAlert v-if="accountUnbound" status="accent" title="115 账号还没绑定">
+          选择 115 目录要先登录账号。
+          <template #actions>
+            <HButton variant="secondary" size="sm" @click="tab = 'account'">去绑定账号<ChevronRight :size="15" /></HButton>
+          </template>
+        </HAlert>
+
+        <div class="cols">
+          <!-- ==== 左：媒体库位置（表单） ==== -->
+          <div class="col">
+            <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
+              <p class="media-note">
+                <Info :size="14" />全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共用这一处位置配置。
+              </p>
+
+              <FieldRow
+                label="115 媒体库目录"
+                required
+                tip="主媒体库。分类规则没写 library 的都整理到这里；全量同步、增量同步与洗版判定都以各库为准。"
+              >
+                <Cid115Input ref="cidInput" v-model="cidValue" />
+              </FieldRow>
+
+              <FieldRow
+                label="附加媒体库"
+                tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。要把某一类整理进附加库，在「自动整理 → 二级分类」的规则里写 library: 库目录名（规则生成器里可以直接选）。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
+              >
+                <div class="extra-libs">
+                  <div v-for="(_row, i) in extraLibs" :key="i" class="extra-lib">
+                    <Cid115Input
+                      :ref="(el) => (extraInputs[i] = el as InstanceType<typeof Cid115Input> | null)"
+                      v-model="extraLibs[i]"
+                      placeholder="选择另一个 115 媒体库目录"
+                      class="extra-lib-input"
+                    />
+                    <HButton variant="ghost" icon-only :aria-label="`移除第 ${i + 1} 个附加媒体库`" @click="removeExtraLib(i)">
+                      <template #icon><X :size="15" /></template>
+                    </HButton>
+                  </div>
+                  <HButton variant="secondary" size="sm" @click="addExtraLib">
+                    <template #icon><Plus :size="15" /></template>
+                    添加媒体库
+                  </HButton>
+                </div>
+              </FieldRow>
+
+              <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
+                这些目录是移出配置的媒体库（或 115 上改过名的库）留下的，同步不再管它们，海报墙和 Emby 里还看得到。
+                <ul class="leftover-list">
+                  <li v-for="l in leftovers" :key="l.name">
+                    <span>
+                      <b>{{ l.name }}</b>：台账 {{ l.files }} 行（视频 {{ l.videos }} 个）<template v-if="!l.local">，本地目录已不在</template>
+                    </span>
+                    <HButton variant="tertiary" size="sm" @click="cleanLeftover(l)">清理本地</HButton>
+                  </li>
+                </ul>
+              </HAlert>
+
+              <FieldRow
+                label="本地媒体库根目录"
+                required
+                tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
+              >
+                <LocalPathInput v-model="media.model.value.local_path" />
+              </FieldRow>
+
+              <FormActions>
+                <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
+              </FormActions>
+            </SectionCard>
+          </div>
+
+          <!-- ==== 右：工作目录一览（宽屏吸顶，左边表单滚动时一直看得见） ==== -->
+          <div class="col col-side">
+            <WorkspaceCard
+              :slots="wsSlots"
+              :can-create="!!media.saved.value.cid && missingWs.length > 0"
+              :creating="creatingWs"
+              :legacy="wsLegacy"
+              @create="createWs"
+              @dismiss-legacy="dismissLegacy"
+            />
+          </div>
+        </div>
       </div>
-    </div>
+    </Transition>
 
     <QrLoginModal
       v-model:show="qrShow"
@@ -515,7 +561,28 @@ onMounted(() => {
   gap: 16px;
 }
 
-/* ---- 两栏：左连接设置，右媒体库与工作目录 ---- */
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.tab-enter-active,
+.tab-leave-active {
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.tab-enter-from {
+  opacity: 0;
+  transform: translateY(5px);
+}
+.tab-leave-to {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+/* ---- 媒体库页签两栏：左媒体库位置，右工作目录 ---- */
 .cols {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

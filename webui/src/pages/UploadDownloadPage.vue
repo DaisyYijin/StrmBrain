@@ -36,7 +36,7 @@ const monitor = useSetting('monitor', { enabled: false })
 
     <FieldRow label="本地媒体库根目录" tip="与全量同步、增量同步、整理和影视刮削共用同一位置；目标固定为 115 媒体库。">
       <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
-      <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
+      <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
         前往「账号与媒体库」修改
       </HButton>
     </FieldRow>
