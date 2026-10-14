@@ -92,7 +92,7 @@ func libTitleAround(chain []browseCrumb, roles map[string]string, layout libCate
 	for j := idx + 1; j < len(chain); j++ {
 		parts = append(parts, chain[j].Name)
 		rel := strings.Join(parts, "/")
-		if !layout.isTitleRel(rel) {
+		if !layout.isTitleRelIn(chain[idx].Name, rel) {
 			continue
 		}
 		var sub []string
@@ -113,7 +113,7 @@ func episodeRowAction(t libFileTitle, layout libCategoryLayout, name string, isD
 	if !videoExts[strings.ToLower(pathExt(name))] {
 		return "字幕、NFO、图片跟着同名视频走"
 	}
-	if layout[path.Dir(t.titleRel)] == "movie" {
+	if layout.typeOf(t.libName, layoutParent(t.titleRel)) == "movie" {
 		return "电影片目里的文件跟着片目走，请在片目那一层操作"
 	}
 	return ""

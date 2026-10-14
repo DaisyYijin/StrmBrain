@@ -109,6 +109,18 @@ func localEmbyStats() map[string]localEmbyStat {
 	return localEmbySnap.stats
 }
 
+// staleLocalEmby 片目边界变了（分类规则 / 其他媒体库目录）：快照按片目 key 归的，新认出的片目在里面没有计数。
+// 只标成过期，下次打开海报墙时后台重拉；正在拉的那一轮用的可能是旧布局，拉完再来一轮
+func staleLocalEmby() {
+	s := &localEmbySnap
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.at = time.Time{}
+	if s.running {
+		s.again = true
+	}
+}
+
 // kickLocalEmby 需要时在后台拉一份快照，返回此刻是否正在拉。
 // 2026-10 起不再在请求里同步拉：大库一次要读几十页带媒体流的条目，页面每过一分钟再打开就要干等。
 // 现在有旧快照就先用旧的（卡片立即带角标），新的拉完前端再原地刷新。失败时保留上一份，只记错误

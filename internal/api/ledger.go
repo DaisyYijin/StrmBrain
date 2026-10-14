@@ -17,8 +17,9 @@ type ledgerTitleEntry struct {
 	Year      string
 	TmdbID    int
 	MediaType string
-	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）
-	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它
+	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）；库根本身就是分类时为空
+	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它。
+	// 由 titleAt 按「带库名那一轮匹配上」直接给出，别再按段数反推（库根分类时分类段数为 0，推不出）
 	LibName string
 	Videos  int // 台账里的视频数（海报墙的卡片显示）
 	// LastAt 片目里最近一个视频首次入账的时间（海报墙「最近入库」、媒体信息补全的先后）。
@@ -122,88 +123,6 @@ func forgetLedgerTitles() {
 	ledgerTitlesMu.Unlock()
 }
 
-// ---- 库内目录布局：分类目录的下一层是标题目录 ----
-//
-// 整理落盘是 库名/<分类名>/<标题目录>/…（organize.go 的 categoryDir + 重命名模板第一段），
-// 分类名就是二级分类 YAML 里写的名字，可以多级（电视剧/日番），也可以平铺（动漫番剧、综艺）。
-// 所以「哪一层是标题目录」只能按当前的分类规则算，不能按深度写死 ——
-// 此前写死成 库名/电影|剧集/分类/标题，平铺配置（电影/*、动漫番剧/*）下
-// 片目全认错：电影的标题目录被当成分类、文件被当成标题目录，动漫番剧 / 综艺整类被跳过。
-//
-// 只认当前配置：分类规则 + 「其他媒体库目录」（extradirs.go：用户手动建的目录、改规则后留下的旧分类目录，
-// 只用于识别，整理不往里放）。两处都没有的目录，里面的片不算片目（与网盘文件页口径一致）。
-// 别改成按目录结构自动推断：平铺与多级分类混在一起时认不准。
-
-// libCategoryLayout 分类目录（库内相对路径）→ 媒体类型（movie / tv；两边都有同名分类、或其他目录设为自动时为空）
-type libCategoryLayout map[string]string
-
-// loadLibCategoryLayout 按当前分类规则与其他媒体库目录算出所有分类目录。
-// 直接读表不走 classifyRules 的缓存：调用方（台账扫描）自己有 30 秒缓存
-func loadLibCategoryLayout() libCategoryLayout {
-	return loadRuleLayout().withExtraDirs(loadLibExtraDirs())
-}
-
-// buildLibCategoryLayout 纯函数部分：规则 → 分类目录表。
-// 某个媒体类型一条规则都没有时，整理会落到 电影/未分类 或 剧集/未分类（classifyMedia 的兜底）
-func buildLibCategoryLayout(rules []model.CategoryRule) libCategoryLayout {
-	out := libCategoryLayout{}
-	has := map[string]bool{}
-	add := func(dir, mediaType string) {
-		if dir = libSubPath(dir); dir == "" {
-			return
-		}
-		if prev, ok := out[dir]; ok && prev != mediaType {
-			out[dir] = "" // movie 与 tv 都有这个分类名：类型要按文件判断
-			return
-		}
-		out[dir] = mediaType
-	}
-	for _, r := range rules {
-		add(r.Name, r.MediaType)
-		has[r.MediaType] = true
-	}
-	for _, mt := range []string{"movie", "tv"} {
-		if !has[mt] {
-			add(libSubPath(mediaTypeCategory(mt), "未分类"), mt)
-		}
-	}
-	return out
-}
-
-// titleOf 台账相对路径（含文件名）落在哪个标题目录下。
-// 路径首段一般是库名；老台账有不带库名的，先按带库名算，对不上再按不带算。
-// 分类有多级且互相嵌套时（电视剧 与 电视剧/日番 都是分类）取最长匹配。
-// 返回标题目录的相对路径（台账口径，含库名前缀）、标题目录名、分类目录与其媒体类型
-//
-// 视频直接放在电影分类目录里（平铺，见 isSoloTitleKey）时，这个视频自己就是一部：
-// key 是它的相对路径，titleDir 是去掉 .strm 的视频名
-func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, mediaType string, ok bool) {
-	segs := strings.Split(strings.Trim(relPath, "/"), "/")
-	last := segs[len(segs)-1]
-	for _, off := range []int{1, 0} {
-		// 平铺：分类段一直到文件的上一层，比任何「分类/标题目录」都长，先看它
-		if n := len(segs) - 1 - off; n >= 1 && isSoloTitleKey(last) {
-			cat := strings.Join(segs[off:off+n], "/")
-			if mt, hit := l[cat]; hit && soloAllowed(mt, last) {
-				return strings.Join(segs, "/"), soloTitleStem(last), cat, "movie", true
-			}
-		}
-		best := -1
-		// 标题目录之下至少还有一个文件：分类段最多到 len-2
-		for n := 1; off+n <= len(segs)-2; n++ {
-			if _, hit := l[strings.Join(segs[off:off+n], "/")]; hit {
-				best = n
-			}
-		}
-		if best < 0 {
-			continue
-		}
-		category = strings.Join(segs[off:off+best], "/")
-		return strings.Join(segs[:off+best+1], "/"), segs[off+best], category, l[category], true
-	}
-	return "", "", "", "", false
-}
-
 // scanLedgerTitles 全量扫描台账，按「标题目录」聚合（库名/<分类>/<标题目录>/…）
 func scanLedgerTitles() map[string]*ledgerTitleEntry {
 	layout := loadLibCategoryLayout()
@@ -213,10 +132,11 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 	// 同名分类两边都有时按文件判断：片目里有一集带集号就是剧集
 	undecided := map[string]bool{}
 	for _, sf := range sfs {
-		key, titleDir, category, mediaType, ok := layout.titleOf(sf.RelPath)
+		hit, ok := layout.titleAt(sf.RelPath)
 		if !ok {
 			continue
 		}
+		key, titleDir, category, mediaType := hit.Key, hit.TitleDir, hit.Category, hit.MediaType
 		e, seen := out[key]
 		if !seen {
 			title, year, tmdb := parseTitleDir(titleDir)
@@ -227,10 +147,8 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 			e = &ledgerTitleEntry{
 				Key: key, Title: title, Year: year, TmdbID: tmdb,
 				MediaType: mediaType, Category: category,
-			}
-			// key = [库名/]分类/标题：段数比分类多两段说明带着库名
-			if segs := strings.Split(key, "/"); len(segs) == strings.Count(category, "/")+3 {
-				e.LibName = segs[0]
+				// 带库名的那一轮匹配上才有；老台账不带库名的为空
+				LibName: hit.Lib,
 			}
 			out[key] = e
 			if mediaType == "" {
