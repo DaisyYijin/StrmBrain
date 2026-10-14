@@ -120,6 +120,37 @@ type CategoryRule struct {
 	Priority  int  `json:"priority" gorm:"default:0"`       // 优先级，从小到大，先匹配到先停止
 }
 
+// LibraryDir 媒体库目录表的一行（2026-10-14，设计见 docs/115-station-notes/LIBRARY-DIRS-PLAN.md）。
+// 取代 CategoryRule（二级分类规则）+ setting library_extra_dirs（其他媒体库目录）+ 规则的 library 键：
+// 识别只看表里有哪些目录（片目在它下一层），整理按 Priority 找第一个类型与条件都匹配、且 Organize 的行。
+// 本地 STRM 目录跟随 115 结构（本地根 / LibName / Path），不单独存、不可改。
+type LibraryDir struct {
+	ID       uint `json:"id" gorm:"primaryKey"`
+	Priority int  `json:"priority" gorm:"index"` // 表里的顺序，从小到大；整理先命中先停
+	// LibCid 所属媒体库的 cid（主库或附加库）。迁移时认不出 library 写的库，原值放这里、LibName 留空，整理选中它时报错（同老规则）
+	LibCid string `json:"lib_cid" gorm:"size:64"`
+	// LibName 库目录名快照（= 本地第一层）：识别要零 115 请求，按名字编译
+	LibName string `json:"lib_name" gorm:"size:255"`
+	// Path 库内相对路径，"" = 库根本身
+	Path string `json:"path" gorm:"size:500"`
+	// Cid 目录的 115 cid（选择器带来的，只作参考；以 Path 为准）
+	Cid       string `json:"cid" gorm:"size:64"`
+	MediaType string `json:"media_type" gorm:"size:10"` // movie / tv / all
+	Organize  bool   `json:"organize"`                  // 参与整理；false = 仅识别（原其他媒体库目录）
+	Fallback  bool   `json:"fallback"`                  // 兜底：条件都没匹配上时，按顺序第一个类型相符的兜底行（原 is_default）
+
+	// 条件：写法与语义同 CategoryRule（matchCategory，对齐 MoviePilot category.yaml）
+	GenreIds            string `json:"genre_ids" gorm:"size:200"`
+	OriginalLanguage    string `json:"original_language" gorm:"size:100"`
+	OriginCountry       string `json:"origin_country" gorm:"size:100"`
+	ProductionCountries string `json:"production_countries" gorm:"size:100"`
+	ReleaseYear         string `json:"release_year" gorm:"size:100"`
+	CustomRegex         string `json:"custom_regex" gorm:"size:500"`
+	// Unsupported 认不出的条件键：非空则永不匹配（同 CategoryRule）
+	Unsupported string `json:"unsupported" gorm:"size:200"`
+	Note        string `json:"note" gorm:"size:200"`
+}
+
 // MediaLibrary 已整理的媒体记录（用于去重）
 type MediaLibrary struct {
 	ID            uint      `json:"id" gorm:"primaryKey"`
@@ -540,6 +571,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&Setting{},
 		&ScrapeRule{},
 		&CategoryRule{},
+		&LibraryDir{},
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},
