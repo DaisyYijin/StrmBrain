@@ -61,6 +61,9 @@ func isWriteAPI(api string) bool {
 		strings.Contains(api, "/files/add") ||
 		strings.Contains(api, "/files/delete") ||
 		strings.Contains(api, "/files/receive") ||
+		// 分享转存真正打的是 /share/receive：原来只认 /files/receive，转存按 1 秒读间隔走，
+		// 连着提交两个分享就撞 190044「操作过于频繁」（2026-10-14 现场）
+		strings.Contains(api, "/share/receive") ||
 		strings.Contains(api, "/files/upload")
 }
 

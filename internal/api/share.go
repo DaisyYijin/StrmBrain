@@ -55,7 +55,7 @@ func getShareAPI(path string, query url.Values, cookie string, timeout time.Dura
 		}
 		if is115BusyResp(body) {
 			lastBody = body
-			log.Printf("[上传] ○ %s 命中风控（开小差），切换镜像重试", path)
+			log.Printf("[上传] ○ %s 命中风控（%s），切换镜像重试", path, share115ErrText(body))
 			continue
 		}
 		return body, nil
@@ -86,7 +86,7 @@ func postShareAPI(path string, form url.Values, cookie, referer string, timeout 
 		}
 		if is115BusyResp(body) {
 			lastBody = body
-			log.Printf("[上传] ○ %s 命中风控（开小差），切换镜像重试", path)
+			log.Printf("[上传] ○ %s 命中风控（%s），切换镜像重试", path, share115ErrText(body))
 			continue
 		}
 		return body, nil
@@ -102,14 +102,62 @@ func shareReferer(shareCode, receiveCode string) string {
 	return fmt.Sprintf("https://115cdn.com/s/%s?password=%s&", shareCode, receiveCode)
 }
 
-// is115BusyResp 识别 115 风控响应（state=false 且带"开小差/稍后再试/频繁"文案）
+// errno115Busy 「操作过于频繁，请稍后再试。」：转存提交太密时 115 回这个（2026-10-14 现场）
+const errno115Busy = 190044
+
+// share115Fail 解出 115 失败响应里的错误文案与错误码（state=true 时 failed=false）。
+// 115 常把中文转义成 \uXXXX，原文里直接找「频繁」找不到，必须先按 JSON 解码；
+// 错误码字段 errno / errNo 两种写法都见过，值可能是数字也可能是字符串
+func share115Fail(body []byte) (msg string, errno int, failed bool) {
+	var r struct {
+		State bool   `json:"state"`
+		Error string `json:"error"`
+		Msg   string `json:"msg"`
+		Errno any    `json:"errno"`
+		ErrNo any    `json:"errNo"`
+	}
+	if json.Unmarshal(body, &r) != nil {
+		return truncateStr(string(body), 120), 0, true
+	}
+	if r.State {
+		return "", 0, false
+	}
+	for _, v := range []any{r.Errno, r.ErrNo} {
+		switch n := v.(type) {
+		case float64:
+			errno = int(n)
+		case string:
+			errno, _ = strconv.Atoi(n)
+		}
+		if errno != 0 {
+			break
+		}
+	}
+	return strings.TrimSpace(firstNonEmpty(r.Error, r.Msg)), errno, true
+}
+
+// is115BusyResp 识别 115 风控响应（state=false 且带"开小差/稍后再试/频繁"文案，或 190044）
 func is115BusyResp(body []byte) bool {
-	if !strings.Contains(string(body), "\"state\":false") {
+	msg, errno, failed := share115Fail(body)
+	if !failed {
 		return false
 	}
-	return strings.Contains(string(body), "开小差") ||
-		strings.Contains(string(body), "稍后再试") ||
-		strings.Contains(string(body), "频繁")
+	return errno == errno115Busy ||
+		strings.Contains(msg, "开小差") ||
+		strings.Contains(msg, "稍后再试") ||
+		strings.Contains(msg, "频繁")
+}
+
+// share115ErrText 给用户看的失败原因：115 的中文原话，没有原话才退回错误码
+func share115ErrText(body []byte) string {
+	msg, errno, _ := share115Fail(body)
+	switch {
+	case msg != "":
+		return msg
+	case errno != 0:
+		return fmt.Sprintf("115 错误码 %d", errno)
+	}
+	return truncateStr(string(body), 120)
 }
 
 func (h *Handler) ShareReceive(c *gin.Context) {
@@ -322,8 +370,11 @@ func shareList(shareCode, receiveCode, cid, cookie string) ([]shareEntry, string
 		dec := json.NewDecoder(strings.NewReader(string(body)))
 		dec.UseNumber()
 		if dec.Decode(&snap) != nil || !snap.State {
-			log.Printf("[上传] ✗ 文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(body), 120))
-			return nil, "", fmt.Errorf("文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(body), 120))
+			log.Printf("[上传] ✗ 文件列表获取失败: %s", truncateStr(string(body), 120))
+			if is115BusyResp(body) {
+				return nil, "", fmt.Errorf("读取分享内容失败：115 提示「%s」，请过一会儿再试", share115ErrText(body))
+			}
+			return nil, "", fmt.Errorf("读取分享内容失败（链接失效或提取码错误）：%s", share115ErrText(body))
 		}
 		if title == "" {
 			title = snap.Data.ShareInfo.ShareTitle
@@ -405,26 +456,43 @@ const shareReceiveBatch = 500
 func shareReceive(shareCode, receiveCode string, ids []string, target, cookie string) error {
 	for i := 0; i < len(ids); i += shareReceiveBatch {
 		end := min(i+shareReceiveBatch, len(ids))
-		body, err := postShareAPI("/share/receive", url.Values{
+		form := url.Values{
 			"share_code":   {shareCode},
 			"receive_code": {receiveCode},
 			"file_id":      {strings.Join(ids[i:end], ",")},
 			"cid":          {target},
-		}, cookie, shareReferer(shareCode, receiveCode), 30*time.Second)
-		if err != nil {
-			return fmt.Errorf("转存提交失败: %s", err.Error())
 		}
-		var r struct {
-			State bool   `json:"state"`
-			Error string `json:"error"`
+		var body []byte
+		for attempt := 0; ; attempt++ {
+			var err error
+			body, err = postShareAPI("/share/receive", form, cookie, shareReferer(shareCode, receiveCode), 30*time.Second)
+			if err != nil {
+				return fmt.Errorf("转存提交失败: %s", err.Error())
+			}
+			// 连着提交几个分享时 115 回 190044「操作过于频繁」。postShareAPI 已按写间隔换镜像试过一轮，
+			// 还是这样就是账号级的限频，换域名没用，只能歇一会儿整轮再来一次
+			if attempt >= shareReceiveBusyRetries || !is115BusyResp(body) {
+				break
+			}
+			log.Printf("[上传] ○ 转存被 115 限频（%s），%v 后重试", share115ErrText(body), shareReceiveBusyWait)
+			time.Sleep(shareReceiveBusyWait)
 		}
-		if json.Unmarshal(body, &r) != nil || !r.State {
+		if _, _, failed := share115Fail(body); failed {
 			log.Printf("[上传] ✗ 转存被拒: %s", truncateStr(string(body), 120))
-			return fmt.Errorf("转存被拒: %s", truncateStr(string(body), 120))
+			if is115BusyResp(body) {
+				return fmt.Errorf("115 拒绝转存：%s（已自动重试仍不行，多半是短时间内提交了好几个分享，过一两分钟再提交这个链接）", share115ErrText(body))
+			}
+			return fmt.Errorf("115 拒绝转存：%s", share115ErrText(body))
 		}
 	}
 	return nil
 }
+
+// 转存限频时整轮重试的次数与间隔（变量：测试里改短）
+var (
+	shareReceiveBusyRetries = 1
+	shareReceiveBusyWait    = 10 * time.Second
+)
 
 // shareReceivePicked 只转存分享里挑中的条目（订阅按集挑选用），并登记来源链接。
 // names 是整理认领用的名字：订阅转进包装目录，传包装目录名；返回 DownloadLink.ID 供结算
