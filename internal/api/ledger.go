@@ -4,6 +4,7 @@ import (
 	"115-station/internal/model"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -100,20 +101,33 @@ func soloTitleParse(stem string) (title, year string, tmdb int) {
 // 台账扫描缓存：刮削共享同一份结果（30 秒 TTL），
 // 避免每次请求都全表扫描 SyncedFile。缓存条目视为只读，调用方不得修改。
 var (
-	ledgerTitlesMu    sync.Mutex
-	ledgerTitlesCache map[string]*ledgerTitleEntry
-	ledgerTitlesAt    time.Time
+	ledgerTitlesMu       sync.Mutex
+	ledgerTitlesCache    map[string]*ledgerTitleEntry
+	ledgerUnclaimedCache ledgerUnclaimed
+	ledgerTitlesAt       time.Time
 )
 
 func scanLedgerTitlesCached() map[string]*ledgerTitleEntry {
+	titles, _ := scanLedgerCached(false)
+	return titles
+}
+
+// ledgerUnclaimedCached 台账里不属于任何片目的视频（与 scanLedgerTitlesCached 同一次扫描、同一份缓存）
+func ledgerUnclaimedCached() ledgerUnclaimed {
+	_, u := scanLedgerCached(false)
+	return u
+}
+
+// scanLedgerCached refresh = 不用缓存、重扫一遍并写回缓存（海报墙「刷新」）
+func scanLedgerCached(refresh bool) (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 	ledgerTitlesMu.Lock()
 	defer ledgerTitlesMu.Unlock()
-	if ledgerTitlesCache != nil && time.Since(ledgerTitlesAt) < 30*time.Second {
-		return ledgerTitlesCache
+	if !refresh && ledgerTitlesCache != nil && time.Since(ledgerTitlesAt) < 30*time.Second {
+		return ledgerTitlesCache, ledgerUnclaimedCache
 	}
-	ledgerTitlesCache = scanLedgerTitles()
+	ledgerTitlesCache, ledgerUnclaimedCache = scanLedger()
 	ledgerTitlesAt = time.Now()
-	return ledgerTitlesCache
+	return ledgerTitlesCache, ledgerUnclaimedCache
 }
 
 // forgetLedgerTitles 分类目录变了，台账要按新布局重新聚合
@@ -123,17 +137,75 @@ func forgetLedgerTitles() {
 	ledgerTitlesMu.Unlock()
 }
 
+// ledgerUnclaimed 台账里认不出片目的视频：目录没登记成分类（不在分类规则、也不在其他媒体库目录里）。
+// 海报墙据此提示「还有 N 个视频不属于任何片目」，而不是让用户对着空墙去跑全量同步
+type ledgerUnclaimed struct {
+	Videos int                  `json:"videos"`
+	Dirs   []ledgerUnclaimedDir `json:"dirs"`
+	// MoreDirs Dirs 只列视频最多的前 ledgerUnclaimedDirMax 个，其余目录的个数
+	MoreDirs int `json:"more_dirs"`
+}
+
+// ledgerUnclaimedDir 按「库名 + 库内前两段」聚合：够定位是哪个目录，又不至于一个片目一行
+type ledgerUnclaimedDir struct {
+	Path   string `json:"path"`
+	Videos int    `json:"videos"`
+}
+
+const ledgerUnclaimedDirMax = 20
+
+// unclaimedDirOf 认不出的视频归到哪个目录：所在目录截到前三段（库名 + 库内两段）
+func unclaimedDirOf(rel string) string {
+	dir := path.Dir(strings.Trim(rel, "/"))
+	if dir == "." {
+		return ""
+	}
+	segs := strings.Split(dir, "/")
+	if len(segs) > 3 {
+		segs = segs[:3]
+	}
+	return strings.Join(segs, "/")
+}
+
+// summarizeUnclaimed 纯函数：目录 → 视频数 汇总成前若干个（视频多的在前，同数按路径）
+func summarizeUnclaimed(byDir map[string]int) ledgerUnclaimed {
+	out := ledgerUnclaimed{Dirs: []ledgerUnclaimedDir{}}
+	for p, n := range byDir {
+		out.Videos += n
+		out.Dirs = append(out.Dirs, ledgerUnclaimedDir{Path: p, Videos: n})
+	}
+	sort.Slice(out.Dirs, func(i, j int) bool {
+		if out.Dirs[i].Videos != out.Dirs[j].Videos {
+			return out.Dirs[i].Videos > out.Dirs[j].Videos
+		}
+		return out.Dirs[i].Path < out.Dirs[j].Path
+	})
+	if len(out.Dirs) > ledgerUnclaimedDirMax {
+		out.MoreDirs = len(out.Dirs) - ledgerUnclaimedDirMax
+		out.Dirs = out.Dirs[:ledgerUnclaimedDirMax]
+	}
+	return out
+}
+
 // scanLedgerTitles 全量扫描台账，按「标题目录」聚合（库名/<分类>/<标题目录>/…）
 func scanLedgerTitles() map[string]*ledgerTitleEntry {
+	out, _ := scanLedger()
+	return out
+}
+
+// scanLedger 同 scanLedgerTitles，顺带数出认不出片目的视频
+func scanLedger() (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 	layout := loadLibCategoryLayout()
 	var sfs []model.SyncedFile
 	model.DB.Where("kind = ?", "video").Find(&sfs)
 	out := map[string]*ledgerTitleEntry{}
+	unclaimed := map[string]int{}
 	// 同名分类两边都有时按文件判断：片目里有一集带集号就是剧集
 	undecided := map[string]bool{}
 	for _, sf := range sfs {
 		hit, ok := layout.titleAt(sf.RelPath)
 		if !ok {
+			unclaimed[unclaimedDirOf(sf.RelPath)]++
 			continue
 		}
 		key, titleDir, category, mediaType := hit.Key, hit.TitleDir, hit.Category, hit.MediaType
@@ -165,7 +237,7 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 			e.LastAt = sf.CreatedAt
 		}
 	}
-	return out
+	return out, summarizeUnclaimed(unclaimed)
 }
 
 var (
