@@ -295,7 +295,8 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// ---- 1) 先把新布局算出来 ----
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
-	category, newLibCid, bySource, err := redoTarget(cfg, sink, rec, media)
+	category, libVal := classifyTarget(media)
+	newLibCid, bySource, err := redoLibOf(cfg, sink, rec, libVal)
 	if err != nil {
 		return err
 	}
@@ -1115,15 +1116,6 @@ func isInPlaceRedo(rec *model.OrganizeRecord, rootRel string, renames map[string
 //  2. 从没入过库（失败 / 未识别，TargetDir 为空）、扫到它的目录是绑定子目录 → 按来源；
 //  3. 其余按分类规则（第 2 期的行为：规则改了库，重新整理就搬过去）。
 func redoLibOf(cfg *OrgConfig, sink *orgSink, rec *model.OrganizeRecord, ruleVal string) (cid string, bySource bool, err error) {
-	if cid, ok, err := redoSourceLib(cfg, rec); ok || err != nil {
-		return cid, ok, err
-	}
-	cid, err = ruleLibOf(cfg, sink, ruleVal)
-	return cid, false, err
-}
-
-// redoSourceLib redoLibOf 的前两条：这次重新整理的库是不是按来源定（ok），定在哪
-func redoSourceLib(cfg *OrgConfig, rec *model.OrganizeRecord) (cid string, ok bool, err error) {
 	if rec.LibBySource && recordLibOK(cfg, rec.LibCid) {
 		if rec.LibCid == "" {
 			return cfg.Library, true, nil
@@ -1133,20 +1125,10 @@ func redoSourceLib(cfg *OrgConfig, rec *model.OrganizeRecord) (cid string, ok bo
 	if rec.TargetDir == "" && rec.SourceCid != "" {
 		scan := *cfg
 		scan.Pending = rec.SourceCid
-		return sourceLibOf(&scan)
+		if cid, ok, err := sourceLibOf(&scan); ok || err != nil {
+			return cid, ok, err
+		}
 	}
-	return "", false, nil
-}
-
-// redoTarget 重新整理的去处（分类目录 + 库）：库按 redoLibOf 的规则，分类与选库交给 pickOrgTarget（来源定库时只在那个库里挑）
-func redoTarget(cfg *OrgConfig, sink *orgSink, rec *model.OrganizeRecord, media *TmdbMedia) (category, cid string, bySource bool, err error) {
-	src, bySource, err := redoSourceLib(cfg, rec)
-	if err != nil {
-		return classifyMedia(media), "", true, err
-	}
-	if !bySource {
-		src = ""
-	}
-	category, cid, err = pickOrgTarget(cfg, sink, media, src)
-	return category, cid, bySource, err
+	cid, err = ruleLibOf(cfg, sink, ruleVal)
+	return cid, false, err
 }

@@ -250,9 +250,6 @@ func (h *Handler) GetLibExtraDirs(c *gin.Context) {
 
 // SaveLibExtraDirs POST /library/extra-dirs：整份替换
 func (h *Handler) SaveLibExtraDirs(c *gin.Context) {
-	if libDirsLocked(c) {
-		return
-	}
 	var req struct {
 		Dirs []libExtraDir `json:"dirs"`
 	}
@@ -275,9 +272,6 @@ func (h *Handler) SaveLibExtraDirs(c *gin.Context) {
 
 // AddLibExtraDirs POST /library/extra-dirs/add：追加
 func (h *Handler) AddLibExtraDirs(c *gin.Context) {
-	if libDirsLocked(c) {
-		return
-	}
 	var req struct {
 		Dirs []libExtraDir `json:"dirs"`
 	}

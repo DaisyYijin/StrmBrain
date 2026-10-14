@@ -331,19 +331,6 @@ func (h *Handler) SaveStagingLibs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// 媒体库目录表启用后，来源定库只在那个库的目录里挑：新绑的库没有自己的兜底目录就会整理不了（LIBRARY-DIRS-PLAN.md §4 R12）
-	if active, rows := libraryDirsState(); active {
-		var bound []string
-		for _, s := range out {
-			if s.Lib != "" {
-				bound = append(bound, s.Lib)
-			}
-		}
-		if chk := validateLibraryDirs(rows, bound); len(chk.Errors) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": strings.Join(chk.Errors, "；") + "。先到「账号与媒体库 → 媒体库目录」给这个库加兜底目录"})
-			return
-		}
-	}
 	b, _ := json.Marshal(out)
 	if err := h.Config.SaveSetting(stagingLibsKey, string(b)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})

@@ -119,9 +119,9 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 	}
 	res := OrganizeResult{FileName: source, Status: orgStatusAwaiting}
 	if media != nil {
+		category, libVal := classifyTarget(media)
 		// 预览落进哪个媒体库：认不出就留空，确认入库时 classify 会报出来
-		category, cid, bySource, err := c.target(media)
-		if err == nil {
+		if cid, bySource, err := c.pickLib(libVal); err == nil {
 			if cid != c.cfg.Library {
 				rec.LibCid = cid
 			}

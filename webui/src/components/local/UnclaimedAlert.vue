@@ -11,7 +11,7 @@ import type { LocalUnclaimed } from '@/api/local'
  *
  * 「不再提示」记在本浏览器：有的目录是故意不要的（花絮、演唱会）。记的是当时的视频数，
  * 之后认不出的视频变多了再提示（新同步进来的可能又是没登记的目录）。
- * 「去登记目录」跳「账号与媒体库 → 媒体库目录」（LIBRARY-DIRS-PLAN.md），没启用时那张卡片会说明并指回老的分类规则。
+ * 布局页（LIBRARY-LAYOUT-PLAN.md 阶段 4）做好之后「去登记」改指那里。
  */
 const props = defineProps<{ unclaimed: LocalUnclaimed; embyConfigured?: boolean }>()
 const emit = defineEmits<{ reconcile: [] }>()
@@ -43,7 +43,7 @@ const shown = computed(() => props.unclaimed.dirs.slice(0, SHOW))
 const restDirs = computed(() => props.unclaimed.dirs.length - shown.value.length + (props.unclaimed.more_dirs || 0))
 
 function goRegister() {
-  void router.push({ name: 'accounts', hash: '#library-dirs' })
+  void router.push({ name: 'organize', query: { tab: 'category' }, hash: '#extra-dirs' })
 }
 </script>
 

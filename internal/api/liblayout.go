@@ -43,14 +43,10 @@ type layoutEntry struct {
 type libCategoryLayout struct {
 	all  map[string]layoutEntry            // 库内相对路径 → 条目，对所有库生效
 	libs map[string]map[string]layoutEntry // 库名 → 库内相对路径（"" = 库根）→ 条目
-	// legacy 只服务老台账路径：不带库名的那一轮，以及第一段不是任何已配置库的路径（老布局里规则对任何第一段都生效）。
-	// 媒体库目录表（libdirs.go）的行全按库，老台账的第一段不是库名、按库查不到，所以把各行的路径另编一份放这里；
-	// 第一段是已配置的库（libs 里有这个键，哪怕一行都没有）时永远不查它，库与库之间不串
-	legacy map[string]layoutEntry
 }
 
 func newLibLayout() libCategoryLayout {
-	return libCategoryLayout{all: map[string]layoutEntry{}, libs: map[string]map[string]layoutEntry{}, legacy: map[string]layoutEntry{}}
+	return libCategoryLayout{all: map[string]layoutEntry{}, libs: map[string]map[string]layoutEntry{}}
 }
 
 // lookup 库 lib 里的目录 dir 是不是分类目录。lib 为空（老台账不带库名）只看对所有库生效的条目
@@ -63,13 +59,7 @@ func (l libCategoryLayout) lookup(lib, dir string) (layoutEntry, bool) {
 	if dir == "" {
 		return layoutEntry{}, false
 	}
-	if e, ok := l.all[dir]; ok {
-		return e, ok
-	}
-	if _, configured := l.libs[lib]; configured {
-		return layoutEntry{}, false
-	}
-	e, ok := l.legacy[dir]
+	e, ok := l.all[dir]
 	return e, ok
 }
 
@@ -89,19 +79,12 @@ func (l libCategoryLayout) knownTops() map[string]bool {
 	for lib := range l.libs {
 		out[lib] = true
 	}
-	for dir := range l.legacy {
-		top, _, _ := strings.Cut(dir, "/")
-		out[top] = true
-	}
 	return out
 }
 
 // loadLibCategoryLayout 按当前分类规则与其他媒体库目录算出所有分类目录。
 // 直接读表不走 classifyRules 的缓存：调用方（台账扫描）自己有 30 秒缓存
 func loadLibCategoryLayout() libCategoryLayout {
-	if active, rows := libraryDirsState(); active {
-		return compileLibraryDirs(rows, libDirLibNames(rows))
-	}
 	return loadRuleLayout().withExtraDirs(loadLibExtraDirs())
 }
 

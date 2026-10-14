@@ -7,7 +7,6 @@ import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
 import { libraryApi, localApi } from '@/api'
-import { ApiError } from '@/api/client'
 import type { ReconBucket, ReconcileResult, ReconDir, ReconSide } from '@/api/local'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { num } from '@/utils/format'
@@ -140,28 +139,15 @@ const reasons = computed<Reason[]>(() => {
 
 const mapping = computed(() => data.value?.mapping)
 
-// 规则外目录一键加入，加完重新对账。媒体库目录表启用后加一行「仅识别」（按库，库根也行）；
-// 没启用（409）退回老的其他媒体库目录（不限定库，库根加不了）
+// 规则外目录一键加进「其他媒体库目录」，加完重新对账
 const adding = ref('')
 async function addExtra(d: ReconDir) {
-  if (!d.dir) return
+  if (!d.extra) return
   adding.value = d.dir
-  const type = side.value === 'tv' ? 'tv' : 'movie'
-  const [lib, ...rest] = d.dir.split('/')
   try {
-    try {
-      await libraryApi.addLibraryDir(lib, rest.join('/'), type)
-      message.success(`已加入媒体库目录（仅识别）：${d.dir}`)
-    } catch (e) {
-      if (!(e instanceof ApiError && e.status === 409)) throw e
-      if (!d.extra) {
-        message.warning('片目直接在库根下：老的「其他媒体库目录」加不了，请挪进某个目录')
-        return
-      }
-      const r = await libraryApi.addExtraDirs([{ dir: d.extra, type }])
-      if (r.skipped?.length) message.warning(r.skipped.join('；'))
-      else message.success(`已加入其他媒体库目录：${d.extra}`)
-    }
+    const r = await libraryApi.addExtraDirs([{ dir: d.extra, type: side.value === 'tv' ? 'tv' : 'movie' }])
+    if (r.skipped?.length) message.warning(r.skipped.join('；'))
+    else message.success(`已加入其他媒体库目录：${d.extra}`)
     await load()
   } catch (e) {
     toastError(e, '加入失败')
@@ -256,7 +242,7 @@ function goSettings() {
               <code>{{ d.dir || '（媒体库根）' }}</code>
               <span class="cnt">{{ num(d.count) }} 部{{ d.flat ? ' · 视频直接放在目录里' : '' }}</span>
               <HButton
-                v-if="d.dir"
+                v-if="d.extra"
                 variant="tertiary"
                 size="sm"
                 class="add"
@@ -266,7 +252,7 @@ function goSettings() {
               >
                 加入
               </HButton>
-              <span v-else class="cnt">片目直接在本地根目录下，不属于任何库，加不了</span>
+              <span v-else class="cnt">片目直接在库根下，加不了，请挪进某个目录</span>
               <span class="samples">{{ d.samples.join('、') }}{{ d.count > d.samples.length ? ' …' : '' }}</span>
             </li>
           </ul>

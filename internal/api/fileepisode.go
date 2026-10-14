@@ -339,9 +339,9 @@ func (h *Handler) prepareEpisodeContext(chain []browseCrumb, items []fileJobItem
 	}
 	media.MediaType = "tv"
 	ensureRenameTpl()
-	category, want, err := h.orgTargetOf(media)
+	category, libVal := classifyTarget(media)
 	// 指定季集只在片目现在的库里改名搬移：分类规则要它去别的库的话，先整部「整理」过去
-	if err != nil {
+	if want, err := h.ruleLibCid(libVal); err != nil {
 		return nil, err
 	} else if t.libCid != "" && want != t.libCid {
 		return nil, errors.New("分类规则把这部剧放在另一个媒体库：请先对整部片目「整理」，让它搬到规则指定的库，再指定季集")

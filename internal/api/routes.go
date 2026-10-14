@@ -95,8 +95,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
-	// 分类规则 + 其他媒体库目录迁成媒体库目录表并启用（一次性；拿不到库名时下次启动或打开卡片再试，libdirsapi.go）
-	h.MigrateLibraryDirs()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 
@@ -282,12 +280,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/library/extra-dirs", h.GetLibExtraDirs)
 		protected.POST("/library/extra-dirs", h.SaveLibExtraDirs)
 		protected.POST("/library/extra-dirs/add", h.AddLibExtraDirs)
-		// 媒体库目录表（libdirsapi.go）
-		protected.GET("/library/dirs", h.GetLibraryDirs)
-		protected.PUT("/library/dirs", h.SaveLibraryDirs)
-		protected.POST("/library/dirs/add", h.AddLibraryDir)
-		protected.GET("/library/dirs/export", h.ExportLibraryDirs)
-		protected.POST("/library/dirs/import", h.ImportLibraryDirs)
 
 		// 版本号、更新检测（update.go，只提示不自更新）与日志级别
 		protected.GET("/version", func(c *gin.Context) {
@@ -1214,9 +1206,6 @@ func (h *Handler) ListCategories(c *gin.Context) {
 
 // SaveCategories 保存二级分类（支持 YAML 字符串，对齐 CMS）
 func (h *Handler) SaveCategories(c *gin.Context) {
-	if libDirsLocked(c) {
-		return
-	}
 	var req struct {
 		Yaml string `json:"yaml"`
 		// Keep 这次规则里去掉了、用户选择留作「其他媒体库目录」的分类目录（见 PreviewCategories）

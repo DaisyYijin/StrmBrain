@@ -12,7 +12,6 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
-import LibraryDirsCard from '@/components/library/LibraryDirsCard.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import Cid115Input, { type CidValue } from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
@@ -498,9 +497,6 @@ onMounted(() => {
         />
       </div>
     </div>
-
-    <!-- 媒体库目录：认片目 + 整理去处。占满整行：目录路径与条件长，两栏里放不下 -->
-    <LibraryDirsCard />
 
     <QrLoginModal
       v-model:show="qrShow"
