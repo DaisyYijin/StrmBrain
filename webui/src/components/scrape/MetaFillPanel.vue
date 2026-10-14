@@ -6,10 +6,10 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
+import SaveBar from '@/pages/scrape/SaveBar.vue'
 import { pluginsApi } from '@/api'
 import type { MetaFillConfig, MetaFillInfo } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -34,17 +34,24 @@ const info = ref<MetaFillInfo | null>(null)
 const saving = ref(false)
 const resetting = ref(false)
 
-async function load() {
+// 读回来时的快照，保存条据此提示有没有没保存的改动
+const saved = ref('')
+const dirty = computed(() => !!saved.value && JSON.stringify(form.value) !== saved.value)
+
+/** onlyInfo：立即运行、清空记账之后只刷新统计，不拿服务器上的配置盖掉没保存的改动 */
+async function load(onlyInfo = false) {
   try {
     const d = await pluginsApi.metaFillConfig()
     info.value = d.data ?? null
+    if (onlyInfo) return
     form.value = { ...DEFAULTS, ...(d.data?.config ?? {}) }
+    saved.value = JSON.stringify(form.value)
   } catch (e) {
     toastError(e, '读取配置失败')
   }
 }
 
-onMounted(load)
+onMounted(() => load())
 
 // 刮削方式为 Emby：补刮不做（后端 execMetaFillJob 同样跳过），开关置灰但保留原值，切回本站刮削时照旧
 const { embyScrapes } = useScrapeProvider()
@@ -88,7 +95,7 @@ async function reset() {
   try {
     const d = await pluginsApi.resetMetaFill()
     message.success(d.message || '已清空')
-    await load()
+    await load(true)
   } catch (e) {
     toastError(e, '清空失败')
   } finally {
@@ -107,7 +114,7 @@ async function run() {
     const d = await pluginsApi.runMetaFill()
     runResult.value = { status: 'ok', title: d.message || '已加入任务队列', detail: '扫描完会另建刮削 / 探测任务，进度见任务中心' }
     await queue.submitted(d.job_id)
-    await load()
+    await load(true)
   } catch (e) {
     runResult.value = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
   } finally {
@@ -123,16 +130,11 @@ function openLastJob() {
 </script>
 
 <template>
-  <SectionCard title="媒体信息补全">
+  <SectionCard title="媒体信息补全" hint="定时找出海报墙里「未刮全」的片目、Emby 里缺媒体信息的视频，交给刮削与探测补上">
     <template #extra>
       <HButton variant="secondary" size="sm" :loading="running" @click="run">立即运行</HButton>
     </template>
-    <p class="lead">
-      定时检查本地媒体库：缺 NFO、海报、背景图的片目（海报墙里「未刮全」的）交给刮削补上；
-      Emby 里还没有媒体信息（轨道）的视频让 Emby 提前探测。扫描本身不发 115 请求，
-      补刮与探测分别排进刮削队列、探测队列，进度在任务中心。
-    </p>
-    <p v-if="embyScrapes" class="lead off-note">当前由 Emby 刮削：补刮不做（往目录里写 NFO 会盖掉 Emby 刮好的元数据），只做探测。</p>
+    <p v-if="embyScrapes" class="off-note">当前由 Emby 刮削：补刮不做（往目录里写 NFO 会盖掉 Emby 刮好的元数据），只做探测。</p>
 
     <FieldRow label="定时运行" wide tip="开启后按计划自动排进任务队列。「立即运行」不受此开关影响。">
       <SchedulePicker v-model="form.cron" v-model:enabled="form.enabled" toggle placeholder="0 4 * * *" />
@@ -176,32 +178,33 @@ function openLastJob() {
         <a class="link" @click="openLastJob">{{ JOB_STATUS[info.last_job.status]?.text ?? info.last_job.status }}</a>
         <span v-if="info.last_job.message" class="muted"> · {{ info.last_job.message }}</span>
       </div>
-    </div>
-
-    <TestBanner :state="runResult" />
-
-    <FormActions>
-      <HButton variant="primary" :loading="saving" :disabled="!!invalid" @click="save">保存</HButton>
       <HPopconfirm v-if="info?.marks" side="top" @confirm="reset">
-        <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
+        <HButton class="reset" variant="tertiary" size="sm" :loading="resetting">清空记账</HButton>
         <template #content>清空后，下次把暂缓的片目重新补刮一遍（探测的记账不受影响）。</template>
       </HPopconfirm>
-    </FormActions>
+    </div>
+
+    <TestBanner class="run-result" :state="runResult" />
+
+    <SaveBar
+      class="bar"
+      :dirty="dirty"
+      :saving="saving"
+      note="扫描本身不发 115 请求；补刮进刮削队列、探测进探测队列，进度在任务中心"
+      @save="save"
+    />
   </SectionCard>
 </template>
 
 <style scoped>
-.lead {
-  margin: 0 0 14px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--muted);
-}
 .off-note {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--accent);
 }
 .stats {
-  margin: 14px 0;
+  margin-top: 14px;
   padding: 12px 14px;
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
@@ -218,5 +221,14 @@ function openLastJob() {
 .link {
   color: var(--accent);
   cursor: pointer;
+}
+.reset {
+  margin-top: 6px;
+}
+.run-result {
+  margin-top: 12px;
+}
+.bar {
+  margin-top: 14px;
 }
 </style>

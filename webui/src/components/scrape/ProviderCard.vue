@@ -94,90 +94,105 @@ onMounted(() => {
 
 <template>
   <SectionCard title="刮削方式" hint="谁来给媒体库刮削元数据：二选一">
-    <div class="opts" role="radiogroup" aria-label="刮削方式">
-      <button
-        v-for="o in OPTIONS"
-        :key="o.value"
-        type="button"
-        role="radio"
-        class="opt"
-        :class="{ on: provider === o.value }"
-        :aria-checked="provider === o.value"
-        :disabled="switching"
-        @click="choose(o.value)"
-      >
-        <span class="opt-icon"><component :is="o.icon" :size="18" /></span>
-        <span class="opt-body">
-          <span class="opt-title">{{ o.title }}</span>
-          <span class="opt-desc">{{ o.desc }}</span>
-        </span>
-        <span class="opt-dot" aria-hidden="true" />
-      </button>
-    </div>
-
-    <p v-if="embyScrapes" class="effect">
-      「刮削」页签的设置不生效，媒体信息补全只做探测、不补刮，演职人员的「刮削后补全」停用。
-      「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」改看 Emby 的海报与识别结果，可以让 Emby 重新刷新元数据。
-    </p>
-
-    <!-- Emby 媒体库设置检查：只读，不替用户改 Emby -->
-    <div class="check">
-      <div class="check-head">
-        <span class="check-title">Emby 媒体库设置</span>
-        <HSpinner v-if="checking" size="sm" />
-        <HButton v-else variant="ghost" size="sm" icon-only aria-label="重新检查" title="重新检查" @click="runCheck">
-          <RefreshCw :size="14" />
-        </HButton>
-      </div>
-      <template v-if="check">
-        <p v-if="!check.configured" class="check-line muted">
-          未配置 Emby，没法检查（<RouterLink :to="{ name: 'settings', query: { tab: 'emby' } }">系统配置 → Emby</RouterLink>）。
-        </p>
-        <p v-else-if="check.error" class="check-line warn"><TriangleAlert :size="14" />{{ check.error }}</p>
-        <p v-else-if="check.unmatched" class="check-line warn">
-          <TriangleAlert :size="14" />Emby 里有媒体库，但没有一个的路径对得上本地媒体库：检查 Emby 设置里的路径映射。
-        </p>
-        <template v-else>
-          <div v-for="l in libs" :key="l.name" class="lib">
-            <span class="lib-icon" :class="l.issues.length ? 'warn' : 'ok'">
-              <TriangleAlert v-if="l.issues.length" :size="14" />
-              <CircleCheck v-else :size="14" />
+    <div class="layout">
+      <div class="choose">
+        <div class="opts" role="radiogroup" aria-label="刮削方式">
+          <button
+            v-for="o in OPTIONS"
+            :key="o.value"
+            type="button"
+            role="radio"
+            class="opt"
+            :class="{ on: provider === o.value }"
+            :aria-checked="provider === o.value"
+            :disabled="switching"
+            @click="choose(o.value)"
+          >
+            <span class="opt-icon"><component :is="o.icon" :size="18" /></span>
+            <span class="opt-body">
+              <span class="opt-title">{{ o.title }}</span>
+              <span class="opt-desc">{{ o.desc }}</span>
             </span>
-            <div class="lib-body">
-              <div class="lib-name">{{ l.name }}</div>
-              <div v-if="l.issues.length" class="lib-issues">
-                <div v-for="i in l.issues" :key="i">{{ i }}</div>
-              </div>
-              <div v-else class="lib-ok">
-                {{ embyScrapes ? `元数据：${l.meta_fetchers.join('、') || '—'}；图像：${l.image_fetchers.join('、') || '—'}` : '设置合适' }}
+            <span class="opt-dot" aria-hidden="true" />
+          </button>
+        </div>
+
+        <p v-if="embyScrapes" class="effect">
+          「刮削」页签的设置不生效，媒体信息补全只做探测、不补刮，演职人员的「刮削后补全」停用。
+          「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」改看 Emby 的海报与识别结果，可以让 Emby 重新刷新元数据。
+        </p>
+      </div>
+
+      <!-- Emby 媒体库设置检查：只读，不替用户改 Emby -->
+      <div class="check">
+        <div class="check-head">
+          <span class="check-title">Emby 媒体库设置</span>
+          <HSpinner v-if="checking" size="sm" />
+          <HButton v-else variant="ghost" size="sm" icon-only aria-label="重新检查" title="重新检查" @click="runCheck">
+            <RefreshCw :size="14" />
+          </HButton>
+        </div>
+        <template v-if="check">
+          <p v-if="!check.configured" class="check-line muted">
+            未配置 Emby，没法检查（<RouterLink :to="{ name: 'settings', query: { tab: 'emby' } }">系统配置 → Emby</RouterLink>）。
+          </p>
+          <p v-else-if="check.error" class="check-line warn"><TriangleAlert :size="14" />{{ check.error }}</p>
+          <p v-else-if="check.unmatched" class="check-line warn">
+            <TriangleAlert :size="14" />Emby 里有媒体库，但没有一个的路径对得上本地媒体库：检查 Emby 设置里的路径映射。
+          </p>
+          <template v-else>
+            <div class="libs">
+            <div v-for="l in libs" :key="l.name" class="lib">
+                <span class="lib-icon" :class="l.issues.length ? 'warn' : 'ok'">
+                  <TriangleAlert v-if="l.issues.length" :size="14" />
+                  <CircleCheck v-else :size="14" />
+                </span>
+                <div class="lib-body">
+                  <div class="lib-name">{{ l.name }}</div>
+                  <div v-if="l.issues.length" class="lib-issues">
+                    <div v-for="i in l.issues" :key="i">{{ i }}</div>
+                  </div>
+                  <div v-else class="lib-ok">
+                    {{ embyScrapes ? `元数据：${l.meta_fetchers.join('、') || '—'}；图像：${l.image_fetchers.join('、') || '—'}` : '设置合适' }}
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
           <p v-if="problemCount" class="check-foot">
-            <template v-if="embyScrapes">
-              在 Emby「媒体库 → 编辑媒体库」里勾选元数据下载器与图像获取器（TheMovieDb 等），否则 Emby 不会刮削。
-            </template>
-            <template v-else>
-              到「刮削」页签右侧展开「用本站刮削时，Emby 媒体库要这样设」照着改；不改的话 Emby 会自己再刮一遍，结果以 Emby 的为准。
-            </template>
-          </p>
+              <template v-if="embyScrapes">
+                在 Emby「媒体库 → 编辑媒体库」里勾选元数据下载器与图像获取器（TheMovieDb 等），否则 Emby 不会刮削。
+              </template>
+              <template v-else>
+                到「刮削」页签右侧展开「用本站刮削时，Emby 媒体库要这样设」照着改；不改的话 Emby 会自己再刮一遍，结果以 Emby 的为准。
+              </template>
+            </p>
+          </template>
         </template>
-      </template>
+      </div>
     </div>
   </SectionCard>
 </template>
 
 <style scoped>
-.opts {
+/* 左边二选一、右边 Emby 设置检查：并排放，页签上方不再压一大块 */
+.layout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 16px;
+}
+.choose {
+  min-width: 0;
+}
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .opt {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 14px;
   border: 0;
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
@@ -257,10 +272,15 @@ onMounted(() => {
 }
 
 .check {
-  margin-top: 14px;
+  min-width: 0;
   padding: 10px 12px;
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
+}
+/* 库多的时候在框里滚，不把左边的选项撑高 */
+.libs {
+  max-height: 168px;
+  overflow-y: auto;
 }
 .check-head {
   display: flex;
@@ -332,9 +352,12 @@ onMounted(() => {
   color: var(--muted);
 }
 
-@media (max-width: 720px) {
-  .opts {
+@media (max-width: 1024px) {
+  .layout {
     grid-template-columns: 1fr;
+  }
+  .libs {
+    max-height: none;
   }
 }
 </style>

@@ -21,7 +21,8 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="stack">
+  <!-- 左：入库后自动探测（全局开关）；右：定时补全。两张卡片各自保存，配置不是同一份 -->
+  <div class="grid">
     <SectionCard title="入库后提前探测" hint="让 Emby 在第一次播放之前就拿到分辨率、音轨、内嵌字幕">
       <template #extra>
         <RouterLink :to="{ name: 'tasks', query: { tab: 'probe' } }" class="jump">
@@ -31,10 +32,16 @@ onMounted(load)
       <FieldRow
         label="轨道探测"
         tip="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行；在「海报墙」手动刮削时也可以给所选片目补上（所选视频超过 100 个要确认两次）。Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「系统配置 → Emby」配好服务器地址与 API 密钥。"
-        hint="入库后让 Emby 提前探测音视频轨道；每个条目一次 115 直链请求"
       >
         <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
       </FieldRow>
+
+      <ul class="rules">
+        <li>整理、同步入库确认后自动进行，只探本轮新入库的集</li>
+        <li>Emby 已有媒体信息的条目不碰</li>
+        <li>后台一次探一个、间隔 3 秒，每个条目一次 115 直链请求</li>
+      </ul>
+
       <SaveBar
         class="bar"
         :dirty="dirty"
@@ -49,13 +56,24 @@ onMounted(load)
 </template>
 
 <style scoped>
-.stack {
-  display: flex;
-  flex-direction: column;
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: start;
+}
+.rules {
+  margin: 6px 0 0;
+  padding: 10px 14px 10px 30px;
+  list-style: disc;
+  border-radius: var(--r-lg);
+  background: var(--surface-secondary);
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--muted);
 }
 .bar {
-  margin-top: 10px;
+  margin-top: 14px;
 }
 .jump {
   display: inline-flex;
@@ -66,5 +84,11 @@ onMounted(load)
 }
 .jump:hover {
   color: var(--accent);
+}
+
+@media (max-width: 1280px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
