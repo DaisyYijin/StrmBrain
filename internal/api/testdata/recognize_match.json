@@ -105,6 +105,11 @@
       "name": "狂飙.全39集.国语中字.2023.1080p.WEB-DL.mkv",
       "want": "tv/205050",
       "note": "剥掉全39集、国语中字；全N集判为剧集"
+    },
+    {
+      "name": "Hope.2026.1080p.WEB-DL.AMZN.SDR.AVC.DDP 5.1-Ftang.mkv",
+      "want": "movie/1058424",
+      "note": "zh-CN 搜索里罗泓轸《希望》标题是中文、原名是韩文，第一关只对上 2025 年的同名短片；同年且译名 Hope 相等的那条优先"
     }
   ],
   "search": {
@@ -346,6 +351,38 @@
         "first_air_date": "2023-09-29",
         "overview": "打倒魔王之后，精灵魔法使芙莉莲踏上了新的旅途。"
       }
+    ],
+    "movie|Hope|": [
+      {
+        "id": 1058424,
+        "title": "希望",
+        "original_title": "호프",
+        "release_date": "2026-09-04",
+        "poster_path": "/a.jpg"
+      },
+      {
+        "id": 255709,
+        "title": "Hope",
+        "original_title": "Hope",
+        "release_date": "2014-03-21",
+        "poster_path": "/b.jpg"
+      },
+      {
+        "id": 1357302,
+        "title": "Hope",
+        "original_title": "Hope",
+        "release_date": "2025-05-17",
+        "poster_path": "/c.jpg"
+      }
+    ],
+    "movie|Hope|2026": [
+      {
+        "id": 1058424,
+        "title": "希望",
+        "original_title": "호프",
+        "release_date": "2026-09-04",
+        "poster_path": "/a.jpg"
+      }
     ]
   },
   "detail": {
@@ -504,6 +541,21 @@
       "origin_country": [
         "JP"
       ]
+    },
+    "movie/1058424": {
+      "id": 1058424,
+      "title": "希望",
+      "original_title": "호프",
+      "release_date": "2026-09-04",
+      "translations": {
+        "translations": [
+          {
+            "data": {
+              "title": "Hope"
+            }
+          }
+        ]
+      }
     }
   }
 }

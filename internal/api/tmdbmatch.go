@@ -431,6 +431,24 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 	}
 	if len(exact) > 0 {
 		seasonCheck(exact)
+		// 片名相等的年份不符，而前 5 名里有年份分毫不差、别名 / 译名相等的：取后者。
+		// 搜索用 zh-CN，有中文译名的条目标题回来是中文，第一关比不上英文文件名；
+		// 没有中文译名的冷门同名条目标题还是英文，反倒相等。
+		// 现场：Hope.2026（罗泓轸《希望》，标题「希望」原名「호프」）被认成 2025 年的 18 分钟同名短片（2026-10-14）
+		if !p.seasonYearMode() && p.year != "" && exact[0].c.year() != p.year {
+			for i, s := range scored {
+				if i >= 5 {
+					break
+				}
+				if s.level == titleExact || s.c.year() != p.year {
+					continue
+				}
+				if d := detail(s.c.ID); d != nil && titleLevel(qk, d.Names...) == titleExact {
+					s.score += 3
+					return finish(s, "片名相等的年份不符，取别名相等且同年的")
+				}
+			}
+		}
 		// 片名相等但年份差得远，而另有一条片名相近、年份分毫不差的：多半是续集。
 		// 中英拆分搜「流浪地球」（文件是 2023 年的流浪地球2）时，相等的那条是 2019 年的第一部
 		if !p.seasonYearMode() && p.year != "" && absYearDiff(p.year, exact[0].c.year()) > 1 {
