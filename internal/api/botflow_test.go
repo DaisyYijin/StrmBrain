@@ -16,7 +16,7 @@ func botFlowFixture(t *testing.T, key string, items []ResourceItem) (*botFlow, *
 	t.Cleanup(func() { botFlowDrop(key, nil) })
 	var submitted []string
 	old := botSubmit
-	botSubmit = func(_ *Handler, it ResourceItem, _ func(...string)) bool {
+	botSubmit = func(_ *Handler, it ResourceItem, _ func(...string), _ bool) bool {
 		submitted = append(submitted, it.Title)
 		return !strings.HasPrefix(it.Title, "fail")
 	}
@@ -203,5 +203,46 @@ func TestWecomFindArgs(t *testing.T) {
 		if src != c.src || kw != c.kw {
 			t.Errorf("%q → %q %q", c.in, src, kw)
 		}
+	}
+}
+
+// RE0 付费资源：选中先出确认屏，不提交；y 才带 paid 提交，c 或别的操作作废确认；免费的直接提交
+func TestBotFlowRe0PaidConfirm(t *testing.T) {
+	h := &Handler{}
+	five, zero := 5, 0
+	items := []ResourceItem{
+		{Source: "re0", Action: "unlock", Kind: "share115", Title: "付费", Relevant: true, Points: &five, Ref: "a"},
+		{Source: "re0", Action: "unlock", Kind: "share115", Title: "免费", Relevant: true, Points: &zero, Ref: "b"},
+	}
+	botFlowFixture(t, "re0p", items)
+	var paidFlags []bool
+	old := botSubmit
+	botSubmit = func(_ *Handler, it ResourceItem, _ func(...string), paid bool) bool {
+		paidFlags = append(paidFlags, paid)
+		return true
+	}
+	t.Cleanup(func() { botSubmit = old })
+
+	v, _ := h.botAct("re0p", "1", "tok", botNoIO)
+	if len(paidFlags) != 0 || !strings.Contains(v.text(), "5 积分") || len(v.Buttons) != 1 || v.Buttons[0][0].Act != "y" {
+		t.Fatalf("付费的应当先出确认屏、不提交：%q %v", v.text(), paidFlags)
+	}
+	if v, _ := h.botAct("re0p", "c", "tok", botNoIO); len(paidFlags) != 0 || !strings.Contains(v.text(), "资源") {
+		t.Fatalf("取消应当回到列表、不提交：%q", v.text())
+	}
+	if v, _ := h.botAct("re0p", "y", "tok", botNoIO); !v.Toast || len(paidFlags) != 0 {
+		t.Fatal("取消之后的 y 不该提交")
+	}
+	h.botAct("re0p", "1", "tok", botNoIO)
+	h.botAct("re0p", "y", "", botNoIO) // 企微回复 y
+	if len(paidFlags) != 1 || !paidFlags[0] {
+		t.Fatalf("确认后应当带 paid 提交一次：%v", paidFlags)
+	}
+	if v, _ := h.botAct("re0p", "1", "tok", botNoIO); !v.Toast || len(paidFlags) != 1 {
+		t.Fatal("提交过的再点不该再问、也不该再提交")
+	}
+	h.botAct("re0p", "2", "tok", botNoIO)
+	if len(paidFlags) != 2 || paidFlags[1] {
+		t.Fatalf("免费的直接提交、不带 paid：%v", paidFlags)
 	}
 }

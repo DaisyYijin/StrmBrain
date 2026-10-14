@@ -127,3 +127,19 @@ func TestRe0Channel(t *testing.T) {
 		t.Errorf("没密码不算配置了网页登录，得到 %s", ch)
 	}
 }
+
+// 机器人：免费 / 解锁过的 RE0 能直接处理、自动择优也会挑；要花积分的不挑
+func TestRe0BotFree(t *testing.T) {
+	zero, five := 0, 5
+	paid := ResourceItem{Source: "re0", Action: "unlock", Relevant: true, Points: &five}
+	free := ResourceItem{Source: "re0", Action: "unlock", Relevant: true, Points: &zero}
+	owned := ResourceItem{Source: "re0", Action: "unlock", Relevant: true, Points: &five, Owned: true}
+	unknown := ResourceItem{Source: "re0", Action: "unlock", Relevant: true}
+	if re0BotFree(paid) || !re0BotFree(free) || !re0BotFree(owned) || re0BotFree(unknown) {
+		t.Fatal("免费 / 已解锁才算能直接解锁，积分不知道的不算")
+	}
+	f := &botFlow{items: []ResourceItem{paid, unknown, free}, sent: map[int]bool{}}
+	if i := f.bestIndex(); i != 2 {
+		t.Fatalf("自动择优应当跳过要花积分的，挑到 %d", i)
+	}
+}

@@ -1146,6 +1146,16 @@ func resBotLabel(it ResourceItem, width int, withSource bool) string {
 	if it.Time != "" {
 		meta = append(meta, it.Time)
 	}
+	if it.Source == "re0" {
+		switch {
+		case it.Owned:
+			meta = append(meta, "已解锁")
+		case it.Points != nil && *it.Points == 0:
+			meta = append(meta, "免费")
+		case it.Points != nil:
+			meta = append(meta, fmt.Sprintf("%d 积分·网页解锁", *it.Points))
+		}
+	}
 	if it.SubmittedAt > 0 {
 		meta = append(meta, "提交过")
 	}
@@ -1180,8 +1190,14 @@ func resTagLine(t resTags) string {
 	return strings.Join(parts, "·")
 }
 
-// botSubmitResource 机器人选中一条资源后的处理，回复文案按结果分；返回是否提交成功
-func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string)) bool {
+// re0BotFree 机器人能不能直接解锁：解锁过的、或者明确 0 积分的（积分不知道的不算）
+func re0BotFree(it ResourceItem) bool {
+	return it.Source == "re0" && (it.Owned || (it.Points != nil && *it.Points == 0))
+}
+
+// botSubmitResource 机器人选中一条资源后的处理，回复文案按结果分；返回是否提交成功。
+// paid：用户在机器人里确认过花积分（只有 RE0 付费解锁用得到）
+func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string), paid bool) bool {
 	if it.Action == "open" {
 		out := "此资源不是 115 分享，请手动打开：\n" + it.URL
 		if it.Code != "" {
@@ -1200,10 +1216,20 @@ func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string)) bool
 			reply("⏳ 提交 115 离线下载…")
 		}
 	case "unlock":
-		reply("RE0 资源解锁要花积分，请到网页「影视转存」里确认后解锁。")
-		return false
+		switch {
+		case re0BotFree(it):
+			reply("⏳ 解锁 RE0（免费 / 之前解锁过，不花积分）并转存 115…")
+		case paid:
+			reply("⏳ 解锁 RE0（花积分）并转存 115…")
+		default:
+			// 没经过确认屏走到这里（不该发生）：不花积分
+			reply("这条 RE0 资源解锁要花积分，请重新点它，确认后再解锁。")
+			return false
+		}
 	}
-	r, err := h.submitResource(resSubmitReq{Source: it.Source, Action: it.Action, URL: it.URL, Code: it.Code, Ref: it.Ref, Title: it.Title}, "机器人")
+	// 免费 / 解锁过的、或用户在确认屏点了确认的，才带 confirm（resolveResourceLink 只认带 confirm 的解锁请求）
+	r, err := h.submitResource(resSubmitReq{Source: it.Source, Action: it.Action, URL: it.URL, Code: it.Code, Ref: it.Ref, Title: it.Title,
+		Confirm: it.Action == "unlock" && (re0BotFree(it) || paid)}, "机器人")
 	if err != nil {
 		if it.Action == "transfer" {
 			reply("✗ 转存失败（部分内容可能已转存，请先看一眼网盘转存目录再决定是否重试）：" + err.Error())

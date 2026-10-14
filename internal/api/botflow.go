@@ -19,7 +19,9 @@ package api
 // 约束：
 //   - 提交一律走 botSubmitResource → submitResource，不另起提交通道；
 //   - 同一条资源在一个会话里只提交一次（双击、按钮与回复数字重复），失败了才放开重试；
-//   - 机器人不接 RE0（解锁花积分，要人在网页上确认）。
+//   - RE0 照常列出（2026-10-14 起；原来整个跳过，只开 RE0 的用户 /search 什么都搜不到）：
+//     免费 / 解锁过的直接解锁转存（不花积分）；要花积分的先给一屏确认（写明多少积分，TG 按钮 / 企微回复 y、c），
+//     确认了才带 confirm 解锁（re0BotFree / unlockAsk）。自动择优从不挑要花积分的。
 
 import (
 	"crypto/rand"
@@ -41,7 +43,7 @@ const (
 	// botMaxItems 聚合搜索动辄一两百条，会话里只留排在前面的这些（翻页到底也够挑了）
 	botMaxItems = 96
 	// botAllWait 全部来源一起搜时最多等多久：超时的来源不等了，结果里写明
-	botAllWait = 40 * time.Second
+	botAllWait = 60 * time.Second // RE0 网页通道冷启动浏览器 + 过 Cloudflare 要二三十秒
 )
 
 // botBtn 一个按钮；Act 与纯文本通道回复的内容同一套（序号 / n / p / 0 / b / r / k / q）
@@ -101,6 +103,8 @@ type botFlow struct {
 	page    int
 	sent    map[int]bool // 本会话里提交过的（items 下标）
 	at      time.Time
+	// unlockAsk 等用户确认花积分解锁的那一条（items 下标 + 1，0 = 没有）
+	unlockAsk int
 
 	// 订阅（botsub.go）：mode 为 sub 时选片即订阅；为 subs 时是订阅列表（stage subs）/ 单个订阅（stage sub）
 	mode       string
@@ -172,6 +176,10 @@ func botFlowAct(text string) (string, bool) {
 		return "q", true
 	case "0", "择优", "自动":
 		return "0", true
+	case "y", "确认", "确认解锁":
+		return "y", true
+	case "c", "取消":
+		return "c", true
 	case "s", "a", "z", "x", "xx":
 		// 订阅：s 订阅这部（资源列表）；a 立即搜索、z 暂停 / 恢复、x / xx 取消订阅（/subs，botsub.go）
 		return t, true
@@ -245,6 +253,23 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		return h.botSubsAct(key, f, act, io), true
 	}
 
+	// 确认花积分解锁：y 解锁，c（或别的任何操作）作废这次确认
+	ask := f.unlockAsk
+	f.unlockAsk = 0
+	switch act {
+	case "y":
+		if ask == 0 || f.stage != "resource" || ask > len(f.items) {
+			return botSay("没有等你确认的解锁。"), true
+		}
+		h.botSubmitAt(f, ask-1, io, true)
+		return f.render(), true // 确认那屏换回列表
+	case "c":
+		if ask == 0 {
+			return botSay("没有要取消的操作。"), true
+		}
+		return f.render(), true
+	}
+
 	switch act {
 	case "s":
 		if f.stage != "resource" || f.media.ID == 0 {
@@ -296,7 +321,7 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 			return botSay("没有能自动提交的资源：片名对得上、能直接转存或离线、之前没提交过的一条都没有，请手动挑。"), true
 		}
 		io.say(fmt.Sprintf("⭐ 自动择优：第 %d 条\n%s", i+1, resBotLabel(f.items[i], 80, f.source == "")))
-		return h.botSubmitAt(f, i, io), true
+		return h.botSubmitAt(f, i, io, false), true
 	}
 
 	n, err := strconv.Atoi(act)
@@ -317,7 +342,11 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		if n < 1 || n > len(f.items) {
 			return botSay(fmt.Sprintf("请选择 1-%d。", len(f.items))), true
 		}
-		return h.botSubmitAt(f, n-1, io), true
+		if it := f.items[n-1]; it.Action == "unlock" && !re0BotFree(it) && !f.sent[n-1] {
+			f.unlockAsk = n
+			return f.renderUnlockAsk(n - 1), true
+		}
+		return h.botSubmitAt(f, n-1, io, false), true
 	}
 	return botSay("看不懂这个操作。"), true
 }
@@ -357,7 +386,8 @@ func (h *Handler) botLoad(f *botFlow, m wecomTmdbHit, refresh bool, io botIO, le
 }
 
 // botSubmitAt 提交第 i 条。先记账再提交（双击 / 按钮加回复数字不会提交两次），失败了放开
-func (h *Handler) botSubmitAt(f *botFlow, i int, io botIO) botView {
+// paid=true 只在用户确认过花积分之后传（RE0 付费解锁）
+func (h *Handler) botSubmitAt(f *botFlow, i int, io botIO, paid bool) botView {
 	if f.sent[i] {
 		return botSay(fmt.Sprintf("第 %d 条刚才已经提交过了，不重复提交。", i+1))
 	}
@@ -365,7 +395,7 @@ func (h *Handler) botSubmitAt(f *botFlow, i int, io botIO) botView {
 		f.sent = map[int]bool{}
 	}
 	f.sent[i] = true
-	if !botSubmit(h, f.items[i], io.say) {
+	if !botSubmit(h, f.items[i], io.say, paid) {
 		delete(f.sent, i)
 		return botView{}
 	}
@@ -376,16 +406,16 @@ func (h *Handler) botSubmitAt(f *botFlow, i int, io botIO) botView {
 }
 
 // botSubmit 测试里替换掉，免得真的去提交
-var botSubmit = func(h *Handler, it ResourceItem, say func(...string)) bool {
-	return h.botSubmitResource(it, say)
+var botSubmit = func(h *Handler, it ResourceItem, say func(...string), paid bool) bool {
+	return h.botSubmitResource(it, say, paid)
 }
 
 // bestIndex 自动择优挑哪一条：列表已按默认顺序排好（相关 → 能直接处理 → 洗版偏好 → 分辨率 → 做种 → 时间），
 // 取第一条片名对得上、能直接转存或离线、之前没提交过的
 func (f *botFlow) bestIndex() int {
 	for i, it := range f.items {
-		if !it.Relevant || (it.Action != "transfer" && it.Action != "offline") {
-			continue
+		if !it.Relevant || (it.Action != "transfer" && it.Action != "offline" && !(it.Action == "unlock" && re0BotFree(it))) {
+			continue // 要花积分的 RE0 不自动挑
 		}
 		if it.SubmittedAt > 0 || f.sent[i] {
 			continue
@@ -393,6 +423,25 @@ func (f *botFlow) bestIndex() int {
 		return i
 	}
 	return -1
+}
+
+// renderUnlockAsk 花积分解锁前的确认屏（替换列表那条消息；确认 / 取消后换回列表）
+func (f *botFlow) renderUnlockAsk(i int) botView {
+	it := f.items[i]
+	pts := "积分（数量未知）"
+	if it.Points != nil {
+		pts = fmt.Sprintf("%d 积分", *it.Points)
+	}
+	return botView{
+		Token: f.token,
+		Lines: []string{
+			fmt.Sprintf("💰 解锁第 %d 条要花 RE0 %s：", i+1, pts),
+			resBotLabel(it, 80, false),
+			"确认后解锁并转存到 115，积分花了不退。",
+		},
+		Buttons: [][]botBtn{{{Text: "✓ 确认解锁（" + pts + "）", Act: "y"}, {Text: "✗ 取消", Act: "c"}}},
+		Hint:    "回复 y 确认解锁，c 取消",
+	}
 }
 
 // ==================== 渲染 ====================
@@ -615,7 +664,7 @@ func (h *Handler) botResourcesAll(hit wecomTmdbHit, refresh bool, io botIO) ([]R
 	var skipped []string
 	for i := range resSources {
 		s := &resSources[i]
-		if s.Key == "re0" || !cfg.enabled(s.Key) {
+		if !cfg.enabled(s.Key) {
 			continue
 		}
 		if why := s.ready(); why != "" {
