@@ -154,7 +154,9 @@ const dirOptions = computed(() => [
   { label: '全部目录', value: '' },
   ...dirs.value.map((d) => {
     const segs = d.path.split('/')
-    return { label: segs[segs.length - 1], value: d.path, indent: segs.length - 1, hint: String(d.count) }
+    // 分类目录（片目直接在它下面）标上类型，和中间层目录分得开
+    const kind = d.category ? (d.type === 'movie' ? '电影 · ' : d.type === 'tv' ? '剧集 · ' : '分类 · ') : ''
+    return { label: segs[segs.length - 1], value: d.path, indent: segs.length - 1, hint: `${kind}${d.count}` }
   }),
 ])
 const showDirs = computed(() => dirs.value.filter((d) => !dirs.value.some((o) => o.path.startsWith(`${d.path}/`))).length > 1)
