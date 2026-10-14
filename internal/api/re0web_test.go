@@ -107,6 +107,18 @@ func TestParseRe0PageResources(t *testing.T) {
 	if _, ok := parseRe0PageResources(`0:["$","div",null,{}]`); ok {
 		t.Error("没有分组不该算读全")
 	}
+	// 没资源的片：网盘一栏是空状态组件（2026-10-14 现场页面原样）
+	rows, ok = parseRe0PageResources(strings.Join([]string{
+		`0:["$","div",null,{"children":"$2c"}]`,
+		`2c:["$","$L54",null,{"kind":"empty","error":{"message":"暂无资源","description":"若你持有对应资源，欢迎积极提交共享。"}}]`,
+	}, "\n"))
+	if !ok || len(rows) != 0 {
+		t.Errorf("暂无资源应当算读全、零条，得到 ok=%v %d 条", ok, len(rows))
+	}
+	// 别的栏目的空状态不算
+	if _, ok := parseRe0PageResources(`0:["$","$L54",null,{"kind":"empty","error":{"message":"暂无片单"}}]`); ok {
+		t.Error("片单的空状态不该当成没资源")
+	}
 }
 
 func TestParseRe0JSONResources(t *testing.T) {

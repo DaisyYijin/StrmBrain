@@ -1072,7 +1072,11 @@ func re0WebResources(mediaType string, tmdbID int) ([]re0Resource, error) {
 					lastChunks = j
 					if rows, ok := parseRe0PageResources(j); ok {
 						out = rows
-						log.Printf("[RE0网页]   页面数据里读到 %d 条 115 资源", len(rows))
+						if len(rows) == 0 {
+							log.Printf("[RE0网页]   这部片在 RE0 上没有 115 资源")
+						} else {
+							log.Printf("[RE0网页]   页面数据里读到 %d 条 115 资源", len(rows))
+						}
 						return nil
 					}
 				}
@@ -1097,7 +1101,9 @@ func re0WebResources(mediaType string, tmdbID int) ([]re0Resource, error) {
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
-		return fmt.Errorf("20 秒内没读到资源列表（%s），页面可能改版了", re0URL(p))
+		// 这句会原样显示到找资源页上：排查用的（停在哪个地址、可能改版）只进日志
+		log.Printf("[RE0网页]   20 秒内页面数据里既没有资源分组也没有「暂无资源」（%s），页面可能改版了", re0URL(p))
+		return fmt.Errorf("RE0 页面 20 秒内没加载出资源列表，请稍后再试")
 	})
 	return out, err
 }
@@ -1144,6 +1150,7 @@ func parseRe0PageResources(raw string) ([]re0Resource, bool) {
 		return resolve(rec, next)
 	}
 	var groups []map[string]any
+	empty := false
 	keys := make([]string, 0, len(records))
 	for k := range records {
 		keys = append(keys, k)
@@ -1167,6 +1174,9 @@ func parseRe0PageResources(raw string) ([]re0Resource, bool) {
 						groups = append(groups, gm)
 					}
 				}
+				if re0EmptyMarker(t, resolve) {
+					empty = true
+				}
 				for _, vv := range t {
 					stack = append(stack, vv)
 				}
@@ -1174,7 +1184,9 @@ func parseRe0PageResources(raw string) ([]re0Resource, bool) {
 		}
 	}
 	if len(groups) == 0 {
-		return nil, false
+		// 没资源的片不给 groupData，而是给空状态组件（2026-10-14 现场，奥德赛 movie/1368337），
+		// 认不出来的话要干等 20 秒才报超时
+		return nil, empty
 	}
 	var rows []map[string]any
 	for _, g := range groups {
@@ -1206,6 +1218,22 @@ func parseRe0PageResources(raw string) ([]re0Resource, bool) {
 		}
 	}
 	return re0NormalizeRows(rows), true
+}
+
+var re0EmptyMsgRe = regexp.MustCompile(`(?i)资源|resource`)
+
+// re0EmptyMarker 网盘一栏的空状态：{"kind":"empty","error":{"message":"暂无资源",…}}。
+// 只认 message 讲的是资源的，别的栏目（片单、照片…）也可能用同一个空状态组件
+func re0EmptyMarker(m map[string]any, resolve func(any, map[string]bool) any) bool {
+	if k, _ := m["kind"].(string); k != "empty" {
+		return false
+	}
+	e, ok := resolve(m["error"], nil).(map[string]any)
+	if !ok {
+		return false
+	}
+	msg, _ := resolve(e["message"], nil).(string)
+	return re0EmptyMsgRe.MatchString(msg)
 }
 
 // parseRe0JSONResources 接口响应 {data: [...]} 里的资源
