@@ -7,15 +7,8 @@ import type { QueuedReply } from './tasks'
  */
 export type ExtraDirType = 'movie' | 'tv' | 'auto'
 export interface ExtraDir {
-  /** 库内相对路径；限定了库（lib 非空）时可以为空 = 库根本身就是分类目录 */
   dir: string
   type: ExtraDirType
-  /** 只对这个库（本地媒体树第一层的库目录名）生效；空 = 所有库 */
-  lib?: string
-  /** 怎么来的：空 = 手动；emby / record = 从建议采纳 */
-  source?: string
-  /** 登记时间（RFC3339） */
-  at?: string
 }
 
 export interface ExtraDirsReply {

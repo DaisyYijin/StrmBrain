@@ -118,7 +118,10 @@ func (h *Handler) localTitlesSnapshot(refresh bool) []localTitle {
 // buildLocalTitles 重建卡片快照：读台账、读每个片目的目录。refresh = 台账也不用缓存
 func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 	root := localMediaRoot()
-	ledger, _ := scanLedgerCached(refresh)
+	ledger := scanLedgerTitlesCached()
+	if refresh {
+		ledger = scanLedgerTitles()
+	}
 	rows := ledgerVideoRowsByTitle()
 	out := make([]localTitle, 0, len(ledger))
 	// 平铺片目（几十上百部共用一个分类目录）共用一份目录索引：每部各读一遍的话，
@@ -414,8 +417,6 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 		"configured": true, "root": root,
 		"items": list[offset:end], "total": len(list), "offset": offset, "limit": limit,
 		"stats": st, "missing": missing, "dirs": localTitleDirs(all),
-		// 台账里认不出片目的视频：前端据此提示去登记目录，并区分「台账是空的」与「台账有、目录没登记」
-		"unclaimed": ledgerUnclaimedCached(),
 	})
 }
 

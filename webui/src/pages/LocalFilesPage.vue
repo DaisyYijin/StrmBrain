@@ -16,9 +16,8 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
-import UnclaimedAlert from '@/components/local/UnclaimedAlert.vue'
 import { localApi } from '@/api'
-import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus, LocalUnclaimed } from '@/api/local'
+import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
 import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
@@ -68,8 +67,6 @@ const total = ref(0)
 const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0, probe_lack: 0 })
 const configured = ref(true)
 const missing = ref(0)
-/** 台账里认不出片目的视频：提示去登记目录，也用来区分空墙是「台账空」还是「目录没登记」 */
-const unclaimed = ref<LocalUnclaimed>({ videos: 0, dirs: [] })
 /** Emby 与海报墙对账弹窗：总览的数量（Emby）和这里对不上时，逐个说明差在哪 */
 const showReconcile = ref(false)
 const loading = ref(false)
@@ -94,7 +91,6 @@ function apply(d: LocalTitleList) {
   total.value = d.total
   stats.value = d.stats
   missing.value = d.missing ?? 0
-  unclaimed.value = d.unclaimed ?? { videos: 0, dirs: [] }
   dirs.value = d.dirs ?? []
   loaded.value = true
 }
@@ -170,15 +166,6 @@ const statusOptions = computed(() => [
 ])
 /** Emby 刮削时状态来自 Emby 快照：没读到之前三档都是 0，筛选没意义，先不显示 */
 const showStatus = computed(() => !embyScrapes.value || !!emby.value?.ready)
-
-/** 空墙说清是哪种空：筛没了 / 台账里有视频但目录没登记 / 台账真是空的 */
-const emptyText = computed(() => {
-  if (keyword.value || dir.value || type.value || status.value || probeLack.value) return '没有符合条件的片目'
-  if (unclaimed.value.videos > 0) {
-    return `台账里有 ${unclaimed.value.videos} 个视频，但所在目录都没登记成分类目录，所以一部片目也认不出：登记目录后就能看到`
-  }
-  return '台账里还没有片目：先跑一次全量同步或自动整理'
-})
 // 别处切了刮削方式（另开着影视刮削页）：口径变了，重读
 watch(embyScrapes, () => {
   status.value = ''
@@ -614,7 +601,6 @@ onBeforeUnmount(() => {
               <HButton size="sm" variant="primary" @click="showReconcile = true">检查路径映射</HButton>
             </template>
           </HAlert>
-          <UnclaimedAlert :unclaimed="unclaimed" :emby-configured="!!emby?.configured" @reconcile="showReconcile = true" />
           <HAlert v-if="missing" status="warning" class="tip">
             有 {{ missing }} 个片目台账里有、本地却找不到目录（被手工删掉，或挂载还没就绪）。
           </HAlert>
@@ -631,7 +617,7 @@ onBeforeUnmount(() => {
           </div>
           <EmptyState
             v-else-if="!items.length"
-            :text="emptyText"
+            :text="keyword || dir || type || status ? '没有符合条件的片目' : '台账里还没有片目：先跑一次全量同步或自动整理'"
           />
           <div v-else :ref="setGridEl" class="grid" :class="[`v-${view}`, { dim: loading, selecting }]">
             <article

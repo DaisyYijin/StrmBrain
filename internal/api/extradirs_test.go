@@ -24,7 +24,7 @@ func TestLayoutWithExtraDirs(t *testing.T) {
 		"纪录片": "", "电影/漫威合集": "movie", "电视剧": "tv",
 	}
 	for dir, mt := range want {
-		if got, ok := l.lookup("", dir); !ok || got.Type != mt {
+		if got, ok := l[dir]; !ok || got != mt {
 			t.Errorf("%s: got %q (%v) want %q", dir, got, ok, mt)
 		}
 	}
@@ -63,32 +63,32 @@ func TestLayoutWithExtraDirs(t *testing.T) {
 }
 
 func TestNormExtraDirs(t *testing.T) {
-	rules := layoutOf(map[string]string{"电影": "movie"})
+	rules := libCategoryLayout{"电影": "movie"}
 	out, skipped, err := normExtraDirs([]libExtraDir{
 		{Dir: ` /115\LGNB电影/ `, Type: "movie"}, // 带库名、反斜杠、空白
 		{Dir: "LGNB电影", Type: "tv"},             // 重复：后来的类型覆盖
 		{Dir: "电影", Type: "movie"},              // 已是分类规则
 		{Dir: "纪录片", Type: "奇怪"},               // 类型不认识 → auto
 		{Dir: "115", Type: "movie"},             // 只有一段时不当库名剥
-	}, rules, []string{"115"}, nil)
+	}, rules, []string{"115"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 3 || out[0] != (libExtraDir{Dir: "LGNB电影", Type: "tv"}) || out[1] != (libExtraDir{Dir: "纪录片", Type: "auto"}) || out[2].Dir != "115" {
+	if len(out) != 3 || out[0] != (libExtraDir{"LGNB电影", "tv"}) || out[1] != (libExtraDir{"纪录片", "auto"}) || out[2].Dir != "115" {
 		t.Errorf("out = %+v", out)
 	}
 	if len(skipped) != 1 {
 		t.Errorf("skipped = %v", skipped)
 	}
 	for _, bad := range []string{"", "/", "a/../b", "./a"} {
-		if _, _, err := normExtraDirs([]libExtraDir{{Dir: bad}}, rules, nil, nil); err == nil {
+		if _, _, err := normExtraDirs([]libExtraDir{{Dir: bad}}, rules, nil); err == nil {
 			t.Errorf("%q 应拒收", bad)
 		}
 	}
 }
 
 func TestCategoryDrops(t *testing.T) {
-	oldL := layoutOf(map[string]string{"电影": "movie", "电视剧/日番": "tv", "综艺": ""})
+	oldL := libCategoryLayout{"电影": "movie", "电视剧/日番": "tv", "综艺": ""}
 	ledger := map[string]*ledgerTitleEntry{
 		"115/电影/A":     {Key: "115/电影/A", Title: "A", Category: "电影"},
 		"115/电视剧/日番/B": {Key: "115/电视剧/日番/B", Title: "B", Category: "电视剧/日番"},
@@ -97,7 +97,7 @@ func TestCategoryDrops(t *testing.T) {
 		"115/手动/E":     {Key: "115/手动/E", Title: "E", Category: "手动"}, // 其他目录里的，不归这次管
 	}
 	// 新规则去掉了 电视剧/日番 和 综艺；综艺已经在其他目录里
-	newL := layoutOf(map[string]string{"电影": "movie", "综艺": ""})
+	newL := libCategoryLayout{"电影": "movie", "综艺": ""}
 	got := categoryDrops(oldL, newL, ledger)
 	if len(got) != 1 || got[0].Dir != "电视剧/日番" || got[0].Titles != 2 || got[0].Type != "tv" || len(got[0].Sample) != 2 {
 		t.Fatalf("got %+v", got)

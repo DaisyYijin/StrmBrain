@@ -91,7 +91,7 @@ func TestEmbyLocalSub(t *testing.T) {
 }
 
 func TestReconcileEmby(t *testing.T) {
-	layout := layoutOf(map[string]string{"电影": "movie", "剧集": "tv"})
+	layout := libCategoryLayout{"电影": "movie", "剧集": "tv"}
 	ledger := map[string]*ledgerTitleEntry{
 		"115/电影/阿凡达 (2009)": {Key: "115/电影/阿凡达 (2009)", Title: "阿凡达", Year: "2009", MediaType: "movie"},
 		"115/电影/双版本 (2020)": {Key: "115/电影/双版本 (2020)", Title: "双版本", MediaType: "movie"},
@@ -163,7 +163,7 @@ func TestReconcileEmbyMappingBroken(t *testing.T) {
 	ledger := map[string]*ledgerTitleEntry{"115/电影/A": {Key: "115/电影/A", MediaType: "movie"}}
 	items := []embyReconItem{{Type: "Movie", Name: "A", Path: "/mnt/strm/115/电影/A/a.strm"}}
 	// 映射没配：Emby 路径原样当本地路径，对不上根
-	r := reconcileEmby(items, ledger, layoutOf(map[string]string{"电影": "movie"}), "/media/strm",
+	r := reconcileEmby(items, ledger, libCategoryLayout{"电影": "movie"}, "/media/strm",
 		func(p string) string { return p }, func(string) bool { return false })
 	if r.MappingOK {
 		t.Fatal("一个都对不上应判映射有问题")
@@ -172,7 +172,7 @@ func TestReconcileEmbyMappingBroken(t *testing.T) {
 
 // 分类规则外的目录：平铺电影目录本身就是该加的目录，多版本（同名）不算平铺；Extra 去掉库名
 func TestReconcileUncategorizedDirs(t *testing.T) {
-	layout := layoutOf(map[string]string{"电影": "movie"})
+	layout := libCategoryLayout{"电影": "movie"}
 	items := []embyReconItem{
 		{Type: "Movie", Name: "英雄本色", Path: "/m/115/LGNB/港片/英雄本色.strm"},
 		{Type: "Movie", Name: "无间道", Path: "/m/115/LGNB/港片/无间道.strm"},

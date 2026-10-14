@@ -139,7 +139,7 @@ func TestFileJobDedupeOrderIndependent(t *testing.T) {
 
 func TestRowActionsOf(t *testing.T) {
 	roles := map[string]string{"100": "library", "200": "pending", "300": "redundant"}
-	layout := layoutOf(map[string]string{"电影/华语电影": "movie", "剧集/国产剧": "tv"})
+	layout := libCategoryLayout{"电影/华语电影": "movie", "剧集/国产剧": "tv"}
 	dir := func(id, name string) fileEntry { return fileEntry{ID: id, Name: name, IsDir: true} }
 	file := func(id, name string) fileEntry {
 		return fileEntry{ID: id, Name: name, Video: videoExts[strings.ToLower(pathExt(name))]}

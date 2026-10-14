@@ -4,7 +4,6 @@ import (
 	"115-station/internal/model"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +17,8 @@ type ledgerTitleEntry struct {
 	Year      string
 	TmdbID    int
 	MediaType string
-	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）；库根本身就是分类时为空
-	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它。
-	// 由 titleAt 按「带库名那一轮匹配上」直接给出，别再按段数反推（库根分类时分类段数为 0，推不出）
+	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）
+	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它
 	LibName string
 	Videos  int // 台账里的视频数（海报墙的卡片显示）
 	// LastAt 片目里最近一个视频首次入账的时间（海报墙「最近入库」、媒体信息补全的先后）。
@@ -101,33 +99,20 @@ func soloTitleParse(stem string) (title, year string, tmdb int) {
 // 台账扫描缓存：刮削共享同一份结果（30 秒 TTL），
 // 避免每次请求都全表扫描 SyncedFile。缓存条目视为只读，调用方不得修改。
 var (
-	ledgerTitlesMu       sync.Mutex
-	ledgerTitlesCache    map[string]*ledgerTitleEntry
-	ledgerUnclaimedCache ledgerUnclaimed
-	ledgerTitlesAt       time.Time
+	ledgerTitlesMu    sync.Mutex
+	ledgerTitlesCache map[string]*ledgerTitleEntry
+	ledgerTitlesAt    time.Time
 )
 
 func scanLedgerTitlesCached() map[string]*ledgerTitleEntry {
-	titles, _ := scanLedgerCached(false)
-	return titles
-}
-
-// ledgerUnclaimedCached 台账里不属于任何片目的视频（与 scanLedgerTitlesCached 同一次扫描、同一份缓存）
-func ledgerUnclaimedCached() ledgerUnclaimed {
-	_, u := scanLedgerCached(false)
-	return u
-}
-
-// scanLedgerCached refresh = 不用缓存、重扫一遍并写回缓存（海报墙「刷新」）
-func scanLedgerCached(refresh bool) (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 	ledgerTitlesMu.Lock()
 	defer ledgerTitlesMu.Unlock()
-	if !refresh && ledgerTitlesCache != nil && time.Since(ledgerTitlesAt) < 30*time.Second {
-		return ledgerTitlesCache, ledgerUnclaimedCache
+	if ledgerTitlesCache != nil && time.Since(ledgerTitlesAt) < 30*time.Second {
+		return ledgerTitlesCache
 	}
-	ledgerTitlesCache, ledgerUnclaimedCache = scanLedger()
+	ledgerTitlesCache = scanLedgerTitles()
 	ledgerTitlesAt = time.Now()
-	return ledgerTitlesCache, ledgerUnclaimedCache
+	return ledgerTitlesCache
 }
 
 // forgetLedgerTitles 分类目录变了，台账要按新布局重新聚合
@@ -137,78 +122,101 @@ func forgetLedgerTitles() {
 	ledgerTitlesMu.Unlock()
 }
 
-// ledgerUnclaimed 台账里认不出片目的视频：目录没登记成分类（不在分类规则、也不在其他媒体库目录里）。
-// 海报墙据此提示「还有 N 个视频不属于任何片目」，而不是让用户对着空墙去跑全量同步
-type ledgerUnclaimed struct {
-	Videos int                  `json:"videos"`
-	Dirs   []ledgerUnclaimedDir `json:"dirs"`
-	// MoreDirs Dirs 只列视频最多的前 ledgerUnclaimedDirMax 个，其余目录的个数
-	MoreDirs int `json:"more_dirs"`
+// ---- 库内目录布局：分类目录的下一层是标题目录 ----
+//
+// 整理落盘是 库名/<分类名>/<标题目录>/…（organize.go 的 categoryDir + 重命名模板第一段），
+// 分类名就是二级分类 YAML 里写的名字，可以多级（电视剧/日番），也可以平铺（动漫番剧、综艺）。
+// 所以「哪一层是标题目录」只能按当前的分类规则算，不能按深度写死 ——
+// 此前写死成 库名/电影|剧集/分类/标题，平铺配置（电影/*、动漫番剧/*）下
+// 片目全认错：电影的标题目录被当成分类、文件被当成标题目录，动漫番剧 / 综艺整类被跳过。
+//
+// 只认当前配置：分类规则 + 「其他媒体库目录」（extradirs.go：用户手动建的目录、改规则后留下的旧分类目录，
+// 只用于识别，整理不往里放）。两处都没有的目录，里面的片不算片目（与网盘文件页口径一致）。
+// 别改成按目录结构自动推断：平铺与多级分类混在一起时认不准。
+
+// libCategoryLayout 分类目录（库内相对路径）→ 媒体类型（movie / tv；两边都有同名分类、或其他目录设为自动时为空）
+type libCategoryLayout map[string]string
+
+// loadLibCategoryLayout 按当前分类规则与其他媒体库目录算出所有分类目录。
+// 直接读表不走 classifyRules 的缓存：调用方（台账扫描）自己有 30 秒缓存
+func loadLibCategoryLayout() libCategoryLayout {
+	return loadRuleLayout().withExtraDirs(loadLibExtraDirs())
 }
 
-// ledgerUnclaimedDir 按「库名 + 库内前两段」聚合：够定位是哪个目录，又不至于一个片目一行
-type ledgerUnclaimedDir struct {
-	Path   string `json:"path"`
-	Videos int    `json:"videos"`
-}
-
-const ledgerUnclaimedDirMax = 20
-
-// unclaimedDirOf 认不出的视频归到哪个目录：所在目录截到前三段（库名 + 库内两段）
-func unclaimedDirOf(rel string) string {
-	dir := path.Dir(strings.Trim(rel, "/"))
-	if dir == "." {
-		return ""
-	}
-	segs := strings.Split(dir, "/")
-	if len(segs) > 3 {
-		segs = segs[:3]
-	}
-	return strings.Join(segs, "/")
-}
-
-// summarizeUnclaimed 纯函数：目录 → 视频数 汇总成前若干个（视频多的在前，同数按路径）
-func summarizeUnclaimed(byDir map[string]int) ledgerUnclaimed {
-	out := ledgerUnclaimed{Dirs: []ledgerUnclaimedDir{}}
-	for p, n := range byDir {
-		out.Videos += n
-		out.Dirs = append(out.Dirs, ledgerUnclaimedDir{Path: p, Videos: n})
-	}
-	sort.Slice(out.Dirs, func(i, j int) bool {
-		if out.Dirs[i].Videos != out.Dirs[j].Videos {
-			return out.Dirs[i].Videos > out.Dirs[j].Videos
+// buildLibCategoryLayout 纯函数部分：规则 → 分类目录表。
+// 某个媒体类型一条规则都没有时，整理会落到 电影/未分类 或 剧集/未分类（classifyMedia 的兜底）
+func buildLibCategoryLayout(rules []model.CategoryRule) libCategoryLayout {
+	out := libCategoryLayout{}
+	has := map[string]bool{}
+	add := func(dir, mediaType string) {
+		if dir = libSubPath(dir); dir == "" {
+			return
 		}
-		return out.Dirs[i].Path < out.Dirs[j].Path
-	})
-	if len(out.Dirs) > ledgerUnclaimedDirMax {
-		out.MoreDirs = len(out.Dirs) - ledgerUnclaimedDirMax
-		out.Dirs = out.Dirs[:ledgerUnclaimedDirMax]
+		if prev, ok := out[dir]; ok && prev != mediaType {
+			out[dir] = "" // movie 与 tv 都有这个分类名：类型要按文件判断
+			return
+		}
+		out[dir] = mediaType
+	}
+	for _, r := range rules {
+		add(r.Name, r.MediaType)
+		has[r.MediaType] = true
+	}
+	for _, mt := range []string{"movie", "tv"} {
+		if !has[mt] {
+			add(libSubPath(mediaTypeCategory(mt), "未分类"), mt)
+		}
 	}
 	return out
+}
+
+// titleOf 台账相对路径（含文件名）落在哪个标题目录下。
+// 路径首段一般是库名；老台账有不带库名的，先按带库名算，对不上再按不带算。
+// 分类有多级且互相嵌套时（电视剧 与 电视剧/日番 都是分类）取最长匹配。
+// 返回标题目录的相对路径（台账口径，含库名前缀）、标题目录名、分类目录与其媒体类型
+//
+// 视频直接放在电影分类目录里（平铺，见 isSoloTitleKey）时，这个视频自己就是一部：
+// key 是它的相对路径，titleDir 是去掉 .strm 的视频名
+func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, mediaType string, ok bool) {
+	segs := strings.Split(strings.Trim(relPath, "/"), "/")
+	last := segs[len(segs)-1]
+	for _, off := range []int{1, 0} {
+		// 平铺：分类段一直到文件的上一层，比任何「分类/标题目录」都长，先看它
+		if n := len(segs) - 1 - off; n >= 1 && isSoloTitleKey(last) {
+			cat := strings.Join(segs[off:off+n], "/")
+			if mt, hit := l[cat]; hit && soloAllowed(mt, last) {
+				return strings.Join(segs, "/"), soloTitleStem(last), cat, "movie", true
+			}
+		}
+		best := -1
+		// 标题目录之下至少还有一个文件：分类段最多到 len-2
+		for n := 1; off+n <= len(segs)-2; n++ {
+			if _, hit := l[strings.Join(segs[off:off+n], "/")]; hit {
+				best = n
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		category = strings.Join(segs[off:off+best], "/")
+		return strings.Join(segs[:off+best+1], "/"), segs[off+best], category, l[category], true
+	}
+	return "", "", "", "", false
 }
 
 // scanLedgerTitles 全量扫描台账，按「标题目录」聚合（库名/<分类>/<标题目录>/…）
 func scanLedgerTitles() map[string]*ledgerTitleEntry {
-	out, _ := scanLedger()
-	return out
-}
-
-// scanLedger 同 scanLedgerTitles，顺带数出认不出片目的视频
-func scanLedger() (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 	layout := loadLibCategoryLayout()
 	var sfs []model.SyncedFile
 	model.DB.Where("kind = ?", "video").Find(&sfs)
 	out := map[string]*ledgerTitleEntry{}
-	unclaimed := map[string]int{}
 	// 同名分类两边都有时按文件判断：片目里有一集带集号就是剧集
 	undecided := map[string]bool{}
 	for _, sf := range sfs {
-		hit, ok := layout.titleAt(sf.RelPath)
+		key, titleDir, category, mediaType, ok := layout.titleOf(sf.RelPath)
 		if !ok {
-			unclaimed[unclaimedDirOf(sf.RelPath)]++
 			continue
 		}
-		key, titleDir, category, mediaType := hit.Key, hit.TitleDir, hit.Category, hit.MediaType
 		e, seen := out[key]
 		if !seen {
 			title, year, tmdb := parseTitleDir(titleDir)
@@ -219,8 +227,10 @@ func scanLedger() (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 			e = &ledgerTitleEntry{
 				Key: key, Title: title, Year: year, TmdbID: tmdb,
 				MediaType: mediaType, Category: category,
-				// 带库名的那一轮匹配上才有；老台账不带库名的为空
-				LibName: hit.Lib,
+			}
+			// key = [库名/]分类/标题：段数比分类多两段说明带着库名
+			if segs := strings.Split(key, "/"); len(segs) == strings.Count(category, "/")+3 {
+				e.LibName = segs[0]
 			}
 			out[key] = e
 			if mediaType == "" {
@@ -237,7 +247,7 @@ func scanLedger() (map[string]*ledgerTitleEntry, ledgerUnclaimed) {
 			e.LastAt = sf.CreatedAt
 		}
 	}
-	return out, summarizeUnclaimed(unclaimed)
+	return out
 }
 
 var (

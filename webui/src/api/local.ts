@@ -93,16 +93,6 @@ export interface LocalTitleList {
   missing?: number
   /** 目录筛选的选项：片目所在目录与各级上层，按段排好序；count 不套用其余筛选 */
   dirs?: LocalTitleDir[]
-  /** 台账里不属于任何片目的视频（所在目录没登记成分类目录） */
-  unclaimed?: LocalUnclaimed
-}
-
-export interface LocalUnclaimed {
-  videos: number
-  /** 按「库名 + 库内前两段」聚合，视频多的在前，最多 20 个；path 为空 = 本地媒体库根目录 */
-  dirs: { path: string; videos: number }[]
-  /** dirs 之外还有几个目录 */
-  more_dirs?: number
 }
 
 export interface LocalTitleDir {

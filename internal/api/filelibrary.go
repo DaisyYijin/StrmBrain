@@ -35,6 +35,32 @@ func init() {
 	jobExecutors["filemove"] = execFileMoveJob
 }
 
+// isCategoryOrAncestor 这个库内相对路径是分类目录，或是某个多级分类的上级（电视剧 之于 电视剧/日番）
+func (l libCategoryLayout) isCategoryOrAncestor(rel string) bool {
+	if _, ok := l[rel]; ok {
+		return true
+	}
+	for c := range l {
+		if strings.HasPrefix(c, rel+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// isTitleRel 库内相对路径（不含库名）是不是片目目录：父目录是分类，自己不是分类也不是分类的上级
+func (l libCategoryLayout) isTitleRel(rel string) bool {
+	rel = strings.Trim(rel, "/")
+	parent := path.Dir(rel)
+	if rel == "" || parent == "." {
+		return false
+	}
+	if _, ok := l[parent]; !ok {
+		return false
+	}
+	return !l.isCategoryOrAncestor(rel)
+}
+
 // itemLibRel 条目在媒体库里的位置：库名（本地媒体树第一层）与库内相对路径（库根本身为空）。
 // idx 是媒体库根在面包屑上的下标，-1 表示条目就是媒体库根目录本身
 func itemLibRel(chain []browseCrumb, idx int, it fileJobItem) (libName, rel string) {
@@ -56,7 +82,7 @@ func libTitleOf(chain []browseCrumb, roles map[string]string, layout libCategory
 		return "", "", false
 	}
 	libName, rel = itemLibRel(chain, idx, it)
-	return libName, rel, layout.isTitleRelIn(libName, rel)
+	return libName, rel, layout.isTitleRel(rel)
 }
 
 // ---- 媒体库内整理 ----
@@ -120,7 +146,7 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	layout := loadLibCategoryLayout()
 	roles := h.workspaceRoles()
-	libName, rel, ok := libTitleOf(chain, roles, layout, it)
+	_, rel, ok := libTitleOf(chain, roles, layout, it)
 	if !ok {
 		return jobOutcome{}, errors.New("它已经不是媒体库里的片目目录了（被挪走，或分类策略改过），请刷新后重选")
 	}
@@ -131,7 +157,7 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if err != nil {
 		return jobOutcome{}, fmt.Errorf("读取片目失败: %w", err)
 	}
-	rec := libTitleRecord(it, fp.Cid, rel, layout.typeOf(libName, layoutParent(rel)), files)
+	rec := libTitleRecord(it, fp.Cid, rel, layout[path.Dir(rel)], files)
 	// 片目现在在哪个库：重新整理据此认旧的本地产物（分类规则指定别的库时会整部搬过去）
 	rec.LibCid = recordLibCid(chain[chainRoleIndex(chain, roles, "library")].Cid)
 	if rec.VideoCount == 0 {
@@ -183,7 +209,7 @@ func libTitleRecord(it fileJobItem, parentCid, rel, mediaType string, files []re
 		Source:  it.Name + "/", SourceKind: "dir", SourceCid: parentCid,
 		Status: "success", Message: "媒体库片目（网盘文件页发起的整理）",
 		TmdbID: tmdb, Title: title, Year: year, MediaType: mediaType,
-		Category: layoutParent(rel), TargetDir: rel, TargetCid: it.ID,
+		Category: path.Dir(rel), TargetDir: rel, TargetCid: it.ID,
 	}
 	rfs := make([]orgRecordFile, 0, len(files))
 	hasEpisode := false

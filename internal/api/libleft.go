@@ -59,9 +59,13 @@ func ledgerTopCounts() (map[string][2]int64, error) {
 
 // findLibLeftovers 哪些第一段是残留（纯函数）。libNames 是配置中各库的目录名，layout 是分类目录表
 func findLibLeftovers(counts map[string][2]int64, libNames []string, layout libCategoryLayout) []libLeftover {
-	keep := layout.knownTops()
+	keep := map[string]bool{}
 	for _, n := range libNames {
 		keep[n] = true
+	}
+	for dir := range layout {
+		top, _, _ := strings.Cut(dir, "/")
+		keep[top] = true
 	}
 	var out []libLeftover
 	for top, c := range counts {

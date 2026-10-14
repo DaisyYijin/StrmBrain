@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
+
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,34 +23,16 @@ import (
 // 以后整理的片子也吸进去。所以另存一份「其他媒体库目录」：loadLibCategoryLayout 把它当分类目录，
 // classifyMedia（读 classifyRules）不读它，整理永远不会往里放新片。
 //
-// 写法与分类规则的名字相同：库内相对路径、不带库名、可以多级。Lib 为空时每个库下的同名目录都认；
-// Lib 非空（2026-10-14 起）只对那个库生效，Dir 还可以为空 = 库根本身就是分类目录（liblayout.go）。
+// 写法与分类规则的名字相同：库内相对路径、不带库名、可以多级，每个库下的同名目录都认。
 // 和分类规则同名时以规则为准（类型也按规则），保存时就丢掉。
-//
-// 字段是向后兼容地加的：老版本读到新数据时忽略 lib / source / at，Dir 为空的条目被 libSubPath 丢掉
-// （少认），带 lib 的退化成对所有库生效（多库时可能多认）。都只影响「哪些算片目」，整理不读这张表。
 
-// libExtraDirsKey setting key：JSON 数组 [{dir, type, lib?, source?, at?}]
+// libExtraDirsKey setting key：JSON 数组 [{dir, type}]
 const libExtraDirsKey = "library_extra_dirs"
 
 // libExtraDir 一个其他媒体库目录。Type：movie / tv / auto（按片目里有没有集号判断，同「电影剧集同名分类」）
 type libExtraDir struct {
 	Dir  string `json:"dir"`
 	Type string `json:"type"`
-	// Lib 只对这个库（本地媒体树第一层的库目录名）生效；空 = 所有库
-	Lib string `json:"lib,omitempty"`
-	// Source 怎么来的：空 = 手动（老数据都是）；之后从 Emby / 整理记录的建议采纳的记 emby / record
-	Source string `json:"source,omitempty"`
-	// At 登记时间（RFC3339），给布局页看
-	At string `json:"at,omitempty"`
-}
-
-// source 条目来源，空记作手动
-func (d libExtraDir) source() string {
-	if d.Source == "" {
-		return layoutSrcManual
-	}
-	return d.Source
 }
 
 // layoutType layout 里存的类型：auto 记成空串，与同名分类的「按文件判断」同口径
@@ -74,36 +57,25 @@ func loadLibExtraDirs() []libExtraDir {
 	return out
 }
 
-// withExtraDirs 把其他媒体库目录并进分类目录表。规则为准：和规则同名的不动，
-// 限定库的条目也不许盖过规则（lookup 先查限定库的，放进去就等于盖过了）
+// withExtraDirs 把其他媒体库目录并进分类目录表。已经是分类目录的不动（规则为准）
 func (l libCategoryLayout) withExtraDirs(extras []libExtraDir) libCategoryLayout {
 	for _, d := range extras {
 		dir := libSubPath(d.Dir)
-		e := layoutEntry{Type: d.layoutType(), Source: d.source()}
-		if d.Lib == "" {
-			if dir == "" {
-				continue
-			}
-			if _, ok := l.all[dir]; !ok {
-				l.all[dir] = e
-			}
+		if dir == "" {
 			continue
 		}
-		if prev, ok := l.all[dir]; ok && prev.Source == layoutSrcRule {
+		if _, ok := l[dir]; ok {
 			continue
 		}
-		if l.libs[d.Lib] == nil {
-			l.libs[d.Lib] = map[string]layoutEntry{}
-		}
-		if _, ok := l.libs[d.Lib][dir]; !ok {
-			l.libs[d.Lib][dir] = e
-		}
+		l[dir] = d.layoutType()
 	}
 	return l
 }
 
-// splitExtraPath 反斜杠换正斜杠、去首尾斜杠与空段；带 . / .. 的拒收
-func splitExtraPath(dir string) ([]string, error) {
+// normExtraDir 规范化一个目录：反斜杠换正斜杠、去首尾斜杠与空段；带 . / .. 的拒收。
+// 第一段是库名时剥掉（用户常从对账或文件页抄带库名的路径；不剥的话 titleOf 按「不带库名」那一轮
+// 也能认出片目，但片目的库名就丢了，换算网盘路径会错）
+func normExtraDir(dir string, libs []string) (string, error) {
 	segs := strings.Split(strings.ReplaceAll(strings.TrimSpace(dir), `\`, "/"), "/")
 	parts := make([]string, 0, len(segs))
 	for _, s := range segs {
@@ -112,38 +84,9 @@ func splitExtraPath(dir string) ([]string, error) {
 		case "":
 			continue
 		case ".", "..":
-			return nil, fmt.Errorf("目录「%s」不能包含 . 或 ..", dir)
+			return "", fmt.Errorf("目录「%s」不能包含 . 或 ..", dir)
 		}
 		parts = append(parts, s)
-	}
-	return parts, nil
-}
-
-// normExtraLib 规范化限定的库名：只能是一段（本地媒体树第一层）；known 非空时必须是其中之一，防手误
-func normExtraLib(lib string, known []string) (string, error) {
-	parts, err := splitExtraPath(lib)
-	if err != nil {
-		return "", err
-	}
-	if len(parts) != 1 {
-		return "", fmt.Errorf("库目录名「%s」只能是一层目录名", lib)
-	}
-	if len(known) > 0 && !slices.Contains(known, parts[0]) {
-		return "", fmt.Errorf("认不出库目录「%s」（台账里没有这个库）", parts[0])
-	}
-	return parts[0], nil
-}
-
-// normExtraDir 规范化一个目录：反斜杠换正斜杠、去首尾斜杠与空段；带 . / .. 的拒收。
-// 不限定库时，第一段是库名就剥掉（用户常从对账或文件页抄带库名的路径；不剥的话 titleOf 按「不带库名」那一轮
-// 也能认出片目，但片目的库名就丢了，换算网盘路径会错）；限定了库的，dir 本来就是库内路径，可以为空（库根）
-func normExtraDir(dir, lib string, libs []string) (string, error) {
-	parts, err := splitExtraPath(dir)
-	if err != nil {
-		return "", err
-	}
-	if lib != "" {
-		return strings.Join(parts, "/"), nil
 	}
 	if len(parts) > 1 {
 		for _, lib := range libs {
@@ -159,18 +102,11 @@ func normExtraDir(dir, lib string, libs []string) (string, error) {
 	return strings.Join(parts, "/"), nil
 }
 
-// normExtraDirs 规范化整份清单：去重（同一个库 + 目录，后来的覆盖类型）、丢掉和分类规则同名的（skipped 说明原因）。
-// libs 用来剥掉不限定库的目录前面误带的库名；tops 是台账里实际有的库名，限定库时据此校验（空 = 不校验）
-func normExtraDirs(in []libExtraDir, rules libCategoryLayout, libs, tops []string) (out []libExtraDir, skipped []string, err error) {
+// normExtraDirs 规范化整份清单：去重（后来的覆盖类型）、丢掉和分类规则同名的（skipped 说明原因）
+func normExtraDirs(in []libExtraDir, rules libCategoryLayout, libs []string) (out []libExtraDir, skipped []string, err error) {
 	idx := map[string]int{}
 	for _, d := range in {
-		lib := ""
-		if strings.TrimSpace(d.Lib) != "" {
-			if lib, err = normExtraLib(d.Lib, tops); err != nil {
-				return nil, nil, err
-			}
-		}
-		dir, e := normExtraDir(d.Dir, lib, libs)
+		dir, e := normExtraDir(d.Dir, libs)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -178,39 +114,34 @@ func normExtraDirs(in []libExtraDir, rules libCategoryLayout, libs, tops []strin
 		if typ != "movie" && typ != "tv" {
 			typ = "auto"
 		}
-		if _, ok := rules.lookup("", dir); ok {
+		if _, ok := rules[dir]; ok {
 			skipped = append(skipped, fmt.Sprintf("「%s」已经是分类规则里的分类，不需要再加", dir))
 			continue
 		}
-		k := lib + "/" + dir // 库名不含 /，拼起来不会撞
-		if i, ok := idx[k]; ok {
+		if i, ok := idx[dir]; ok {
 			out[i].Type = typ
 			continue
 		}
-		idx[k] = len(out)
-		out = append(out, libExtraDir{Dir: dir, Type: typ, Lib: lib, Source: d.Source, At: d.At})
+		idx[dir] = len(out)
+		out = append(out, libExtraDir{Dir: dir, Type: typ})
 	}
 	return out, skipped, nil
 }
 
+// loadRuleLayout 只按分类规则算的分类目录表（不含其他媒体库目录）
+func loadRuleLayout() libCategoryLayout {
+	var rules []model.CategoryRule
+	if model.DB != nil {
+		model.DB.Where("media_type IN ?", []string{"movie", "tv"}).Find(&rules)
+	}
+	return buildLibCategoryLayout(rules)
+}
+
 // forgetLibLayoutCaches 分类目录变了（分类规则 / 其他媒体库目录）：台账聚合与海报墙快照都作废，
-// 否则改完要等半分钟才看得到；海报墙的 Emby 快照也按片目 key 归，一并标过期
+// 否则改完要等半分钟才看得到
 func forgetLibLayoutCaches() {
 	forgetLedgerTitles()
 	forgetLocalTitles()
-	staleLocalEmby()
-}
-
-// extraDirLibs 限定库的条目可以写哪些库名：台账里有的，加上已经登记着的。
-// 后者是为了库从台账里消失（移出配置、清理了残留）之后，追加别的条目时整份清单不至于因为旧条目校验不过而存不进去
-func extraDirLibs() []string {
-	out := ledgerTopNames()
-	for _, d := range loadLibExtraDirs() {
-		if d.Lib != "" && !slices.Contains(out, d.Lib) {
-			out = append(out, d.Lib)
-		}
-	}
-	return out
 }
 
 // saveLibExtraDirs 落盘并清缓存
@@ -229,7 +160,7 @@ func (h *Handler) saveLibExtraDirs(dirs []libExtraDir) error {
 // addLibExtraDirs 往现有清单里追加（对账一键加入、删分类规则时保留都走它）
 func (h *Handler) addLibExtraDirs(add []libExtraDir) (out []libExtraDir, skipped []string, err error) {
 	all := append(append([]libExtraDir{}, loadLibExtraDirs()...), add...)
-	out, skipped, err = normExtraDirs(all, loadRuleLayout(), ledgerLibNames(), extraDirLibs())
+	out, skipped, err = normExtraDirs(all, loadRuleLayout(), ledgerLibNames())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -257,7 +188,7 @@ func (h *Handler) SaveLibExtraDirs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	out, skipped, err := normExtraDirs(req.Dirs, loadRuleLayout(), ledgerLibNames(), extraDirLibs())
+	out, skipped, err := normExtraDirs(req.Dirs, loadRuleLayout(), ledgerLibNames())
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -309,14 +240,13 @@ func categoryDrops(oldLayout, newLayout libCategoryLayout, ledger map[string]*le
 	sort.Strings(keys)
 	for _, k := range keys {
 		e := ledger[k]
-		if _, still := newLayout.lookup(e.LibName, e.Category); still {
+		if _, still := newLayout[e.Category]; still {
 			continue
 		}
-		old, was := oldLayout.lookup(e.LibName, e.Category)
+		mt, was := oldLayout[e.Category]
 		if !was {
 			continue // 其他媒体库目录里的片，不归这次规则修改管
 		}
-		mt := old.Type
 		d := byDir[e.Category]
 		if d == nil {
 			typ := mt
