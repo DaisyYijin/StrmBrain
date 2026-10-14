@@ -114,8 +114,15 @@ export interface Re0BrowserState {
   error?: string
   reason?: string
 }
+/** 正在做的网页操作走到哪一步 */
+export interface Re0OpState {
+  what: string
+  step: string
+  /** 开始时间（unix 秒） */
+  since: number
+}
 export const re0Browser = () =>
-  http.get<{ browser: Re0BrowserState; running: boolean; channel: string }>('/re0/browser')
+  http.get<{ browser: Re0BrowserState; running: boolean; channel: string; op?: Re0OpState }>('/re0/browser')
 export const re0BrowserDownload = (force = false) =>
   http.post<{ message: string; browser: Re0BrowserState }>('/re0/browser/download', { force })
 export interface Re0Checkin {

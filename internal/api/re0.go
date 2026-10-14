@@ -664,7 +664,7 @@ func (h *Handler) Re0Check(c *gin.Context) {
 		return
 	}
 	if cfg.ClientSecret == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "尚未配置应用 Secret"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "还没有配置 RE0：请填写账号密码并保存（OpenAPI 已停止申请）"})
 		return
 	}
 	out := gin.H{"app_ok": false, "authorized": false}
@@ -672,14 +672,17 @@ func (h *Handler) Re0Check(c *gin.Context) {
 		env, status, err := re0DoOnce(cfg, http.MethodGet, "/api/open/ping", nil, nil)
 		switch {
 		case err != nil:
-			c.JSON(http.StatusBadGateway, gin.H{"error": "应用校验失败: " + err.Error()})
+			c.JSON(http.StatusBadGateway, gin.H{"error": "连不上 RE0：" + err.Error()})
 		case env.Success || env.Code == "OPENAPI_USER_REQUIRED" || env.Code == "INVALID_OPENAPI_USER_TOKEN":
 			out["app_ok"] = true
 			out["message"] = "应用 Secret 有效，尚未授权账号"
 			c.JSON(http.StatusOK, out)
 		default:
+			// 只配了 OpenAPI 应用、没授权也没填账号密码：站方错误码对用户没意义，说人话、指向网页登录
 			e := &re0Err{Code: env.Code, Message: env.Message, Description: env.Description, Status: status}
-			c.JSON(http.StatusBadGateway, gin.H{"error": "应用校验失败: " + e.Error()})
+			log.Printf("[RE0] ○ 检查状态：OpenAPI 应用校验失败 %v", e)
+			why := firstNonEmpty(re0ErrHint(env.Code, status), env.Description, env.Message, "应用不可用")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "OpenAPI 应用不可用（" + why + "）。RE0 已停止开放 OpenAPI，请改填账号密码走网页登录"})
 		}
 		return
 	}

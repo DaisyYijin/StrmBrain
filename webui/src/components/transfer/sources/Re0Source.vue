@@ -9,7 +9,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
 import { resourcesApi } from '@/api'
-import type { Re0BrowserState, Re0CheckResult, Re0Checkin } from '@/api/resources'
+import type { Re0BrowserState, Re0CheckResult, Re0Checkin, Re0OpState } from '@/api/resources'
 import { plainProps } from '@/utils/autofill'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { copyText } from '@/utils/clipboard'
@@ -44,6 +44,39 @@ const showOpenapi = ref(false)
 const browser = ref<Re0BrowserState | null>(null)
 const browserBusy = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | undefined
+
+// 「检查状态」「立即签到」要开浏览器、过验证、登录，可能要一两分钟：等的时候每秒读一次后端走到哪一步
+const op = ref<Re0OpState | null>(null)
+const opNow = ref(Date.now())
+let opTimer: ReturnType<typeof setInterval> | undefined
+const opText = computed(() => {
+  if (!op.value) return '等待开始…'
+  const secs = Math.max(0, Math.round(opNow.value / 1000 - op.value.since))
+  return `${op.value.step}（${op.value.what}，已用 ${secs} 秒）`
+})
+
+function startOpPoll() {
+  stopOpPoll()
+  op.value = null
+  const tick = async () => {
+    opNow.value = Date.now()
+    try {
+      const d = await resourcesApi.re0Browser()
+      op.value = d.op ?? op.value
+      browser.value = d.browser
+    } catch {
+      // 读不到进度不影响操作本身
+    }
+  }
+  void tick()
+  opTimer = setInterval(tick, 1000)
+}
+
+function stopOpPoll() {
+  clearInterval(opTimer)
+  opTimer = undefined
+  op.value = null
+}
 
 const downloading = computed(() => ['downloading', 'verifying', 'extracting'].includes(browser.value?.state ?? ''))
 const pct = computed(() => {
@@ -95,6 +128,7 @@ async function load() {
     authorizedAs.value = d.authorized_as ?? ''
     missingScopes.value = d.missing_scopes ?? []
     showOpenapi.value = !!(d.client_id || d.authorized)
+    savedForm = JSON.stringify(form.value)
   } catch {
     // 首次使用尚无配置
   }
@@ -162,12 +196,14 @@ async function toggleCheckin(on: boolean) {
 
 async function runCheckin() {
   checkinRunning.value = true
+  startOpPoll()
   try {
     const d = await resourcesApi.re0RunCheckin()
     message.success(d.message)
   } catch (e) {
     toastError(e, '签到失败')
   } finally {
+    stopOpPoll()
     checkinRunning.value = false
     await loadCheckin()
   }
@@ -177,6 +213,7 @@ async function save() {
   saving.value = true
   try {
     const d = await resourcesApi.re0SaveConfig(form.value)
+    savedForm = JSON.stringify(form.value)
     message.success(d?.message || '保存成功')
     emit('changed')
     await load()
@@ -187,9 +224,24 @@ async function save() {
   }
 }
 
+// 上次保存 / 读到的表单：「检查状态」查的是后端已保存的配置，改了没保存就先存，免得查的是旧配置
+let savedForm = ''
+
 async function check() {
   checking.value = true
   try {
+    if (JSON.stringify(form.value) !== savedForm) {
+      if (!form.value.username.trim() && !form.value.client_id.trim()) {
+        message.warning('请先填写 RE0 账号和密码')
+        return
+      }
+      await resourcesApi.re0SaveConfig(form.value)
+      savedForm = JSON.stringify(form.value)
+      message.info('配置有改动，已先保存')
+      emit('changed')
+      void loadBrowser()
+    }
+    if (channel.value !== 'openapi') startOpPoll()
     const d = await resourcesApi.re0Check()
     authorized.value = d.authorized
     account.value = d.authorized && d.channel !== 'web' ? d : null
@@ -203,6 +255,7 @@ async function check() {
   } catch (e) {
     toastError(e, '检查失败')
   } finally {
+    stopOpPoll()
     checking.value = false
   }
 }
@@ -239,7 +292,10 @@ async function copyEgress() {
 }
 
 onMounted(load)
-onBeforeUnmount(() => clearTimeout(pollTimer))
+onBeforeUnmount(() => {
+  clearTimeout(pollTimer)
+  stopOpPoll()
+})
 </script>
 
 <template>
@@ -291,7 +347,12 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
         重新下载
       </HButton>
     </div>
-    <div v-if="downloading && browser && browser.total > 0" class="bar"><span :style="{ width: `${pct}%` }" /></div>
+    <div v-if="downloading && browser" class="bar" :class="{ busy: browser.state !== 'downloading' || !browser.total }">
+      <span :style="{ width: browser.state === 'downloading' && browser.total > 0 ? `${pct}%` : '30%' }" />
+    </div>
+    <div v-if="downloading && browser" class="hint dl">
+      {{ browser.source ? `来源：${browser.source}` : '' }}{{ browser.reason ? `　触发：${browser.reason}` : '' }}
+    </div>
     <div v-if="browser?.state === 'error' && browser.error" class="hint err">{{ browser.error }}</div>
     <div v-if="browser?.state === 'unsupported'" class="hint err">{{ browser.error }}</div>
   </FieldRow>
@@ -304,6 +365,7 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
       <HButton variant="tertiary" :loading="checking" @click="check">检查状态</HButton>
       <span class="hint">当前通道：{{ channel === 'openapi' ? 'OpenAPI' : channel === 'web' ? '网页登录' : '未配置' }}</span>
     </div>
+    <div v-if="checking && channel !== 'openapi'" class="op">⏳ {{ opText }}</div>
   </FieldRow>
 
   <FieldRow
@@ -321,6 +383,7 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
       <span v-if="checkin?.blocked" class="hint">{{ checkin.blocked }}</span>
       <span v-else-if="checkin?.done_today" class="hint">今天已签到</span>
     </div>
+    <div v-if="checkinRunning" class="op">⏳ {{ opText }}</div>
     <div v-if="checkin?.last_result" class="hint last">
       上次（{{ checkin.last_result_at }}）：{{ checkin.last_result }}
     </div>
@@ -444,6 +507,25 @@ onBeforeUnmount(() => clearTimeout(pollTimer))
   height: 100%;
   background: var(--accent);
   transition: width 300ms ease;
+}
+.bar.busy > span {
+  animation: re0-busy 1.2s ease-in-out infinite;
+}
+@keyframes re0-busy {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+.op {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.dl {
+  margin-top: 4px;
 }
 .account {
   display: flex;

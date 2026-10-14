@@ -713,7 +713,11 @@ func (h *Handler) Re0BrowserStatus(c *gin.Context) {
 	re0BrMu.Lock()
 	running := re0Br != nil
 	re0BrMu.Unlock()
-	c.JSON(http.StatusOK, gin.H{"browser": cloakSnapshot(), "running": running, "channel": re0Channel(loadRe0Cfg())})
+	out := gin.H{"browser": cloakSnapshot(), "running": running, "channel": re0Channel(loadRe0Cfg())}
+	if op := re0OpSnapshot(); op != nil {
+		out["op"] = op // 正在做的网页操作走到哪一步
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // Re0BrowserDownload POST /re0/browser/download {force} —— 本地没有就下载；force=true 删掉本地的重下

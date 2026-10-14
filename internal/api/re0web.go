@@ -147,6 +147,7 @@ func re0StartBrowser() (*rod.Browser, error) {
 		}
 	}
 	start := time.Now()
+	re0Step("启动浏览器")
 	log.Printf("[RE0浏览器] ▶ 启动 CloakBrowser %s（%s，指纹种子 %s，用户目录 %s）", cloakVersion(), proxyNote, cloakSeed(), cloakProfileDir())
 	u, err := l.Launch()
 	if err != nil {
@@ -228,6 +229,37 @@ func re0ResetProfile() {
 
 // ==================== 一次页面操作 ====================
 
+// re0OpState 正在做的网页操作走到哪一步（界面「检查状态」「立即签到」等着的时候每秒读一次，GET /re0/browser 的 op）
+type re0OpState struct {
+	What  string `json:"what"`
+	Step  string `json:"step"`
+	Since int64  `json:"since"` // 这次操作开始的时间（unix 秒）
+}
+
+var (
+	re0OpStMu sync.Mutex
+	re0OpSt   *re0OpState
+)
+
+// re0Step 记下当前步骤（没有进行中的操作时忽略）
+func re0Step(format string, args ...any) {
+	re0OpStMu.Lock()
+	if re0OpSt != nil {
+		re0OpSt.Step = fmt.Sprintf(format, args...)
+	}
+	re0OpStMu.Unlock()
+}
+
+func re0OpSnapshot() *re0OpState {
+	re0OpStMu.Lock()
+	defer re0OpStMu.Unlock()
+	if re0OpSt == nil {
+		return nil
+	}
+	c := *re0OpSt
+	return &c
+}
+
 // re0Web 一次网页操作：打开 target（相对站点根的路径），被跳到登录页就登录再回来，然后交给 fn。
 // what 只用于日志
 func re0Web(what, target string, timeout time.Duration, fn func(p *rod.Page) error) error {
@@ -238,9 +270,22 @@ func re0Web(what, target string, timeout time.Duration, fn func(p *rod.Page) err
 	if why := re0BrowserBlocked("RE0 " + what + "时发现浏览器没装"); why != "" {
 		return errors.New(why)
 	}
-	re0OpMu.Lock()
+	if !re0OpMu.TryLock() {
+		if cur := re0OpSnapshot(); cur != nil {
+			log.Printf("[RE0网页] ○ %s 排队：等「%s」做完", what, cur.What)
+		}
+		re0OpMu.Lock()
+	}
 	defer re0OpMu.Unlock()
 	start := time.Now()
+	re0OpStMu.Lock()
+	re0OpSt = &re0OpState{What: what, Step: "准备", Since: start.Unix()}
+	re0OpStMu.Unlock()
+	defer func() {
+		re0OpStMu.Lock()
+		re0OpSt = nil
+		re0OpStMu.Unlock()
+	}()
 	log.Printf("[RE0网页] ▶ %s：%s", what, target)
 	err := re0WebRun(cfg, what, target, timeout, fn)
 	re0BrMu.Lock()
@@ -282,6 +327,7 @@ func re0WebRun(cfg *re0Cfg, what, target string, timeout time.Duration, fn func(
 		return err
 	}
 	// 没登录时站点是在页面加载完之后才在前端跳去 /login 的：等一下，看最后落在登录页还是出现了用户菜单
+	re0Step("确认登录状态")
 	if re0AwaitAuth(p) == "login" {
 		log.Printf("[RE0网页] ○ 被跳到登录页，登录账号 %s", re0MaskUser(cfg.Username))
 		if err := re0Login(p, cfg); err != nil {
@@ -384,6 +430,9 @@ func re0OnLogin(p *rod.Page) bool {
 // re0Goto 打开页面并等过 Cloudflare 验证
 func re0Goto(p *rod.Page, u string) error {
 	start := time.Now()
+	if pu, err := url.Parse(u); err == nil {
+		re0Step("打开页面 %s", pu.Path)
+	}
 	if err := p.Navigate(u); err != nil {
 		return fmt.Errorf("打开 %s 失败: %v", u, err)
 	}
@@ -427,11 +476,13 @@ func re0WaitCloudflare(p *rod.Page) error {
 		if !detected {
 			detected = true
 			log.Printf("[RE0网页] ○ 遇到 Cloudflare 验证（%s），等它自动通过或点验证框，最长 90 秒", re0URL(p))
+			re0Step("过 Cloudflare 验证（最长 90 秒）")
 		}
 		if clicks < 3 && time.Now().After(nextClick) {
 			if re0ClickCFCheckbox(p) {
 				clicks++
 				log.Printf("[RE0网页]   已点 Cloudflare 验证框（第 %d 次）", clicks)
+				re0Step("过 Cloudflare 验证：已点验证框（第 %d 次），等结果", clicks)
 			}
 			nextClick = time.Now().Add(5 * time.Second)
 		}
@@ -621,6 +672,7 @@ const re0LoginHintJS = `() => {
 
 func re0Login(p *rod.Page, cfg *re0Cfg) error {
 	start := time.Now()
+	re0Step("登录：填写账号密码")
 	user, err := re0WaitVisible(p, re0UserSel, 15*time.Second)
 	if err != nil {
 		return fmt.Errorf("登录页上没找到账号输入框（%s）", re0URL(p))
@@ -678,6 +730,7 @@ func re0Login(p *rod.Page, cfg *re0Cfg) error {
 		_ = pass.Type(input.Enter)
 	}
 	log.Printf("[RE0网页]   已提交登录表单，等离开登录页")
+	re0Step("登录：已提交，等站点跳转")
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if !re0OnLogin(p) {
@@ -804,9 +857,11 @@ func parseRe0CheckinToast(text, status string) (ok bool, msg string, done bool) 
 // re0WebCheckin 网页签到（每日签到，不赌）
 func re0WebCheckin() (ok bool, msg string, err error) {
 	err = re0Web("每日签到", "/", 4*time.Minute, func(p *rod.Page) error {
+		re0Step("关闭首页弹窗")
 		if err := re0DismissDialogs(p); err != nil {
 			return err
 		}
+		re0Step("打开用户菜单找签到按钮")
 		menu, err := re0WaitVisible(p, re0UserMenuSel, 15*time.Second)
 		if err != nil {
 			return fmt.Errorf("没找到用户菜单，页面可能改版了")
@@ -826,6 +881,7 @@ func re0WebCheckin() (ok bool, msg string, err error) {
 			return fmt.Errorf("点签到按钮失败: %v", err)
 		}
 		log.Printf("[RE0网页]   已点每日签到，等结果提示")
+		re0Step("已点每日签到，等结果")
 		deadline := time.Now().Add(60 * time.Second)
 		for time.Now().Before(deadline) {
 			ts := re0ReadToasts(p)
@@ -962,6 +1018,7 @@ func re0WaitPrefSaved(p *rod.Page) error {
 // re0WebCheck 测一下能不能登录（打开首页，需要就登录）
 func re0WebCheck() error {
 	return re0Web("检查登录", "/", 3*time.Minute, func(p *rod.Page) error {
+		re0Step("确认已登录")
 		if _, err := re0WaitVisible(p, re0UserMenuSel, 20*time.Second); err != nil {
 			return fmt.Errorf("登录后首页没出现用户菜单（%s），可能没登录成功或页面改版了", re0URL(p))
 		}
@@ -1001,6 +1058,7 @@ func re0WebResources(mediaType string, tmdbID int) ([]re0Resource, error) {
 			}
 		})
 		go wait()
+		re0Step("读取资源列表")
 		var lastChunks string
 		deadline := time.Now().Add(20 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1284,6 +1342,7 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 	}
 	submitted := false
 	err = re0Web("解锁 "+truncateStr(slug, 16), "/resource/115/"+slug, 3*time.Minute, func(p *rod.Page) error {
+		re0Step("找分享链接 / 解锁按钮")
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
 			if re0OnLogin(p) {
@@ -1312,6 +1371,7 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 								submitted = true
 								deadline = time.Now().Add(30 * time.Second)
 								log.Printf("[RE0网页]   已点「确认解锁」（花积分），等分享链接")
+								re0Step("已确认解锁，等分享链接")
 							}
 						}
 					}
