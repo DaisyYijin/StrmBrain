@@ -18,6 +18,8 @@ import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import {
+  CATEGORY_PRESETS,
+  type CategoryPreset,
   COUNTRIES,
   LANGUAGES,
   MOVIE_GENRES,
@@ -83,44 +85,6 @@ const countryOptions: MultiGroup<string>[] = COUNTRIES.map(c => ({
   children: c.items.map(([v, l]) => ({ label: `${l}（${v}）`, value: v })),
 }))
 const langOptions: MultiOption<string>[] = LANGUAGES.map(([v, l]) => ({ label: `${l}（${v}）`, value: v }))
-
-interface CategoryPreset {
-  label: string
-  media: 'movie' | 'tv'
-  name: string
-  genres?: string[]
-  countries?: string[]
-  langs?: string[]
-  regex?: string
-}
-
-/**
- * 演唱会在 TMDB 上没有专门的类型，只能认片名。
- * 别加 genre_ids 10402：正则与其他条件是「或」，加上就把音乐传记片、歌舞片一起收进来；
- * 剧集则连「音乐」类型都没有。
- */
-const CONCERT_REGEX = '(?i)演唱会|音乐会|巡演|concert|live tour'
-
-/** 常见配方：点一下把表单填好，再按自己的库改名字 */
-const CATEGORY_PRESETS: CategoryPreset[] = [
-  { label: '动画电影', media: 'movie', name: '电影/动画电影', genres: ['16'] },
-  { label: '华语电影', media: 'movie', name: '电影/华语电影', langs: ['zh', 'cn'] },
-  { label: '纪录片', media: 'movie', name: '电影/纪录片', genres: ['99'] },
-  { label: '演唱会', media: 'movie', name: '电影/演唱会', regex: CONCERT_REGEX },
-  { label: '外语电影', media: 'movie', name: '电影/外语电影' },
-  { label: '全放电影/（兜底）', media: 'movie', name: '电影' },
-  { label: '国漫', media: 'tv', name: '电视剧/国漫', genres: ['16'], countries: ['CN', 'TW', 'HK'] },
-  { label: '日番', media: 'tv', name: '电视剧/日番', genres: ['16'], countries: ['JP'] },
-  { label: '国产剧', media: 'tv', name: '电视剧/国产剧', countries: ['CN', 'TW', 'HK'] },
-  { label: '欧美剧', media: 'tv', name: '电视剧/欧美剧', countries: ['US', 'GB', 'FR', 'DE', 'ES', 'IT', 'NL', 'PT', 'RU'] },
-  { label: '日韩剧', media: 'tv', name: '电视剧/日韩剧', countries: ['JP', 'KR', 'KP', 'TH', 'IN', 'SG'] },
-  { label: '纪录剧集', media: 'tv', name: '电视剧/纪录片', genres: ['99'] },
-  { label: '儿童', media: 'tv', name: '电视剧/儿童', genres: ['10762'] },
-  { label: '全放剧集/（兜底）', media: 'tv', name: '剧集' },
-  { label: '动漫番剧（平铺）', media: 'tv', name: '动漫番剧', genres: ['16'] },
-  { label: '综艺（平铺）', media: 'tv', name: '综艺', genres: ['10764', '10767'] },
-  { label: '演唱会', media: 'tv', name: '电视剧/演唱会', regex: CONCERT_REGEX },
-]
 
 const catPresets = computed(() => CATEGORY_PRESETS.filter(p => p.media === media.value))
 

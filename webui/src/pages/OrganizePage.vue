@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HSpinner from '@/components/hero/HSpinner.vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import BasicTab from './organize/BasicTab.vue'
 import ScrapeSummary from './organize/ScrapeSummary.vue'
@@ -7,7 +11,7 @@ import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
-import { organizeApi } from '@/api'
+import { libraryApi, organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
 import ExtraDirsCard from '@/components/organize/ExtraDirsCard.vue'
 import CategoryDropDialog from '@/components/organize/CategoryDropDialog.vue'
@@ -16,6 +20,30 @@ import type { ExtraDir } from '@/api/library'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('basic')
+const router = useRouter()
+
+// 媒体库目录表启用后（docs/115-station-notes/LIBRARY-DIRS-PLAN.md），分类规则与其他媒体库目录都并进了
+// 「账号与媒体库 → 媒体库目录」，这个页签只留一句说明 + 跳转（保留页签：收藏的 ?tab=category 不 404）。
+// 没启用（还没配媒体库、115 暂时读不出库名）时照旧显示老的编辑器
+const dirsActive = ref<boolean | null>(null)
+const dirsReason = ref('')
+watch(
+  tab,
+  async (v) => {
+    if (v !== 'category' || dirsActive.value === true) return
+    try {
+      const d = await libraryApi.getLibraryDirs()
+      dirsActive.value = d.active
+      dirsReason.value = d.reason ?? ''
+    } catch {
+      dirsActive.value = false
+    }
+  },
+  { immediate: true },
+)
+function goDirs() {
+  void router.push({ name: 'accounts', hash: '#library-dirs' })
+}
 // 整理记录已搬到任务中心（/tasks?tab=records）：这一页只剩配置。
 // 旧地址 /organize?tab=records 由路由重定向过去，见 router/index.ts
 
@@ -72,7 +100,14 @@ const tabs = computed(() => [
       <RecognizeTab v-else-if="tab === 'recognize'" />
       <AiTab v-else-if="tab === 'ai'" />
       <RenameTab v-else-if="tab === 'rename'" />
+      <div v-else-if="tab === 'category' && dirsActive === null" class="loading"><HSpinner size="sm" /> 读取中…</div>
+      <HAlert v-else-if="tab === 'category' && dirsActive" status="default" title="二级分类已并进「媒体库目录」">
+        分类规则和其他媒体库目录合成了一张表：每个目录写清适用的类型、地区等条件，从上往下的顺序就是优先级。
+        原来的规则已经原样迁过去。
+        <template #actions><HButton size="sm" variant="primary" @click="goDirs">去「账号与媒体库 → 媒体库目录」</HButton></template>
+      </HAlert>
       <template v-else-if="tab === 'category'">
+        <HAlert v-if="dirsReason" status="warning" class="extra">媒体库目录表还没启用：{{ dirsReason }}。暂时继续在这里编辑分类规则。</HAlert>
         <YamlRuleTab
           key="category"
           kind="category"
