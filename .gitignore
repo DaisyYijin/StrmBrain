@@ -52,3 +52,6 @@ StrmAssistant-main/
 
 # claude
 .claude
+
+# 本地现场测试（要真账号，不入库）
+internal/api/zz_*_test.go
