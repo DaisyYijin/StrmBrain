@@ -109,10 +109,6 @@ export interface LocalTitleDir {
   /** 含库名前缀，如 Movies/电影 */
   path: string
   count: number
-  /** 分类目录（片目直接在它下面） */
-  category?: boolean
-  /** 分类目录下片目的类型，电影剧集都有时为空 */
-  type?: 'movie' | 'tv' | ''
 }
 
 export type LocalTitleSort = 'added_desc' | 'title' | 'year_desc' | 'year_asc'
@@ -396,12 +392,6 @@ export interface ReconDir {
   extra?: string
   /** 平铺：电影视频直接放在这个目录里 */
   flat?: boolean
-  /** 平铺还是多版本认不准：按「一部片」归到了上一层 */
-  unsure?: boolean
-  unsure_why?: string
-  /** 按库登记的写法：库名 + 库内路径（rel 为空 = 库根） */
-  lib?: string
-  rel?: string
   count: number
   samples: string[]
 }

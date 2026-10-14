@@ -282,10 +282,9 @@ func TestLocalTitleDirFilter(t *testing.T) {
 	}
 
 	dirs := localTitleDirs(all)
-	// 片目的上一层是分类目录，带上类型；多级分类的上一层、库名不是
 	want := []localTitleDir{
-		{"Movies", 2, false, ""}, {"Movies/华语电影", 1, true, "movie"}, {"Movies/电影", 1, true, "movie"},
-		{"TV", 3, false, ""}, {"TV/电视剧", 2, false, ""}, {"TV/电视剧/国产剧", 1, true, "tv"}, {"TV/电视剧/日剧", 1, true, "tv"}, {"TV/电视剧集", 1, true, "tv"},
+		{"Movies", 2}, {"Movies/华语电影", 1}, {"Movies/电影", 1},
+		{"TV", 3}, {"TV/电视剧", 2}, {"TV/电视剧/国产剧", 1}, {"TV/电视剧/日剧", 1}, {"TV/电视剧集", 1},
 	}
 	if !reflect.DeepEqual(dirs, want) {
 		t.Fatalf("dirs = %+v", dirs)

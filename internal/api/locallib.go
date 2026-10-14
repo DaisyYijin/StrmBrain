@@ -423,9 +423,6 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 type localTitleDir struct {
 	Path  string `json:"path"`
 	Count int    `json:"count"`
-	// Category 是分类目录（片目直接在它下面）；Type 是它下面片目的类型，电影剧集都有时为空
-	Category bool   `json:"category,omitempty"`
-	Type     string `json:"type,omitempty"`
 }
 
 // localTitleDirs 海报墙的目录清单：每个片目所在目录（库名/分类，平铺片目就是它所在的分类目录）
@@ -433,23 +430,14 @@ type localTitleDir struct {
 // 数的是全部片目，不套用其余筛选 —— 目录是用来缩小范围的，数字跟着别的筛选变反而看不出目录有多大
 func localTitleDirs(all []localTitle) []localTitleDir {
 	count := map[string]int{}
-	// 片目的上一层就是它的分类目录（平铺片目的 key 是 STRM，上一层同样是分类目录）
-	catType := map[string]string{}
 	for _, t := range all {
-		cat := path.Dir(t.Key)
-		if prev, seen := catType[cat]; !seen {
-			catType[cat] = t.MediaType
-		} else if prev != t.MediaType {
-			catType[cat] = ""
-		}
-		for d := cat; d != "." && d != "/" && d != ""; d = path.Dir(d) {
+		for d := path.Dir(t.Key); d != "." && d != "/" && d != ""; d = path.Dir(d) {
 			count[d]++
 		}
 	}
 	out := make([]localTitleDir, 0, len(count))
 	for p, n := range count {
-		typ, isCat := catType[p]
-		out = append(out, localTitleDir{Path: p, Count: n, Category: isCat, Type: typ})
+		out = append(out, localTitleDir{Path: p, Count: n})
 	}
 	// 按段比：直接比字符串的话「电视剧 2」（空格比 / 小）会插到「电视剧」和它的子目录中间
 	sort.Slice(out, func(i, j int) bool {

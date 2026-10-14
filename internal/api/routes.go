@@ -281,7 +281,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/library/extra-dirs", h.SaveLibExtraDirs)
 		protected.POST("/library/extra-dirs/add", h.AddLibExtraDirs)
 		// 媒体库布局：由 Emby 条目结构推出该登记的分类目录，预览后采纳（liblayoutsuggest.go）
-		protected.GET("/library/layout", h.LibraryLayout)
 		protected.GET("/library/layout/suggest", h.LibraryLayoutSuggest)
 		protected.POST("/library/layout/preview", h.LibraryLayoutPreview)
 		protected.POST("/library/layout/adopt", h.LibraryLayoutAdopt)
