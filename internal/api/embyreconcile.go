@@ -31,8 +31,6 @@ type embyReconItem struct {
 	Type           string `json:"Type"`
 	Path           string `json:"Path"`
 	ProductionYear int    `json:"ProductionYear"`
-	// ProviderIds 判平铺 / 多版本用（judgeMovieDir：TMDB 编号比片名可靠）
-	ProviderIds map[string]string `json:"ProviderIds"`
 }
 
 // embyReconEntry 分桶里的一条
@@ -52,14 +50,7 @@ type embyReconDir struct {
 	// 片目直接放在库根下时为空，加不进去
 	Extra string `json:"extra,omitempty"`
 	// Flat 平铺：电影视频直接放在这个目录里（一个视频一部），Dir 就是放视频的目录
-	Flat bool `json:"flat,omitempty"`
-	// Unsure 平铺还是多版本认不准（judgeMovieDir）：按「一部片」归到了上一层，UnsureWhy 说原因
-	Unsure    bool   `json:"unsure,omitempty"`
-	UnsureWhy string `json:"unsure_why,omitempty"`
-	// Lib / Rel 登记成分类目录时的写法：库名 + 库内路径（Rel 为空 = 库根，只能按库登记）。
-	// Extra 是老写法（不限定库），库根时为空
-	Lib     string   `json:"lib,omitempty"`
-	Rel     string   `json:"rel"`
+	Flat    bool     `json:"flat,omitempty"`
 	Count   int      `json:"count"`
 	Samples []string `json:"samples"`
 }
@@ -142,7 +133,7 @@ func reconcileEmby(items []embyReconItem, ledger map[string]*ledgerTitleEntry, l
 	hits := map[string]map[string]*hit{"Movie": {}, "Series": {}} // 类型 → 片目 key → 条目
 	// 分类规则外的条目先攒着：要等全部看完才知道哪些电影目录是平铺的
 	type uncat struct {
-		typ, titleDir, name, tmdb string
+		typ, titleDir, name string
 	}
 	var uncats []uncat
 	for _, it := range items {
@@ -194,31 +185,24 @@ func reconcileEmby(items []embyReconItem, ledger map[string]*ledgerTitleEntry, l
 		if !dir {
 			titleDir = path.Dir(rel)
 		}
-		uncats = append(uncats, uncat{typ: it.Type, titleDir: titleDir, name: it.Name, tmdb: providerID(it.ProviderIds, "Tmdb")})
+		uncats = append(uncats, uncat{typ: it.Type, titleDir: titleDir, name: it.Name})
 	}
 
-	// 一个目录里有几个电影条目：平铺（视频直接放在分类目录里，这个目录本身就是该加的分类目录）
-	// 还是同一部的多版本（Emby 一个版本一个 Movie 条目），按「标题目录的上一层」算。
-	// 判定与布局建议同一个函数（liblayoutsuggest.go 的 judgeMovieDir：先比 TMDB 编号再比片名）
-	movieIn := map[string][]movieDirItem{}
+	// 一个目录里有两部以上不同名的电影 = 平铺（视频直接放在分类目录里），这个目录本身就是该加的分类目录；
+	// 同名的几个是多版本（Emby 一个版本一个 Movie 条目），仍按「标题目录的上一层」算
+	movieNames := map[string]map[string]bool{}
 	for _, u := range uncats {
-		if u.typ == "Movie" {
-			movieIn[u.titleDir] = append(movieIn[u.titleDir], movieDirItem{Name: u.name, Tmdb: u.tmdb})
+		if u.typ != "Movie" {
+			continue
 		}
-	}
-	type dirVerdict struct {
-		v   movieDirVerdict
-		why string
-	}
-	verdicts := map[string]dirVerdict{}
-	for d, its := range movieIn {
-		v, why := judgeMovieDir(its, nil)
-		verdicts[d] = dirVerdict{v, why}
+		if movieNames[u.titleDir] == nil {
+			movieNames[u.titleDir] = map[string]bool{}
+		}
+		movieNames[u.titleDir][u.name] = true
 	}
 	uncatDirs := map[string]map[string]*embyReconDir{"Movie": {}, "Series": {}}
 	for _, u := range uncats {
-		vd := verdicts[u.titleDir]
-		flat := u.typ == "Movie" && vd.v == verdictFlat
+		flat := u.typ == "Movie" && len(movieNames[u.titleDir]) > 1
 		// 归到「标题目录的上一层」：那一层就是该加进分类规则的目录
 		parent, sample := path.Dir(u.titleDir), path.Base(u.titleDir)
 		if flat {
@@ -233,13 +217,7 @@ func reconcileEmby(items []embyReconItem, ledger map[string]*ledgerTitleEntry, l
 			if _, rest, ok := strings.Cut(parent, "/"); ok {
 				d.Extra = rest
 			}
-			if parent != "" {
-				d.Lib, d.Rel = splitLibRel(parent)
-			}
 			uncatDirs[u.typ][parent] = d
-		}
-		if u.typ == "Movie" && vd.v == verdictUnsure && !d.Unsure {
-			d.Unsure, d.UnsureWhy = true, vd.why
 		}
 		d.Count++
 		if len(d.Samples) < 5 {
@@ -304,7 +282,7 @@ func fetchEmbyReconItems(cfg embyRefreshCfg) ([]embyReconItem, error) {
 		q := url.Values{
 			"Recursive":              {"true"},
 			"IncludeItemTypes":       {"Movie,Series"},
-			"Fields":                 {"Path,ProductionYear,ProviderIds"},
+			"Fields":                 {"Path,ProductionYear"},
 			"SortBy":                 {"DateCreated,SortName"},
 			"SortOrder":              {"Ascending"},
 			"StartIndex":             {strconv.Itoa(start)},
