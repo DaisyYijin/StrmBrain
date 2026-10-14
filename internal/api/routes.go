@@ -280,6 +280,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/library/extra-dirs", h.GetLibExtraDirs)
 		protected.POST("/library/extra-dirs", h.SaveLibExtraDirs)
 		protected.POST("/library/extra-dirs/add", h.AddLibExtraDirs)
+		// 媒体库布局：由 Emby 条目结构推出该登记的分类目录，预览后采纳（liblayoutsuggest.go）
+		protected.GET("/library/layout/suggest", h.LibraryLayoutSuggest)
+		protected.POST("/library/layout/preview", h.LibraryLayoutPreview)
+		protected.POST("/library/layout/adopt", h.LibraryLayoutAdopt)
+		protected.POST("/library/layout/dismiss", h.LibraryLayoutDismiss)
 
 		// 版本号、更新检测（update.go，只提示不自更新）与日志级别
 		protected.GET("/version", func(c *gin.Context) {

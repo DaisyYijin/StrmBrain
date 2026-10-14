@@ -199,6 +199,7 @@ func forgetLibLayoutCaches() {
 	forgetLedgerTitles()
 	forgetLocalTitles()
 	staleLocalEmby()
+	forgetLayoutSuggest()
 }
 
 // extraDirLibs 限定库的条目可以写哪些库名：台账里有的，加上已经登记着的。
