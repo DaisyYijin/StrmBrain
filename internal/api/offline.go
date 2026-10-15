@@ -403,6 +403,9 @@ func (w *transferWatch) tick(h *Handler) {
 	if now.Before(w.pauseUntil) || now.Before(w.retryAfter) || transferJobActive(h.DB) {
 		return // 熔断 / 冷却中，或上一个还没跑完
 	}
+	if noOrganizeLibNow() {
+		return // 没有本站整理的库：整理线停着，转存目录里的东西本来就不会动，别每分钟去列一次、再一路计数到熔断
+	}
 	cid := h.shareFolderCid()
 	if cid == "" {
 		return

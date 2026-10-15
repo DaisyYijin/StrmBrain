@@ -110,6 +110,17 @@ export interface Dashboard {
   categories: CategoryCard[]
   sys: SysStat
   pending_events: number
+  /** 多个媒体库时各库的情况（台账片目数，零 115 请求）；只有一个库时为空 */
+  libs?: DashLib[]
+}
+
+/** 总览上的一个媒体库：由谁整理、刮不刮、台账里有几部（后端 dashboard.go 的 dashLibStats） */
+export interface DashLib {
+  name: string
+  mode: 'organize' | 'self'
+  scrape: 'auto' | 'manual' | 'off'
+  movies: number
+  tvs: number
 }
 
 /** POST /api/media-library/calibrate —— 见 internal/api/medialib.go */

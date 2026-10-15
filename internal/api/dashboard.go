@@ -643,6 +643,7 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 		"emby":    embyData,
 		"storage": h.pan115CapacityCached(),
 		"media":   media,
+		"libs":    dashLibStats(h.getSettingValue("full")),
 		"strm": gin.H{
 			"total": strmTotal, "orphan": strmOrphan,
 			"missing": strmMissing, "missing_sampled": len(dashRecentVideos),
@@ -657,4 +658,53 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 		"sys":            sys,
 		"pending_events": pendingEvents,
 	})
+}
+
+// dashLib 总览上的一个媒体库：由谁整理、刮不刮、台账里有几部（多库时才给，LIBRARY-ROLES-PLAN.md §5）
+type dashLib struct {
+	Name   string `json:"name"`
+	Mode   string `json:"mode"`   // organize / self
+	Scrape string `json:"scrape"` // auto / manual / off
+	Movies int    `json:"movies"`
+	TVs    int    `json:"tvs"`
+}
+
+// dashLibStats 各库的片目数按台账聚合（scanLedgerTitlesCached，零 115 请求）。
+// 只有一个库、或有库名字认不出时返回空：分不清哪部属于哪个库，不如不说
+func dashLibStats(fullRaw string) []dashLib {
+	src := libNameSources(fullRaw)
+	if len(src) < 2 {
+		return []dashLib{}
+	}
+	opts, legacy := loadLibOpts(), loadLegacyLibScrape()
+	out := make([]dashLib, 0, len(src))
+	idx := map[string]int{}
+	for _, s := range src {
+		name := s.libRootOf().Name
+		if name == "" {
+			return []dashLib{}
+		}
+		o := opts.of(s.Cid)
+		l := dashLib{Name: name, Mode: "organize", Scrape: o.Scrape}
+		if o.self() {
+			l.Mode = libModeSelf
+		}
+		if l.Scrape == "" {
+			l.Scrape = legacy
+		}
+		idx[name] = len(out)
+		out = append(out, l)
+	}
+	for _, t := range scanLedgerTitlesCached() {
+		i, ok := idx[t.LibName]
+		if !ok {
+			continue
+		}
+		if t.MediaType == "tv" {
+			out[i].TVs++
+		} else {
+			out[i].Movies++
+		}
+	}
+	return out
 }

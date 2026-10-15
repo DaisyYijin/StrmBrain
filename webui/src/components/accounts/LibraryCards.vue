@@ -84,18 +84,21 @@ function draftsFrom(v: LibrariesView): DraftLib[] {
     scrape: l.scrape || 'auto',
   }))
 }
+/** 「默认放这里」的库 cid（阶段 3：不一定是首个库；空 = 一个本站整理的库都没有） */
+const fallback = ref('')
 const serialize = (d: DraftLib[]) =>
   JSON.stringify(
-    d.map((x) => ({
+    [fallback.value, ...d.map((x) => ({
       cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null,
       mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape,
-    })),
+    }))],
   )
 const dirty = computed(() => serialize(drafts.value) !== snapshot)
 
 function apply(v: LibrariesView) {
   view.value = v
   drafts.value = draftsFrom(v)
+  fallback.value = v.libs.find((l) => l.default)?.cid ?? ''
   snapshot = serialize(drafts.value)
   for (const d of drafts.value) if (d.mode === 'self') void loadPreview(d)
 }
@@ -117,7 +120,13 @@ defineExpose({ reload: () => (dirty.value ? Promise.resolve() : load()) })
 
 /** 有附加库、或正在加第一个附加库：显示「默认放这里」、转存入口这些只在多库时有意义的东西 */
 const multi = computed(() => drafts.value.length > 1)
-const defaultName = computed(() => view.value?.libs[0]?.name || '默认库')
+const isDefault = (d: DraftLib) => !!d.cid && d.cid === fallback.value
+const defaultName = computed(() => {
+  const d = drafts.value.find(isDefault)
+  return d ? libLabel(d) : '默认库'
+})
+/** 一个本站整理的库都没有（新加还没选的不算）：整理线会停着 */
+const noOrganize = computed(() => drafts.value.length > 0 && !drafts.value.some((d) => d.mode === 'organize'))
 const stagingRoot = computed(() => view.value?.staging_root ?? '')
 
 function libLabel(d: DraftLib) {
@@ -164,27 +173,60 @@ const DEPTH_OPTS = [
 ]
 
 function modeHint(d: DraftLib) {
-  if (d.view?.default) return '首个媒体库暂时只能由本站整理：二级分类里没指定库的规则都放进它'
-  if (d.mode === 'organize') return '转存、下载进来的内容由本站识别、改名，按分类放进这个库'
+  if (d.mode === 'organize')
+    return isDefault(d) && multi.value
+      ? '转存、下载进来的内容由本站识别、改名，按分类放进来；二级分类里没指定库的规则都放进它'
+      : '转存、下载进来的内容由本站识别、改名，按分类放进这个库'
   if (d.mode === 'self') return '本站不往这个库里放东西；同步 STRM、海报墙、刮削、Emby 探测照常'
   return '选一下：内容由本站整理进来，还是目录你自己管'
+}
+
+/** 「默认放这里」改到别的库时选哪个：只有一个候选直接用，几个就问，一个都没有返回空 */
+async function pickNextDefault(d: DraftLib): Promise<string | null> {
+  const others = drafts.value.filter((o) => o !== d && o.cid && o.mode === 'organize')
+  if (others.length <= 1) return others[0]?.cid ?? ''
+  const pick = await dialog.confirm<string>({
+    title: `「${libLabel(d)}」不再是「默认放这里」`,
+    content: '二级分类里没写 library 的规则，以后整理进哪个库？',
+    actions: [{ label: '取消', value: '', variant: 'tertiary' }, ...others.map((o) => ({ label: libLabel(o), value: o.cid, variant: 'secondary' as const }))],
+  })
+  return pick || null
 }
 
 /** 切换整理方式。已有的库要先说清后果（规则回默认库、入口解绑），新加的库直接切 */
 async function setMode(d: DraftLib, to: LibMode) {
   if (to === d.mode) return
+  let nextDefault = fallback.value
+  if (to === 'self' && isDefault(d)) {
+    const pick = await pickNextDefault(d)
+    if (pick === null) return
+    nextDefault = pick
+  } else if (to === 'organize' && !fallback.value && d.cid) {
+    nextDefault = d.cid // 原来一个本站整理的库都没有：它就是默认库
+  }
+  const nextName = drafts.value.find((o) => o.cid && o.cid === nextDefault)
   if (!d.isNew) {
     const lines =
       to === 'self'
         ? [
-            ...(d.view?.rules.length ? [`${d.view.rules.map((r) => r.name).join('、')} 改回「${defaultName.value}」（二级分类里的 library 会被删掉）`] : []),
+            ...(isDefault(d)
+              ? [
+                  nextName
+                    ? `「默认放这里」改到「${libLabel(nextName)}」：二级分类里没写 library 的规则以后整理进它`
+                    : '没有本站整理的库了：自动整理、转存后整理、订阅都会停着，转存目录里的东西不再自动整理',
+                ]
+              : d.view?.rules.length
+                ? [`${d.view.rules.map((r) => r.name).join('、')} 改回「${defaultName.value}」（二级分类里的 library 会被删掉）`]
+                : []),
             ...(inboxOn(d) ? ['转存入口解绑：子目录和里面的东西不删，引用它的订阅改为转存到转存目录本身'] : []),
             '库里已有的片原地不动；之后本站不再往里整理，网盘文件页里也不能整理、移动它下面的片',
           ]
         : [
             '已有的片不搬、不改名',
             '不在分类目录下的片海报墙会认不出（可以在网盘文件页对它们「整理」）',
-            '之后在二级分类里给规则选这个库、或打开转存入口，内容才会整理进来',
+            nextDefault === d.cid && !fallback.value
+              ? '它会成为「默认放这里」的库：二级分类里没写 library 的规则整理进它，整理恢复运行'
+              : '之后在二级分类里给规则选这个库、或打开转存入口，内容才会整理进来',
           ]
     const ok = await dialog.confirm({
       title: `「${libLabel(d)}」改成${to === 'self' ? '我自己整理' : '本站整理'}`,
@@ -197,6 +239,7 @@ async function setMode(d: DraftLib, to: LibMode) {
     if (!ok) return
   }
   d.mode = to
+  fallback.value = nextDefault
   if (to === 'self') {
     d.inboxes = []
     d.inboxDraft = undefined
@@ -234,7 +277,22 @@ function setDepth(d: DraftLib, v: number) {
 }
 
 /** 本站整理却什么都进不来：不是默认库、没有分类、没有入口 */
-const idle = (d: DraftLib) => d.mode === 'organize' && !d.isNew && !d.view?.default && !d.view?.rules.length && !inboxOn(d)
+const idle = (d: DraftLib) => d.mode === 'organize' && !d.isNew && !isDefault(d) && !d.view?.rules.length && !inboxOn(d)
+
+/** 把这个库设成「默认放这里」 */
+async function setDefault(d: DraftLib) {
+  const ok = await dialog.confirm({
+    title: `「默认放这里」改到「${libLabel(d)}」`,
+    content:
+      `二级分类里没写 library 的规则，以后整理进「${libLabel(d)}」；写了 library 的不变。\n` +
+      `已经入库的片留在「${defaultName.value}」，不搬。保存后生效。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '改', value: true, variant: 'primary' },
+    ],
+  })
+  if (ok) fallback.value = d.cid
+}
 
 // ---- 转存入口 ----
 
@@ -290,7 +348,9 @@ function buildReq(list: DraftLib[], confirmed: Set<string>) {
   }
   const opts: Record<string, LibOpt> = {}
   for (const d of list) opts[d.cid] = d.mode === 'self' ? { mode: 'self', depth: d.depth, scrape: d.scrape } : { mode: 'organize', scrape: d.scrape }
-  return { extra_libs, inboxes, opts }
+  // 「默认放这里」：指向这次没保存进去的库时交给后端挑第一个本站整理的
+  const fb = list.some((d) => d.cid === fallback.value && d.mode === 'organize') ? fallback.value : ''
+  return { extra_libs, inboxes, opts, fallback: fb }
 }
 
 /** 发请求；同名子目录已存在且不空时问一次，确认了带上 confirm 重发 */
@@ -428,17 +488,23 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
       </template>
     </HAlert>
     <HAlert v-if="view.emby_error" status="default" class="mb">读不到 Emby 的媒体库（{{ view.emby_error }}），下面不显示 Emby 覆盖情况。</HAlert>
+    <HAlert v-if="noOrganize" status="warning" class="mb">
+      没有本站整理的库：自动整理、转存后整理、订阅都停着，这里只同步 STRM 和刮削。要用整理，把一个库改成「本站整理」，或添加一个。
+    </HAlert>
     <p v-if="!view.names_known" class="muted small mb">有的库名字还没读到（打开一次网盘文件页或跑一次同步后就有），暂时显示 cid。</p>
 
     <div class="cards">
       <article v-for="(d, i) in drafts" :key="d.cid || `new-${i}`" class="lib">
         <header class="lib-head">
           <h3>{{ libLabel(d) }}</h3>
-          <span v-if="multi && d.view?.default" class="tag-rest">默认放这里</span>
+          <span v-if="multi && isDefault(d)" class="tag-rest">默认放这里</span>
           <span v-if="d.isNew" class="tag-new">新加，保存后生效</span>
           <span class="grow" />
           <HButton v-if="d.isNew" size="sm" variant="ghost" @click="dropNew(i)"><X :size="14" />不加了</HButton>
-          <HButton v-else-if="!d.view?.default" size="sm" variant="ghost" @click="openRemove(d)">
+          <HButton v-if="multi && !d.isNew && d.mode === 'organize' && !isDefault(d)" size="sm" variant="ghost" @click="setDefault(d)">
+            设为默认
+          </HButton>
+          <HButton v-if="!d.isNew && !d.view?.first" size="sm" variant="ghost" @click="openRemove(d)">
             <Trash2 :size="14" />移除
           </HButton>
         </header>
@@ -456,7 +522,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
         </div>
         <p v-else class="lib-path">
           115：{{ d.view?.path || d.cid }}<template v-if="d.view?.local"><span class="sep">·</span>本地：{{ d.view.local }}</template>
-          <template v-if="d.view?.default"><span class="sep">·</span>在上面「媒体库位置」里改</template>
+          <template v-if="d.view?.first"><span class="sep">·</span>在上面「媒体库位置」里改</template>
         </p>
 
         <!-- 谁来整理（LIBRARY-ROLES-PLAN.md） -->
@@ -467,7 +533,6 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
               :model-value="d.mode || undefined"
               :options="MODE_OPTS"
               size="sm"
-              :disabled="d.view?.default"
               :aria-label="`${libLabel(d)} 由谁整理`"
               @update:model-value="(v) => setMode(d, v as LibMode)"
             />
@@ -524,8 +589,10 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           <div class="row-label">分类</div>
           <div class="row-body">
             <p class="cat-line">
-              <template v-if="d.view?.default && !multi">按二级分类的 {{ d.view.rules.length }} 条规则整理进来</template>
-              <template v-else-if="d.view?.default">没指定库的规则都落在这里（{{ d.view.rules.length }} 条）</template>
+              <template v-if="isDefault(d) && !multi">按二级分类的规则整理进来</template>
+              <template v-else-if="isDefault(d)">
+                没指定库的规则都落在这里<template v-if="d.view?.default">（{{ d.view.rules.length }} 条）</template>
+              </template>
               <template v-else-if="d.view?.rules.length">
                 <template v-for="(r, k) in d.view.rules" :key="`${r.media_type}:${r.name}`">
                   <span v-if="k" class="sep">·</span><MediaTypeChip :type="r.media_type" /> {{ r.name }}
@@ -630,7 +697,8 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 
   <HModal v-model:show="rm.show" :title="`移除「${rm.lib ? libLabel(rm.lib) : ''}」`" width="480px">
     <ul v-if="rm.lib?.view" class="rm-list">
-      <li v-if="rm.lib.view.rules.length">
+      <li v-if="isDefault(rm.lib)">「默认放这里」改到剩下的第一个本站整理的库；要换别的，保存后在那张卡片上点「设为默认」</li>
+      <li v-else-if="rm.lib.view.rules.length">
         {{ rm.lib.view.rules.map((r) => r.name).join('、') }} 改回「{{ defaultName }}」（二级分类里的 library 会被删掉）
       </li>
       <li v-for="b in rm.lib.view.inboxes" :key="b.cid">

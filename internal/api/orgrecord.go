@@ -275,7 +275,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	pruner := newDirPruner(ops, orgProtectedCids(cfg), nil)
 	// 旧位置在哪个媒体库（记录上记着，空 = 主库）。那个库已经移出配置的话，旧产物的本地路径拼不出来，
 	// 删旧 STRM 会删错地方，宁可不做
-	if cfg.SelfLibs[rec.LibCid] {
+	if cfg.SelfLibs[firstNonEmpty(rec.LibCid, cfg.Library)] {
 		return fmt.Errorf("这条记录入库时所在的媒体库（cid=%s）已改成自己整理，本站不再整理里面的片：要重新整理，先在「账号与媒体库」把它改回本站整理", rec.LibCid)
 	}
 	if !recordLibOK(cfg, rec.LibCid) {

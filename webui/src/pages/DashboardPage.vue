@@ -69,6 +69,8 @@ const storageEnabled = computed(() => storage.value.enabled !== false && !!stora
 
 const sys = computed(() => data.value?.sys ?? {})
 const media = computed(() => data.value?.media)
+const dashLibs = computed(() => data.value?.libs ?? [])
+const SCRAPE_TEXT = { auto: '自动刮新片', manual: '只手动刮', off: '不刮' } as const
 const strm = computed(() => data.value?.strm)
 
 /** 数字是谁给的：Emby 接上了就以 Emby 为准，否则只能用本地整理台账 */
@@ -264,6 +266,17 @@ const strmSub = computed(() => {
       </template>
     </div>
 
+    <!-- ==== 多个媒体库：各库由谁整理、刮不刮、台账里几部（单库时不显示） ==== -->
+    <div v-if="!loading && dashLibs.length" class="libs-row">
+      <RouterLink v-for="l in dashLibs" :key="l.name" :to="{ name: 'accounts', query: { tab: 'library' } }" class="card card--default lib-chip">
+        <span class="lib-chip-name">{{ l.name }}</span>
+        <span class="lib-chip-meta">
+          {{ l.mode === 'self' ? '自己整理' : '本站整理' }} · {{ SCRAPE_TEXT[l.scrape] }}
+        </span>
+        <span class="lib-chip-count">电影 {{ num(l.movies) }} · 剧集 {{ num(l.tvs) }}</span>
+      </RouterLink>
+    </div>
+
     <!-- ==== 台账虚高提示 ==== -->
     <HAlert v-if="driftNotable" status="warning" :title="`台账比 Emby 多出 ${num(drift)} 部`">
       本地整理台账记着 {{ num(localTotal) }} 部，Emby 实际只有 {{ num(media?.total) }} 部，
@@ -447,6 +460,32 @@ const strmSub = computed(() => {
 }
 
 /* ---- 指标行：上移压住横幅底部的渐隐区，卡片半透明 + 模糊 ---- */
+.libs-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.lib-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  padding: 10px 14px;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.lib-chip:hover .lib-chip-name {
+  color: var(--accent);
+}
+.lib-chip-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.lib-chip-meta,
+.lib-chip-count {
+  font-size: 12px;
+  color: var(--muted);
+}
 .stats {
   position: relative;
   z-index: 1;

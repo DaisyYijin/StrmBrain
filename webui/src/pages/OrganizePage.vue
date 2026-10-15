@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LibScope from '@/components/LibScope.vue'
 import { computed } from 'vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import BasicTab from './organize/BasicTab.vue'
@@ -31,6 +32,12 @@ const tabs = computed(() => [
     <HTabs v-model="tab" :items="tabs" />
 
     <!-- 页签内容按需挂载：没选中的页签不渲染、不发请求（与原 NTabPane 的 display-directive="if" 一致） -->
+    <!-- 多库时说清这一页的配置管到哪些库（LibScope 自己判断显不显示） -->
+    <LibScope
+      v-if="tab === 'basic' || tab === 'category' || tab === 'wash'"
+      :key="tab"
+      :kind="tab === 'basic' ? 'organize' : tab"
+    />
     <div class="panel">
       <BasicTab v-if="tab === 'basic'" />
       <!-- 刮削配置已搬到「影视刮削」页，这里只读，改要跳过去 -->

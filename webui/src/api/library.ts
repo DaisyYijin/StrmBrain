@@ -54,8 +54,10 @@ export interface LibraryView {
   name: string
   path: string
   local: string
-  /** 「默认放这里」的那个库（full.cid） */
+  /** 「默认放这里」的库：二级分类里没写 library 的规则落进它（阶段 3 起不一定是首个库） */
   default: boolean
+  /** 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除 */
+  first: boolean
   /** 谁来整理：organize 本站整理 / self 我自己整理（后端 libopts.go） */
   mode: LibMode
   /** 自己整理的库：片目在库下第几层（1–3） */
@@ -110,6 +112,8 @@ export interface LibSaveReq {
   clean_local?: string[]
   /** 每个库的整理方式（库 cid → 选项），整份替换 */
   opts: Record<string, LibOpt>
+  /** 「默认放这里」的库 cid；空 = 交给后端挑第一个本站整理的库 */
+  fallback?: string
 }
 
 /** 409：转存目录里已有同名子目录、里面有东西，要用户确认 */

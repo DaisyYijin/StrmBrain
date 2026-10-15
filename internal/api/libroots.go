@@ -72,6 +72,9 @@ type libRoot struct {
 	Abs  string // 网盘绝对路径
 	// Self 自己整理的库（libopts.go）：本站不往里整理，分类规则选到它就报错
 	Self bool
+	// Default 「默认放这里」的库：没写 library 的规则落进它（libOpts.fallbackOf）。
+	// 一个都没标时按第一个算（老调用方与测试只给首个库在前的清单）
+	Default bool
 }
 
 // resolveLibRoots 把库清单解析成名字与网盘路径（都走路径缓存，命中不打接口）。
@@ -130,14 +133,20 @@ func (h *Handler) resolveConfiguredLibRoots(cookie string) ([]libRoot, error) {
 		}
 		return ""
 	}, func(cid string) string { return absPathOf(cookie, cid) }, cids)
-	markSelfLibs(roots, loadLibOpts().selfCids())
+	markLibRoles(roots, loadLibOpts())
 	return roots, err
 }
 
-// markSelfLibs 按 lib_opts 标出自己整理的库
-func markSelfLibs(roots []libRoot, self map[string]bool) {
+// markLibRoles 按 lib_opts 标出自己整理的库与「默认放这里」的库
+func markLibRoles(roots []libRoot, opts libOpts) {
+	cids := make([]string, len(roots))
+	for i, r := range roots {
+		cids[i] = r.Cid
+	}
+	fb := opts.fallbackOf(cids)
 	for i := range roots {
-		roots[i].Self = self[roots[i].Cid]
+		roots[i].Self = opts.of(roots[i].Cid).self()
+		roots[i].Default = roots[i].Cid == fb
 	}
 }
 
@@ -185,6 +194,14 @@ func pickRuleLib(val string, libs []libRoot) (string, error) {
 		return "", fmt.Errorf("未配置媒体库目录")
 	}
 	if val == "" {
+		for _, l := range libs {
+			if l.Default {
+				return l.Cid, nil
+			}
+		}
+		if libs[0].Self {
+			return "", errNoOrganizeLib
+		}
 		return libs[0].Cid, nil
 	}
 	for _, l := range libs {
@@ -235,7 +252,10 @@ func primaryLibCidCompat() string {
 func (h *Handler) ruleLibCid(val string) (string, error) {
 	cfg := h.loadFullSyncCfg()
 	if strings.TrimSpace(val) == "" {
-		return cfg.Cid, nil
+		if fb := loadLibOpts().fallbackOf(cfg.libCids()); fb != "" {
+			return fb, nil
+		}
+		return "", errNoOrganizeLib
 	}
 	cookie, _ := h.get115Cookie()
 	roots, err := h.resolveConfiguredLibRoots(cookie)

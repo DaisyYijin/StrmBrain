@@ -91,7 +91,7 @@ func TestBuildLibrariesView(t *testing.T) {
 		{MediaType: "tv", Name: "电视剧/国漫", Library: "动画"},
 	}
 	bindings := []stagingLib{{Cid: "s1", Name: "4K", Lib: "300"}, {Cid: "s2", Name: "旧", Lib: "999"}}
-	v := buildLibrariesView(sources, rows, bindings, "root", "/media", "", []string{"/media/影视"})
+	v := buildLibrariesView(sources, rows, bindings, "root", "/media", "", []string{"/media/影视"}, libOpts{})
 	if !v.NamesKnown || len(v.Libs) != 3 {
 		t.Fatalf("视图：%+v", v)
 	}
@@ -111,7 +111,7 @@ func TestBuildLibrariesView(t *testing.T) {
 		t.Errorf("Emby 覆盖：%+v %+v", v.Libs[0].Emby, v.Libs[1].Emby)
 	}
 	// 名字认不全：按名字写的规则不报「认不出」
-	v2 := buildLibrariesView([]libNameSource{{Cid: "100", Shown: "/影视"}, {Cid: "200"}}, rows, nil, "", "/media", "", nil)
+	v2 := buildLibrariesView([]libNameSource{{Cid: "100", Shown: "/影视"}, {Cid: "200"}}, rows, nil, "", "/media", "", nil, libOpts{})
 	if v2.NamesKnown || len(v2.OrphanRules) != 0 || v2.Libs[0].Emby != nil {
 		t.Errorf("名字认不全时不下结论、没读 Emby 时不给覆盖：%+v", v2)
 	}
@@ -157,7 +157,9 @@ func fakeDeps(t *testing.T) (libSaveDeps, *int) {
 	}, &calls
 }
 
-func keepAll() []libRootEntry { return []libRootEntry{{Cid: "200", Path: "/动漫"}, {Cid: "300", Path: "/4K"}} }
+func keepAll() []libRootEntry {
+	return []libRootEntry{{Cid: "200", Path: "/动漫"}, {Cid: "300", Path: "/4K"}}
+}
 
 func TestPlanLibrariesSaveNoChange(t *testing.T) {
 	deps, calls := fakeDeps(t)
@@ -296,9 +298,9 @@ func TestSubscribeCfgWithoutSubdir(t *testing.T) {
 func TestCategoryLibChanges(t *testing.T) {
 	libs := []libRoot{{Cid: "100", Name: "影视"}, {Cid: "200", Name: "动漫"}}
 	entries := map[string]*ledgerTitleEntry{
-		"影视/电视剧/日番/A": {Category: "电视剧/日番", MediaType: "tv", LibName: "影视"},
-		"影视/电视剧/日番/B": {Category: "电视剧/日番", MediaType: "tv", LibName: "影视"},
-		"电视剧/日番/C":    {Category: "电视剧/日番", MediaType: "tv"}, // 老台账不带库名，算主库
+		"影视/电视剧/日番/A":  {Category: "电视剧/日番", MediaType: "tv", LibName: "影视"},
+		"影视/电视剧/日番/B":  {Category: "电视剧/日番", MediaType: "tv", LibName: "影视"},
+		"电视剧/日番/C":     {Category: "电视剧/日番", MediaType: "tv"}, // 老台账不带库名，算主库
 		"动漫/电影/动画电影/D": {Category: "电影/动画电影", MediaType: "movie", LibName: "动漫"},
 	}
 	titles := ledgerCategoryTitles(entries, libs)
@@ -309,11 +311,11 @@ func TestCategoryLibChanges(t *testing.T) {
 		{MediaType: "tv", Name: "电视剧/欧美剧", Library: "200"},
 	}
 	next := []model.CategoryRule{
-		{MediaType: "tv", Name: "电视剧/日番", Library: "动漫"},   // 换库，有 3 部 → 提示
+		{MediaType: "tv", Name: "电视剧/日番", Library: "动漫"},      // 换库，有 3 部 → 提示
 		{MediaType: "movie", Name: "电影/动画电影", Library: "200"}, // 写法变了、库没变 → 不提示
-		{MediaType: "tv", Name: "电视剧/国漫", Library: "动漫"},   // 换库但原库没有片 → 不提示
-		{MediaType: "tv", Name: "电视剧/新分类", Library: "动漫"},  // 新规则 → 不提示
-		{MediaType: "tv", Name: "电视剧/欧美剧", Library: "动漫"},  // cid 换成名字，同一个库 → 不提示
+		{MediaType: "tv", Name: "电视剧/国漫", Library: "动漫"},      // 换库但原库没有片 → 不提示
+		{MediaType: "tv", Name: "电视剧/新分类", Library: "动漫"},     // 新规则 → 不提示
+		{MediaType: "tv", Name: "电视剧/欧美剧", Library: "动漫"},     // cid 换成名字，同一个库 → 不提示
 	}
 	got := categoryLibChanges(old, next, libs, titles)
 	if len(got) != 1 || got[0] != (categoryLibChange{MediaType: "tv", Name: "电视剧/日番", From: "影视", To: "动漫", Titles: 3}) {

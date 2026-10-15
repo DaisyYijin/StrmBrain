@@ -112,6 +112,9 @@ func subSchedulerTick(h *Handler, now time.Time) {
 	if !cfg.Enabled || h.DB == nil {
 		return
 	}
+	if noOrganizeLibNow() {
+		return // 没有本站整理的库：转存进来也没人整理、结算永远等不到记录，订阅一起停着（下次检查时间不动，恢复后接着查）
+	}
 	// 正在跑的时候不再入队：跑完会把这些订阅的下次检查时间往后排
 	var running int64
 	h.DB.Model(&model.TaskJob{}).Where("kind = ? AND status = ?", jobKindSubscribe, jobRunning).Count(&running)
@@ -207,6 +210,9 @@ func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	p := decodeJobParams(job)
 	if p.Subs == nil || len(p.Subs.IDs) == 0 {
 		return jobOutcome{Idle: true}, nil
+	}
+	if noOrganizeLibNow() {
+		return jobOutcome{}, errNoOrganizeLib
 	}
 	r, err := newSubRunner(h)
 	if err != nil {

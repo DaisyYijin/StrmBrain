@@ -63,6 +63,11 @@ const dashboard: Dashboard = {
       collage: [0, 1, 2, 3].map((k) => `Items/${1001 + ((i * 3 + k) % 8)}/Images/Primary`),
     })),
   },
+  libs: [
+    { name: '媒体库', mode: 'organize', scrape: 'auto', movies: 612, tvs: 140 },
+    { name: '动漫', mode: 'organize', scrape: 'manual', movies: 31, tvs: 88 },
+    { name: '老库', mode: 'self', scrape: 'off', movies: 240, tvs: 36 },
+  ],
   storage: {
     username: 'demo_user',
     used: 8_243_000_000_000,
@@ -399,6 +404,12 @@ let mockOpts: Record<string, { mode: 'self' | 'organize'; depth?: number; scrape
   '400': { mode: 'self', depth: 2, scrape: 'off' },
 }
 const mockScrapeOf = (cid: string) => mockOpts[cid]?.scrape ?? 'auto'
+/** 「默认放这里」：设过且还是本站整理的库，否则第一个本站整理的库 */
+let mockFallbackCid = ''
+const mockFallback = () => {
+  const org = mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self')
+  return (org.find((l) => l.cid === mockFallbackCid) ?? org[0])?.cid ?? ''
+}
 /** 老库的台账（演示片目层级预览：纪录片多一层子分类、美剧有季目录） */
 const MOCK_SELF_FILES = [
   '欧美电影/阿凡达 (2009)/阿凡达.strm',
@@ -462,7 +473,8 @@ function mockLibrariesView() {
       name: l.name,
       path: l.path,
       local: `/media/${l.name}`,
-      default: i === 0,
+      default: l.cid === mockFallback(),
+      first: i === 0,
       mode: mockOpts[l.cid]?.mode === 'self' ? 'self' : 'organize',
       scrape: mockScrapeOf(l.cid),
       depth: mockOpts[l.cid]?.depth ?? 0,
@@ -488,6 +500,7 @@ function mockSaveLibraries(init?: RequestInit) {
     extra_libs: { cid: string; path: string }[]
     inboxes: { cid?: string; name: string; lib: string; confirm?: boolean }[]
     opts?: Record<string, { mode: 'self' | 'organize'; depth?: number; scrape?: 'auto' | 'manual' | 'off' }>
+    fallback?: string
   }
   const need = req.inboxes
     .filter((b) => !b.cid && mockStagingDirs[b.name] && !b.confirm)
@@ -506,6 +519,7 @@ function mockSaveLibraries(init?: RequestInit) {
     .slice(1)
     .map((l) => ({ cid: l.cid, path: l.path }))
   if (req.opts) mockOpts = { ...req.opts }
+  if (req.opts) mockFallbackCid = req.fallback ?? ''
   mockInboxes = req.inboxes.map((b) => {
     const old = mockInboxes.find((o) => o.cid && o.cid === b.cid)
     return old ? { ...old, lib: b.lib } : { cid: b.cid || `s-${b.name}`, name: b.name, lib: b.lib }
@@ -737,7 +751,10 @@ const ROUTES: Record<string, Route> = {
   },
   '/scrape/config': () => ({
     cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true, auto_after_sync: false },
-    libs: mockLibs.map((l) => ({ cid: l.cid, name: l.name, scrape: mockScrapeOf(l.cid) })),
+    libs: mockLibs.map((l) => ({
+      cid: l.cid, name: l.name, scrape: mockScrapeOf(l.cid),
+      mode: mockOpts[l.cid]?.mode === 'self' ? 'self' : 'organize', default: l.cid === mockFallback(),
+    })),
   }),
   '/storage': {
     data: [{ id: 1, name: '115主号', type: '115', cookie_path: '/config/115-cookies.txt', device: 'web', interval: 3, openapi_enabled: false, app_id: '' }],

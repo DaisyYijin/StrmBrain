@@ -110,7 +110,7 @@ async function loadDestLibs() {
   try {
     const v = await libraryApi.getLibraries()
     // 名字认不全时按名字写的规则会被误标「认不出」：宁可不标
-    destLibs.value = v.names_known && v.libs.length > 1 ? v.libs.map((l) => ({ cid: l.cid, name: l.name, default: l.default })) : []
+    destLibs.value = v.names_known && v.libs.length > 1 ? v.libs.map((l) => ({ cid: l.cid, name: l.name, default: l.default, self: l.mode === 'self' })) : []
   } catch {
     destLibs.value = []
   }

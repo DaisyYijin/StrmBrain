@@ -34,6 +34,8 @@ type libSaveReq struct {
 	CleanLocal []string `json:"clean_local"`
 	// Opts 每个库让本站做什么（libopts.go，库 cid → 选项），整份替换；不带这个字段 = 沿用现在的
 	Opts map[string]libOpt `json:"opts"`
+	// Fallback 「默认放这里」的库 cid（阶段 3）。只在带 Opts 时生效；空或不是本站整理的库 → 第一个本站整理的库
+	Fallback string `json:"fallback"`
 }
 
 // libInboxReq 一个转存入口：Cid 是已有的子目录；Cid 为空 = 按 Name 在转存目录下建（同名的已存在就复用）
@@ -86,6 +88,9 @@ type libSavePlan struct {
 	OptsChanged bool
 	// ToSelf 这次改成自己整理的库（原来是本站整理）：指向它的规则回默认库、入口解绑，与移除库同一套收尾
 	ToSelf []libRoot
+	// Fallback 保存后「默认放这里」的库（空 = 一个本站整理的库都没有）
+	Fallback        string
+	FallbackChanged bool
 }
 
 // planLibrariesSave 校验并算出要写的东西。不写任何东西；要用户确认时返回 confirms（不报错）
@@ -155,9 +160,6 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		default:
 			return plan, nil, fmt.Errorf("不认识的整理方式「%s」", o.Mode)
 		}
-		if cid == primary {
-			return plan, nil, errors.New("首个媒体库暂时只能由本站整理：它还兼着「默认放这里」")
-		}
 		if o.Depth < 1 || o.Depth > libOptDepthMax {
 			return plan, nil, errors.New("自己整理的库要选片目在第几层（1–3 层）")
 		}
@@ -168,6 +170,13 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 			plan.ToSelf = append(plan.ToSelf, l)
 		}
 	}
+	if req.Opts != nil {
+		opts.Fallback = strings.TrimSpace(req.Fallback)
+	}
+	// 没指定、指的库被移除了或改成自己整理了：落到第一个本站整理的库；一个都没有就空着（整理线停用，界面上说清楚）
+	opts.Fallback = opts.fallbackOf(next)
+	plan.Fallback = opts.Fallback
+	plan.FallbackChanged = opts.Fallback != oldOpts.fallbackOf(cur.libCids())
 	plan.OptsJSON = marshalLibOpts(opts, next)
 	plan.OptsChanged = plan.OptsJSON != strings.TrimSpace(in.OptsRaw) && !(plan.OptsJSON == "{}" && strings.TrimSpace(in.OptsRaw) == "")
 
@@ -500,6 +509,13 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 		// 片目认在哪一层变了：海报墙、刮削、对账读的台账聚合都得重算
 		forgetLedgerTitles()
 		forgetLocalTitles()
+	}
+	if plan.FallbackChanged {
+		if plan.Fallback == "" {
+			log.Printf("[媒体库] ⚠ 现在没有本站整理的媒体库：自动整理、转存后整理、订阅都停着")
+		} else {
+			log.Printf("[媒体库] ✓ 「默认放这里」改到 cid=%s：二级分类里没写 library 的规则以后整理进它", plan.Fallback)
+		}
 	}
 	for _, r := range plan.ToSelf {
 		log.Printf("[媒体库] ✓ 「%s」改成自己整理：本站不再往里整理，指向它的分类规则回默认库、转存入口解绑", r.Name)

@@ -56,7 +56,22 @@ func summarizeOrganize(details []OrganizeResult) (organizeJobResult, string) {
 	return r, msg
 }
 
+// noOrganizeLibOutcome 一个本站整理的库都没有（libopts.go）：后台触发的按空转收掉、不留失败记录，
+// 手动点的报清楚原因。ok=false 表示照常往下跑
+func noOrganizeLibOutcome(job *model.TaskJob) (jobOutcome, error, bool) {
+	if !noOrganizeLibNow() {
+		return jobOutcome{}, nil, false
+	}
+	if job.Priority == jobPriorityBackground {
+		return jobOutcome{Idle: true, Message: errNoOrganizeLib.Error()}, nil, true
+	}
+	return jobOutcome{}, errNoOrganizeLib, true
+}
+
 func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+	if out, err, stop := noOrganizeLibOutcome(job); stop {
+		return out, err
+	}
 	_, details, err := h.executeOrganize()
 	if err != nil {
 		return jobOutcome{}, err
@@ -188,6 +203,9 @@ func execDeepDelJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 // execTransferJob 转存 / 离线下载完成后的「整理转存目录 + 增量收尾」
 func execTransferJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+	if out, err, stop := noOrganizeLibOutcome(job); stop {
+		return out, err
+	}
 	organized, sum, err := h.runTransferOrganize()
 	if err != nil {
 		return jobOutcome{}, err

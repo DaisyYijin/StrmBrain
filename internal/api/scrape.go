@@ -496,14 +496,21 @@ type libScrapeView struct {
 	Cid    string `json:"cid"`
 	Name   string `json:"name"` // 认不出为空
 	Scrape string `json:"scrape"`
+	// Mode / Default 由谁整理、是不是「默认放这里」：功能页顶部的「作用于」也用这一份（零 115 请求，不必去读 GET /libraries）
+	Mode    string `json:"mode"`
+	Default bool   `json:"default"`
 }
 
 // libScrapeViews 各库的刮削方式（零 115 请求）
 func libScrapeViews(fullRaw string) []libScrapeView {
 	opts, legacy := loadLibOpts(), loadLegacyLibScrape()
 	out := []libScrapeView{}
+	fb := opts.fallbackOf(parseFullCfg(fullRaw).libCids())
 	for _, s := range libNameSources(fullRaw) {
-		v := libScrapeView{Cid: s.Cid, Name: s.libRootOf().Name, Scrape: opts.of(s.Cid).Scrape}
+		v := libScrapeView{Cid: s.Cid, Name: s.libRootOf().Name, Scrape: opts.of(s.Cid).Scrape, Mode: "organize", Default: s.Cid == fb}
+		if opts.of(s.Cid).self() {
+			v.Mode = libModeSelf
+		}
 		if v.Scrape == "" {
 			v.Scrape = legacy
 		}

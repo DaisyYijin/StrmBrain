@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -49,6 +50,36 @@ func (o libOpt) depth() int {
 // libOpts setting lib_opts 的全部内容
 type libOpts struct {
 	Libs map[string]libOpt `json:"libs,omitempty"` // 库 cid → 选项；没有的库按默认（本站整理）
+	// Fallback 「默认放这里」的库（阶段 3）：二级分类里没写 library 的规则整理进它。
+	// 空 / 已移除 / 改成自己整理了 → 取第一个本站整理的库（首个库在前，老部署就是首个库），见 fallbackOf。
+	// 和首个库（full.cid）是两回事：整理记录 LibCid 记空表示首个库，不跟着它变，所以换它不用迁移老记录
+	Fallback string `json:"fallback,omitempty"`
+}
+
+// fallbackOf 「默认放这里」的库 cid。cids 是配置里的各库（首个在前）；一个本站整理的库都没有返回空
+func (o libOpts) fallbackOf(cids []string) string {
+	first := ""
+	for _, c := range cids {
+		if o.of(c).self() {
+			continue
+		}
+		if c == strings.TrimSpace(o.Fallback) {
+			return c
+		}
+		if first == "" {
+			first = c
+		}
+	}
+	return first
+}
+
+// errNoOrganizeLib 一个本站整理的库都没有：整理线停用（定时整理、转存后整理、守望者、订阅）
+var errNoOrganizeLib = errors.New("没有本站整理的媒体库，整理停着：要用整理，到「账号与媒体库 → 媒体库」把一个库改成本站整理")
+
+// noOrganizeLibNow 配了媒体库、却一个本站整理的都没有（没配媒体库不算：那是另一个报错）
+func noOrganizeLibNow() bool {
+	cids := parseFullCfg(settingValueCompat("full")).libCids()
+	return len(cids) > 0 && loadLibOpts().fallbackOf(cids) == ""
 }
 
 func parseLibOpts(raw string) libOpts {
@@ -103,6 +134,9 @@ func marshalLibOpts(o libOpts, libCids []string) string {
 		keep[c] = true
 	}
 	out := libOpts{Libs: map[string]libOpt{}}
+	if fb := strings.TrimSpace(o.Fallback); keep[fb] && !o.of(fb).self() {
+		out.Fallback = fb
+	}
 	for cid, v := range o.Libs {
 		if !keep[cid] || (!v.self() && v.Scrape == "") {
 			continue
@@ -113,7 +147,12 @@ func marshalLibOpts(o libOpts, libCids []string) string {
 		}
 		out.Libs[cid] = x
 	}
-	if len(out.Libs) == 0 {
+	// 「默认放这里」就是第一个本站整理的库（自然默认）时不存：库的顺序或整理方式变了它跟着走，
+	// 老部署也一直是这个口径
+	if out.Fallback != "" && out.Fallback == (libOpts{Libs: out.Libs}).fallbackOf(libCids) {
+		out.Fallback = ""
+	}
+	if len(out.Libs) == 0 && out.Fallback == "" {
 		return "{}"
 	}
 	b, _ := json.Marshal(out)

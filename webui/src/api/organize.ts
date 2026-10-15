@@ -44,6 +44,9 @@ export interface LibScrapeView {
   /** 认不出为空 */
   name: string
   scrape: LibScrape
+  /** 由谁整理（organize / self）、是不是「默认放这里」 */
+  mode: 'organize' | 'self'
+  default: boolean
 }
 
 /** 本地媒体库对应的一个 Emby 媒体库的元数据设置 */

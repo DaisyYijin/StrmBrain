@@ -26,10 +26,12 @@ import (
 // libraryView 一张库卡片
 type libraryView struct {
 	Cid     string `json:"cid"`
-	Name    string `json:"name"`  // 115 目录名 = 本地第一层；认不出为空
-	Path    string `json:"path"`  // 网盘绝对路径；认不出为空
-	Local   string `json:"local"` // 本地目录（本地根 / 库名）；库名认不出为空
-	Default bool   `json:"default"`
+	Name    string `json:"name"`    // 115 目录名 = 本地第一层；认不出为空
+	Path    string `json:"path"`    // 网盘绝对路径；认不出为空
+	Local   string `json:"local"`   // 本地目录（本地根 / 库名）；库名认不出为空
+	Default bool   `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
+	// First 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除
+	First bool `json:"first"`
 	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
 	Mode  string `json:"mode"`
 	Depth int    `json:"depth"`
@@ -237,7 +239,7 @@ type librariesView struct {
 
 // buildLibrariesView 组装库卡片。embyLocs 为 nil 表示没读 Emby（没配或读失败）
 func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bindings []stagingLib,
-	stagingRoot, localRoot, pathMapping string, embyLocs []string) librariesView {
+	stagingRoot, localRoot, pathMapping string, embyLocs []string, opts libOpts) librariesView {
 	roots := make([]libRoot, len(sources))
 	choices := make([]libChoice, len(sources))
 	known := true
@@ -248,6 +250,7 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 			known = false
 		}
 	}
+	markLibRoles(roots, opts) // 没写 library 的规则归「默认放这里」的库，不一定是首个库
 	byLib, orphans := rulesByLib(rows, roots)
 	if !known {
 		orphans = nil // 名字认不全时按名字写的规则认不出是正常的，不报
@@ -267,7 +270,7 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 		LocalRoot:   root,
 	}
 	for i, r := range roots {
-		v := libraryView{Cid: r.Cid, Name: r.Name, Path: r.Abs, Default: i == 0,
+		v := libraryView{Cid: r.Cid, Name: r.Name, Path: r.Abs, Default: r.Default, First: i == 0, Mode: "organize",
 			Rules: byLib[r.Cid], Inboxes: inboxes[r.Cid]}
 		if r.Name != "" && root != "" {
 			v.Local = root + "/" + r.Name
@@ -317,7 +320,7 @@ func (h *Handler) librariesNow() librariesView {
 		}
 	}
 	v := buildLibrariesView(libNameSources(h.getSettingValue("full")), rows, loadStagingLibs(),
-		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs)
+		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs, loadLibOpts())
 	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
 	opts := loadLibOpts()
 	legacy := loadLegacyLibScrape()
@@ -326,7 +329,6 @@ func (h *Handler) librariesNow() librariesView {
 		if v.Libs[i].Scrape == "" {
 			v.Libs[i].Scrape = legacy
 		}
-		v.Libs[i].Mode = "organize"
 		if o := opts.of(v.Libs[i].Cid); o.self() {
 			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()
 		}

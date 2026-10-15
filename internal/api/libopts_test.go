@@ -145,7 +145,6 @@ func TestPlanLibrariesSaveSelf(t *testing.T) {
 		name string
 		req  libSaveReq
 	}{
-		{"首个媒体库改成自己整理", libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{"100": {Mode: libModeSelf, Depth: 2}}}},
 		{"没选层级", libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{"200": {Mode: libModeSelf}}}},
 		{"层级越界", libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{"200": {Mode: libModeSelf, Depth: 4}}}},
 		{"不认识的方式", libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{"200": {Mode: "x"}}}},
@@ -263,5 +262,88 @@ func TestEmbyFolderScrapeModes(t *testing.T) {
 	// 路径映射：Emby 看到的是 /mnt/emby
 	if s := strings.Join(embyFolderScrapeModes("/media#/mnt/emby", []string{"/mnt/emby/老库"}, "/media", p), ","); s != "off" {
 		t.Errorf("按路径映射换回本地：%s", s)
+	}
+}
+
+// ---- 阶段 3：「默认放这里」与首个库拆开 ----
+
+func TestFallbackOf(t *testing.T) {
+	cids := []string{"100", "200", "300"}
+	cases := []struct {
+		o    libOpts
+		want string
+	}{
+		{libOpts{}, "100"}, // 老部署：首个库
+		{libOpts{Fallback: "200"}, "200"},
+		{libOpts{Fallback: "999"}, "100"}, // 指的库不在了
+		{libOpts{Fallback: "200", Libs: map[string]libOpt{"200": {Mode: libModeSelf}}}, "100"},
+		{libOpts{Libs: map[string]libOpt{"100": {Mode: libModeSelf}}}, "200"}, // 首个库自己整理
+		{libOpts{Libs: map[string]libOpt{"100": {Mode: libModeSelf}, "200": {Mode: libModeSelf}, "300": {Mode: libModeSelf}}}, ""},
+	}
+	for i, c := range cases {
+		if got := c.o.fallbackOf(cids); got != c.want {
+			t.Errorf("#%d → %q，应为 %q", i, got, c.want)
+		}
+	}
+	// 自然默认不存；指定了别的才存
+	if s := marshalLibOpts(libOpts{Fallback: "100"}, cids); s != "{}" {
+		t.Errorf("默认就是首个库时不存：%s", s)
+	}
+	if o := parseLibOpts(marshalLibOpts(libOpts{Fallback: "300"}, cids)); o.Fallback != "300" {
+		t.Errorf("指定的要存下：%+v", o)
+	}
+}
+
+// 没写 library 的规则进「默认放这里」的库，不一定是首个库
+func TestPickRuleLibFallback(t *testing.T) {
+	libs := []libRoot{{Cid: "100", Name: "影视", Self: true}, {Cid: "200", Name: "动漫", Default: true}}
+	if cid, err := pickRuleLib("", libs); err != nil || cid != "200" {
+		t.Errorf("没写 library：%s %v", cid, err)
+	}
+	if _, err := pickRuleLib("", []libRoot{{Cid: "100", Self: true}}); err == nil {
+		t.Error("一个本站整理的库都没有：应报错")
+	}
+	cfg := &OrgConfig{Library: "100", OtherLibs: []string{"200"}, SelfLibs: map[string]bool{"100": true}, Fallback: "200"}
+	if cid, err := ruleLibOf(cfg, &orgSink{}, ""); err != nil || cid != "200" {
+		t.Errorf("整理选库：%s %v", cid, err)
+	}
+	cfg.Fallback = ""
+	if _, err := ruleLibOf(cfg, &orgSink{}, ""); err == nil {
+		t.Error("首个库自己整理、又没有默认库：应报错")
+	}
+	// 记录 LibCid 记空 = 首个库：首个库改成自己整理后，这些记录不能再重新整理
+	if recordLibOK(cfg, "") {
+		t.Error("首个库自己整理：记空的记录不能重新整理")
+	}
+}
+
+func TestPlanLibrariesSaveFallback(t *testing.T) {
+	deps, _ := fakeDeps(t)
+	// 首个库改成自己整理：默认库落到下一个本站整理的库；指向首个库的规则一并回默认库
+	plan, _, err := planLibrariesSave(planInput(), libSaveReq{ExtraLibs: keepAll(),
+		Opts: map[string]libOpt{"100": {Mode: libModeSelf, Depth: 2}}}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Fallback != "200" || !plan.FallbackChanged || len(plan.ToSelf) != 1 || plan.ToSelf[0].Cid != "100" {
+		t.Fatalf("首个库自己整理：%+v", plan)
+	}
+	// 指定默认库
+	plan, _, _ = planLibrariesSave(planInput(), libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{}, Fallback: "300"}, deps)
+	if plan.Fallback != "300" || parseLibOpts(plan.OptsJSON).Fallback != "300" {
+		t.Errorf("指定默认库：%+v %s", plan.Fallback, plan.OptsJSON)
+	}
+	// 指的库被移除：退回第一个本站整理的库
+	in := planInput()
+	in.OptsRaw = plan.OptsJSON
+	plan, _, _ = planLibrariesSave(in, libSaveReq{ExtraLibs: []libRootEntry{{Cid: "200", Path: "/动漫"}}, Opts: map[string]libOpt{}, Fallback: "300"}, deps)
+	if plan.Fallback != "100" {
+		t.Errorf("默认库被移除：%s", plan.Fallback)
+	}
+	// 全都自己整理：没有默认库，照样能存（整理线停用由别处说明）
+	all := map[string]libOpt{"100": {Mode: libModeSelf, Depth: 2}, "200": {Mode: libModeSelf, Depth: 2}, "300": {Mode: libModeSelf, Depth: 1}}
+	plan, _, err = planLibrariesSave(planInput(), libSaveReq{ExtraLibs: keepAll(), Opts: all}, deps)
+	if err != nil || plan.Fallback != "" {
+		t.Errorf("全都自己整理：%v %q", err, plan.Fallback)
 	}
 }

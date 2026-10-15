@@ -59,6 +59,9 @@ type OrgConfig struct {
 	SubLibs map[string]stagingLib `json:"-"`
 	// SelfLibs 自己整理的库（libopts.go，库 cid）：仍在 OtherLibs 里当保护子树，但不是整理的落点
 	SelfLibs map[string]bool `json:"-"`
+	// Fallback 「默认放这里」的库 cid：没写 library 的规则落进它（libOpts.fallbackOf）。
+	// 和 Library（首个库）分开：首个库可以是自己整理的，整理记录 LibCid 记空仍指首个库
+	Fallback string `json:"-"`
 }
 
 // workspaceRootCids 整理引擎永不当条目处理的根：媒体库（全部）、待整理、已存在、冗余、转存
@@ -136,12 +139,19 @@ func (c *orgCtx) ruleLib(val string) (string, error) {
 // 库名取自 sink（与落盘同源，一轮只解析一次）
 func ruleLibOf(cfg *OrgConfig, sink *orgSink, val string) (string, error) {
 	if strings.TrimSpace(val) == "" {
-		return cfg.Library, nil
+		fb := cfg.Fallback
+		if fb == "" && !cfg.SelfLibs[cfg.Library] {
+			fb = cfg.Library // 手搭的配置（测试、老调用方）没填 Fallback：首个库
+		}
+		if fb == "" {
+			return "", errNoOrganizeLib
+		}
+		return fb, nil
 	}
 	cids := append([]string{cfg.Library}, cfg.OtherLibs...)
 	roots := make([]libRoot, 0, len(cids))
 	for _, cid := range cids {
-		roots = append(roots, libRoot{Cid: cid, Name: sink.libNameOf(sinkLibCid(cfg, cid)), Self: cfg.SelfLibs[cid]})
+		roots = append(roots, libRoot{Cid: cid, Name: sink.libNameOf(sinkLibCid(cfg, cid)), Self: cfg.SelfLibs[cid], Default: cid == cfg.Fallback})
 	}
 	return pickRuleLib(val, roots)
 }
@@ -156,14 +166,17 @@ func sinkLibCid(cfg *OrgConfig, cid string) string {
 	return cid
 }
 
-// recordLibOK 记录所在的媒体库还在配置里、而且还由本站整理（空 = 主库，总是在）。
+// recordLibOK 记录所在的媒体库还在配置里、而且还由本站整理（空 = 首个库，总在配置里）。
 // 改成自己整理的库不再接受重新整理：那会往里放东西、改名，和「本站不碰」对不上
 func recordLibOK(cfg *OrgConfig, libCid string) bool {
-	if libCid == "" || libCid == cfg.Library {
-		return true
+	if libCid == "" {
+		libCid = cfg.Library
 	}
 	if cfg.SelfLibs[libCid] {
 		return false
+	}
+	if libCid == cfg.Library {
+		return true
 	}
 	for _, c := range cfg.OtherLibs {
 		if c == libCid {
@@ -328,9 +341,17 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	}
 	cfg.OtherLibs = fullCfg.otherLibCids()
 	cfg.SubLibs = stagingLibMap(loadStagingLibs())
-	cfg.SelfLibs = loadLibOpts().selfCids()
+	opts := loadLibOpts()
+	cfg.SelfLibs = opts.selfCids()
 	if cfg.Library == "" {
 		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
+	}
+	cids := fullCfg.libCids()
+	if len(cids) == 0 {
+		cids = []string{cfg.Library} // 全量没配、用的是老 org-basic.library
+	}
+	if cfg.Fallback = opts.fallbackOf(cids); cfg.Fallback == "" {
+		return nil, errNoOrganizeLib
 	}
 	// 转存与待整理已是同一个目录；ShareCid 留着是因为引擎里「转存目录是保护子树，
 	// 除非它就是扫描根」那几处判断还认它（fileorganize 把扫描根换成别的目录时仍要护住它）

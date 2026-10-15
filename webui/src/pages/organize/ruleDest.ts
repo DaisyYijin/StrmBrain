@@ -2,7 +2,8 @@
  * 二级分类大纲上每条规则的落点（库名 + 分类目录，多库时才显示）。
  *
  * 认库的口径必须和整理时一模一样（后端 libroots.go 的 pickRuleLib）：
- * 没写 library = 默认库；先按 cid 认，再按库目录名认（去掉首尾斜杠）；都认不出 = 整理到这一类会报错停下。
+ * 没写 library = 「默认放这里」的库；先按 cid 认，再按库目录名认（去掉首尾斜杠）；都认不出 = 整理到这一类会报错停下。
+ * 认出来却是「我自己整理」的库（libopts.go 的 selfLibGuard）同样会停下。
  * 两边不一致的话，大纲上说进 A 库、整理却进了 B 库，比不显示还糟。
  */
 import type { OutlineGroup } from './ruleLint'
@@ -12,6 +13,8 @@ export interface DestLib {
   cid: string
   name: string
   default: boolean
+  /** 自己整理的库：本站不往里整理，规则指向它会报错停下 */
+  self?: boolean
 }
 
 export type RuleDest = NonNullable<OutlineGroup['items'][number]['dest']>
@@ -31,6 +34,12 @@ export function libOfValue(raw: string | undefined, libs: DestLib[]): DestLib | 
 /** 一条规则的落点标签 */
 export function destOf(raw: string | undefined, libs: DestLib[]): RuleDest {
   const lib = libOfValue(raw, libs)
+  if (lib?.self)
+    return {
+      text: `「${lib.name || lib.cid}」是自己整理的库`,
+      tone: 'bad',
+      hint: '本站不往自己整理的库里放东西，整理到这一类时会停下：改 library，或在「账号与媒体库」把它改成本站整理',
+    }
   if (lib) return { text: lib.name || `cid ${lib.cid}`, tone: lib.default ? 'default' : 'set' }
   return {
     text: `认不出「${unquote(raw ?? '')}」`,
