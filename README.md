@@ -24,6 +24,10 @@ flowchart LR
 
 **[Telegram 交流群 →](https://t.me/+7b_HYMltYMozZTk1)**
 
+**QQ 交流群**：手机 QQ 扫码加入
+
+<img src="assets/qq-group-qrcode.png" alt="QQ 交流群二维码" width="240">
+
 ---
 
 ## 快速部署
