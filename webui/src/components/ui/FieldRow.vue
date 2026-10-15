@@ -12,11 +12,13 @@ defineProps<{
   required?: boolean
   /** 控件不限宽（长 URL、回调地址等） */
   wide?: boolean
+  /** 标签在上、控件在下（同手机布局）：放进半宽卡片时用，168px 的标签列太占地方 */
+  stacked?: boolean
 }>()
 </script>
 
 <template>
-  <div class="row">
+  <div class="row" :class="{ stacked }">
     <div class="row-label">
       <span v-if="required" class="req">*</span>
       <span>{{ label }}</span>
@@ -82,6 +84,23 @@ defineProps<{
   font-size: 12px;
   line-height: 1.6;
   color: var(--danger);
+}
+
+.row.stacked {
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
+.row.stacked .row-label {
+  width: auto;
+  min-height: 0;
+}
+.row.stacked .row-control {
+  max-width: none;
+  width: 100%;
+}
+.row.stacked .row-control > :slotted(:is(span, strong):first-child) {
+  padding-top: 0;
 }
 
 /* 手机：标签在上、控件在下，控件占满整行 */

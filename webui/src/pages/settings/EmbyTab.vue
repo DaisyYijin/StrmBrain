@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
+import HHelpTip from '@/components/hero/HHelpTip.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
+import SaveBar from '@/pages/scrape/SaveBar.vue'
 import { configApi, localApi } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
@@ -22,7 +23,7 @@ const router = useRouter()
 const route = useRoute()
 const media = useFullSetting()
 
-const { model, loading, saving, save, reset } = useSetting('emby', {
+const { model, loading, saving, dirty: modelDirty, saved, save } = useSetting('emby', {
   server_url: '',
   api_key: '',
   path_mapping: '',
@@ -41,14 +42,30 @@ const norm = (p: string) => p.trim().replace(/\\/g, '/').replace(/(.)\/+$/, '$1'
 const isAbs = (p: string) => p.startsWith('/') || /^[A-Za-z]:/.test(p)
 const mediaRoot = computed(() => norm(media.model.value.local_path || ''))
 
+/** 存的规则拆成表单两侧 */
+function splitMapping(rule: string, root: string) {
+  const splitAt = rule.indexOf('#')
+  const l = splitAt >= 0 ? norm(rule.slice(0, splitAt)) : ''
+  return {
+    emby: splitAt >= 0 ? rule.slice(splitAt + 1) : '',
+    // v26.10.10-6 存的是相对子目录：显示成完整路径，保存时按绝对路径写回
+    local: !l || isAbs(l) ? l : root ? `${root}/${l.replace(/^\.\//, '')}` : '',
+  }
+}
+
+// 本地一侧和本地媒体库目录一样时存空（跟随）：以后改了本地目录，映射跟着走
+function joinMapping(local: string, emby: string, root: string): string {
+  const embyRoot = emby.trim()
+  const l = norm(local)
+  return embyRoot ? `${l === root ? '' : l}#${embyRoot}` : ''
+}
+
 watch(
   [() => model.value.path_mapping, mediaRoot],
   ([rule, root]) => {
-    const splitAt = rule.indexOf('#')
-    embyMediaRoot.value = splitAt >= 0 ? rule.slice(splitAt + 1) : ''
-    const l = splitAt >= 0 ? norm(rule.slice(0, splitAt)) : ''
-    // v26.10.10-6 存的是相对子目录：显示成完整路径，保存时按绝对路径写回
-    localPath.value = !l || isAbs(l) ? l : root ? `${root}/${l.replace(/^\.\//, '')}` : ''
+    const m = splitMapping(rule, root)
+    embyMediaRoot.value = m.emby
+    localPath.value = m.local
   },
   { immediate: true },
 )
@@ -117,12 +134,18 @@ watch(
   { immediate: true },
 )
 
-// 本地一侧和本地媒体库目录一样时存空（跟随）：以后改了本地目录，映射跟着走
 function currentPathMapping(): string {
-  const embyRoot = embyMediaRoot.value.trim()
-  const l = norm(localPath.value)
-  return embyRoot ? `${l === mediaRoot.value ? '' : l}#${embyRoot}` : ''
+  return joinMapping(localPath.value, embyMediaRoot.value, mediaRoot.value)
 }
+
+/**
+ * 映射两侧是拆开编辑的，保存时才拼回 path_mapping，所以拿已保存的规则走一遍拆 → 拼再比。
+ * 不直接和 path_mapping 比：老格式（相对子目录、写着本地根）读进来就和拼回去的不一样，一打开就报未保存
+ */
+const dirty = computed(() => {
+  const m = splitMapping(saved.value.path_mapping, mediaRoot.value)
+  return modelDirty.value || currentPathMapping() !== joinMapping(m.local, m.emby, mediaRoot.value)
+})
 
 async function saveEmby() {
   model.value.path_mapping = currentPathMapping()
@@ -225,114 +248,110 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 </script>
 
 <template>
+  <!-- 一屏放下：连接与 Webhook 并排，路径映射与转换测试同一张网格上下对齐，保存条收在最后 -->
   <div class="tab">
-    <SectionCard title="Emby 管理" hint="入库刷新与路径映射">
-      <FieldRow
-        label="Emby 服务器地址"
-        required
-        tip="Emby 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
-      >
-        <HInput v-model="model.server_url" placeholder="如 http://192.168.1.100:8096" :input-attrs="plainProps('emby-server-url')" />
-      </FieldRow>
+    <div class="grid">
+      <SectionCard title="Emby 连接" hint="入库刷新、提前探测、对账都用这里的地址与密钥">
+        <FieldRow
+          stacked
+          label="服务器地址"
+          required
+          tip="Emby 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
+        >
+          <HInput v-model="model.server_url" placeholder="如 http://192.168.1.100:8096" :input-attrs="plainProps('emby-server-url')" />
+        </FieldRow>
 
-      <FieldRow label="API 密钥" tip="Emby 后台「设置 → API 密钥」生成，用于按库刷新与连接测试。">
-        <div class="h-field-row">
-          <SecretInput
-            v-model="model.api_key"
-            name="emby-api-key"
-            :reveal="{ key: 'emby', field: 'api_key' }"
-            placeholder="Emby 设置 → API 密钥 中生成"
-          />
-          <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>
-        </div>
-        <TestBanner :state="banner" />
-      </FieldRow>
+        <FieldRow stacked label="API 密钥" tip="Emby 后台「设置 → API 密钥」生成，用于按库刷新与连接测试。">
+          <div class="h-field-row">
+            <SecretInput
+              v-model="model.api_key"
+              name="emby-api-key"
+              :reveal="{ key: 'emby', field: 'api_key' }"
+              placeholder="Emby 设置 → API 密钥 中生成"
+            />
+            <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>
+          </div>
+          <TestBanner :state="banner" />
+        </FieldRow>
 
-      <FieldRow
-        label="本地路径映射"
-        tip="左边是本站容器里的本地路径，右边是同一个目录在 Emby 里的路径。左边留空 = 本地媒体库目录，两个容器挂同一个目录时留空即可。"
-      >
-        <div class="path-pair">
-          <label>
-            <span>本地路径（留空 = 本地媒体库目录）</span>
-            <HInput v-model="localPath" :placeholder="mediaRoot || '/media'" />
-          </label>
-          <span class="path-arrow">→</span>
-          <label>
-            <span>Emby 媒体库目录</span>
-            <HInput v-model="embyMediaRoot" placeholder="如 /media" />
-          </label>
+        <FieldRow
+          stacked
+          label="入库时刷新"
+          tip="非必须：Emby 开着实时监控也能入库，这里只是让入库更快。"
+        >
+          <HSwitch v-model="model.refresh_enabled">STRM 生成后通知 Emby 刷新对应媒体库</HSwitch>
+        </FieldRow>
+      </SectionCard>
+
+      <SectionCard title="Emby Webhook" hint="入库 / 删除 / 播放时的消息通知，改动即时生效">
+        <FieldRow
+          stacked
+          label="接收地址"
+          tip="填到 Emby 的 Webhooks，请求方式 POST、内容类型 application/json；推送哪些事件在 Emby 里勾选。"
+          hint="主机部分换成 Emby 访问得到的地址：同宿主机容器用 172.17.0.1，局域网用内网 IP，跨网用公网域名；路径与 token 不变。"
+        >
+          <CopyBox :value="webhookUrl" />
+        </FieldRow>
+
+        <FieldRow
+          stacked
+          label="鉴权 token"
+          tip="Emby 推送时必须带相同 token，否则返回 401。可改成好记的（4-64 位字母数字），改完 Emby 侧地址要同步更新。"
+        >
+          <div class="h-field-row">
+            <HInput v-model="notifyToken" placeholder="自动生成，可自定义" @blur="saveToken(notifyToken)" />
+            <HButton variant="tertiary" @click="rotateToken">换一个</HButton>
+          </div>
+        </FieldRow>
+      </SectionCard>
+    </div>
+
+    <SectionCard title="路径映射" hint="同一个目录在本站与 Emby 里各是什么路径；两个容器挂同一个目录时，本地一侧留空即可">
+      <template #extra>
+        <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
+      </template>
+
+      <div class="map">
+        <label class="cell">
+          <span class="cell-label">本地路径（留空 = 本地媒体库目录）</span>
+          <HInput v-model="localPath" :placeholder="mediaRoot || '/media'" />
+        </label>
+        <span class="arrow">→</span>
+        <label class="cell">
+          <span class="cell-label">Emby 媒体库目录</span>
+          <HInput v-model="embyMediaRoot" placeholder="如 /media" />
+        </label>
+        <div class="cell">
+          <span class="cell-label">
+            路径风格
+            <HHelpTip text="通知 Emby 的路径分隔符：Unix（/）或 Windows（\），与 Emby 挂载方式一致。" />
+          </span>
+          <HSegmented v-model="model.style" :options="[{ label: 'Unix', value: 'unix' }, { label: 'Windows', value: 'windows' }]" />
         </div>
-        <p v-if="localSideWarn" class="side-warn">{{ localSideWarn }}</p>
-        <div class="detect">
-          <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
-          <span v-if="detectNote" class="detect-note">{{ detectNote }}</span>
+
+        <label class="cell">
+          <span class="cell-label">转换测试：输入一个本地路径</span>
+          <HInput v-model="pathProbe" placeholder="如 /media/电影/钢铁侠.mkv" />
+        </label>
+        <span class="arrow">→</span>
+        <div class="cell span-rest">
+          <span class="cell-label">Emby 里的路径</span>
+          <CopyBox v-if="pathResult" :value="pathResult" tone="success" />
+          <div v-else class="probe-empty">输入左边的路径后显示，与 Emby 里的一致即映射正确</div>
         </div>
-        <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
-          前往「账号与媒体库」修改本地目录
+      </div>
+
+      <p v-if="localSideWarn" class="side-warn">{{ localSideWarn }}</p>
+      <p v-if="detectNote" class="detect-note">{{ detectNote }}</p>
+      <p class="map-foot">
+        本地媒体库目录：<code>{{ mediaRoot || '未设置' }}</code>
+        <HButton variant="ghost" size="sm" class="text-btn" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
+          前往「账号与媒体库」修改
         </HButton>
-      </FieldRow>
-
-      <FieldRow
-        label="路径风格"
-        tip="通知 Emby 的路径分隔符：Unix（/）或 Windows（\），与 Emby 挂载方式一致。"
-      >
-        <HSegmented v-model="model.style" :options="[{ label: 'Unix 风格', value: 'unix' }, { label: 'Windows 风格', value: 'windows' }]" />
-      </FieldRow>
-
-      <FieldRow
-        label="路径转换测试"
-        wide
-        tip="输入一个本地路径，下方显示转换后的 Emby 路径，一致则说明映射正确。"
-      >
-        <HInput v-model="pathProbe" placeholder="如 /media/电影/钢铁侠.mkv" />
-        <CopyBox v-if="pathResult" class="probe-out" :value="pathResult" tone="success" />
-      </FieldRow>
-
-      <FieldRow
-        label="入库时刷新"
-        tip="启用后 STRM 生成时自动通知 Emby 刷新对应媒体库（用上方服务器地址与 API 密钥）。"
-      >
-        <HSegmented v-model="model.refresh_enabled" :options="[{ label: '启用', value: true }, { label: '禁用', value: false }]" />
-      </FieldRow>
-
-      <FormActions>
-        <HButton variant="primary" :loading="saving" @click="saveEmby">保存配置</HButton>
-        <HButton variant="tertiary" @click="reset">重置配置</HButton>
-      </FormActions>
-
-      <HAlert status="accent" class="note">
-        配置 Emby 连接后，STRM 生成时按库刷新对应媒体库，整理入库更快。非必须——开启 Emby
-        实时监控也一样，此通知只是能更快入库。
-      </HAlert>
+      </p>
     </SectionCard>
 
-    <SectionCard title="Emby Webhook" hint="入库 / 删除 / 播放时的消息通知">
-      <HAlert status="accent" class="note-top">
-        把下方地址填到 Emby 的 Webhooks（请求方式 POST，内容类型 application/json）。
-        推送哪些事件由 Emby 侧勾选决定；token 为本实例自动生成的鉴权密钥。
-      </HAlert>
-
-      <FieldRow
-        label="接收地址"
-        wide
-        tip="填到 Emby 的 Webhooks（POST + application/json）。主机部分可换成 Emby 可达的任意地址，路径与 token 不变。"
-        hint="主机部分按 Emby 的网络环境替换：同宿主机容器间用 172.17.0.1，局域网用内网 IP，跨网用公网 IP/域名 —— 路径与 token 保持不变即可。"
-      >
-        <CopyBox :value="webhookUrl" />
-      </FieldRow>
-
-      <FieldRow
-        label="鉴权 token"
-        tip="自动生成，可改成自己好记的（仅字母数字）；修改后立即生效，Emby 侧地址需同步更新。"
-        hint="Emby 推送时必须携带相同 token，否则返回 401；「换一个」随机重新生成。"
-      >
-        <div class="h-field-row">
-          <HInput v-model="notifyToken" placeholder="自动生成，可自定义" @blur="saveToken(notifyToken)" />
-          <HButton variant="tertiary" @click="rotateToken">换一个</HButton>
-        </div>
-      </FieldRow>
-    </SectionCard>
+    <SaveBar :dirty="dirty" :saving="saving" note="连接、入库刷新与路径映射一起保存；Webhook 的 token 改完即生效" @save="saveEmby" />
   </div>
 </template>
 
@@ -342,60 +361,86 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
   flex-direction: column;
   gap: 16px;
 }
-.probe-out {
-  margin-top: 8px;
-}
-.path-pair {
+.grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+/* 映射与转换测试共用一张网格：两行的输入框、箭头上下对齐，一眼看出「这边进、那边出」 */
+.map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: 12px 10px;
   align-items: end;
 }
-.path-pair label {
+.cell {
   min-width: 0;
 }
-.path-pair label > span {
-  display: block;
+.cell-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-bottom: 5px;
   font-size: 12px;
   color: var(--c-text-3);
 }
-.detect {
+.span-rest {
+  grid-column: 3 / -1;
+}
+.arrow {
+  padding-bottom: 8px;
+  color: var(--c-text-3);
+}
+.probe-empty {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.side-warn {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--warning);
 }
 .detect-note {
+  margin: 10px 0 0;
   font-size: 12px;
   color: var(--muted);
   word-break: break-all;
 }
-.side-warn {
-  margin-top: 6px;
+.map-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 10px 0 0;
   font-size: 12px;
-  color: var(--warning);
+  color: var(--muted);
 }
-.path-arrow {
-  padding-bottom: 8px;
-  color: var(--c-text-3);
+.map-foot code {
+  word-break: break-all;
 }
-.location-link {
-  margin-top: 6px;
-}
-.note {
-  margin-top: 16px;
-}
-.note-top {
-  margin-bottom: 8px;
-}
-@media (max-width: 720px) {
-  .path-pair {
+
+@media (max-width: 960px) {
+  .grid {
     grid-template-columns: 1fr;
   }
-  .path-arrow {
+}
+@media (max-width: 720px) {
+  .map {
+    grid-template-columns: 1fr;
+  }
+  .arrow {
     display: none;
+  }
+  .span-rest {
+    grid-column: auto;
   }
 }
 </style>
