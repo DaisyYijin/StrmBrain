@@ -11,7 +11,9 @@ export const runPipeline = () => http.post<QueuedReply>('/organize/pipeline')
 
 // ---- 二级分类 / 洗版规则（YAML） ----
 export const getCategories = () => http.get<{ config?: string }>('/scrape/categories')
-export const saveCategories = (yaml: string) => http.post('/scrape/categories', { yaml })
+/** confirmLibChange：后端 409 说「有分类换了媒体库」、用户确认后再带上 */
+export const saveCategories = (yaml: string, opts?: { confirmLibChange?: boolean }) =>
+  http.post('/scrape/categories', { yaml, ...(opts?.confirmLibChange ? { confirm_lib_change: true } : {}) })
 
 export const getWash = () => http.get<{ config?: string }>('/scrape/wash')
 export const saveWash = (yaml: string) => http.post('/scrape/wash', { yaml })

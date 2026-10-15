@@ -463,6 +463,8 @@ export interface OutlineItem {
   chips: string[]
   /** 永远匹配不到的规则压暗显示 */
   muted?: boolean
+  /** 落进哪个库（多个媒体库时才有，ruleDest.ts）。default = 没写 library、落在默认库；bad = library 认不出 */
+  dest?: { text: string; tone: 'default' | 'set' | 'bad'; hint?: string }
 }
 
 export interface OutlineGroup {

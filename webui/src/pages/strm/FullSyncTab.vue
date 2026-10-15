@@ -93,7 +93,7 @@ const offFinished = queue.onFinished((j) => {
 onUnmounted(offFinished)
 
 const busy = computed(() => props.runs.busyFull.value)
-/** 附加媒体库：全量同步逐个库跑（后端 libroots.go） */
+/** 其他媒体库：全量同步逐个库跑（后端 libroots.go） */
 const extraLibs = computed(() => (cfg.value.extra_libs ?? []).filter((e) => e.cid && e.cid !== cfg.value.cid))
 const extraLibCount = computed(() => extraLibs.value.length)
 const extraLibTitle = computed(() => extraLibs.value.map((e) => e.path || `cid ${e.cid}`).join('\n'))
@@ -113,7 +113,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
         <FolderTree :size="15" />
         <span class="loc-label">115</span>
         <span class="loc-path" :class="{ 'is-empty': !cfg.cid }">{{ cfg.cid_path || cfg.cid || '未配置' }}</span>
-        <span v-if="extraLibCount" class="loc-more" :title="extraLibTitle">+{{ extraLibCount }} 个附加库</span>
+        <span v-if="extraLibCount" class="loc-more" :title="extraLibTitle">等 {{ extraLibCount + 1 }} 个库</span>
       </span>
       <ArrowRight :size="15" class="loc-arrow" />
       <span class="loc-item" :title="cfg.local_path">

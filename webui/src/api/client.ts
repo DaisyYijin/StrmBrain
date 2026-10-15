@@ -31,6 +31,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** 响应体原样（409 要用户确认时带着清单，如媒体库的 confirm、二级分类的 lib_changes） */
+    readonly data: Record<string, unknown> = {},
   ) {
     super(message)
     this.name = 'ApiError'
@@ -90,7 +92,7 @@ async function requestOnce<T>(url: string, init: RequestInit): Promise<T> {
   }
 
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new ApiError(data.message || data.error || '请求失败', res.status)
+  if (!res.ok) throw new ApiError(data.message || data.error || '请求失败', res.status, data)
   return data as T
 }
 

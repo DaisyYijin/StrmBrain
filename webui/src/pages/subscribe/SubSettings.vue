@@ -14,7 +14,7 @@ import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubscribeConfig } from '@/api/subscribe'
 import { toastError, useFeedback } from '@/composables/useFeedback'
-import { useStagingSubs } from '@/composables/stagingSubs'
+import { stagingSubChoices, useStagingSubs } from '@/composables/stagingSubs'
 
 /**
  * 订阅的全局设置（setting "subscribe"，整存整取）。
@@ -30,8 +30,8 @@ const notify = ref<string[]>([])
 const { items: stagingItems } = useStagingSubs()
 /** 默认转存到：转存目录本身或某个绑定了媒体库的子目录（按来源分库） */
 const subdirOptions = computed(() => [
-  { label: '转存目录', value: '' },
-  ...stagingItems.value.filter((s) => !s.problem).map((s) => ({ label: `${s.name} → ${s.lib_name || '媒体库'}`, value: s.cid })),
+  { label: '转存目录（按分类选库）', value: '' },
+  ...stagingSubChoices(),
 ])
 const subdir = computed({
   get: () => cfg.value?.subdir ?? '',
@@ -113,7 +113,7 @@ async function save() {
       <FieldRow
         v-if="stagingItems.length"
         label="默认转存到"
-        hint="按来源分库：订阅转存进绑定了媒体库的子目录，整理时落进那个库。单个订阅可以另选；子目录解绑后退回转存目录"
+        hint="选一个库的转存入口：订阅的内容整理时直接落进那个库，不看分类规则。单个订阅可以另选；入口在「账号与媒体库 → 媒体库」里开，关掉后退回转存目录"
       >
         <HSelect v-model="subdir" :options="subdirOptions" aria-label="默认转存到" />
       </FieldRow>

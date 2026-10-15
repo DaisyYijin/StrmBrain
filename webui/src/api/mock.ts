@@ -249,6 +249,10 @@ const SETTINGS: Record<string, unknown> = {
   full: {
     cid: '2894561234',
     cid_path: '/媒体库',
+    extra_libs: [
+      { cid: '200', path: '/动漫' },
+      { cid: '300', path: '/4K' },
+    ],
     local_path: '/media',
     video_ext: ['mp4', 'mkv', 'ts', 'iso'],
     image_ext: ['jpg', 'png'],
@@ -290,7 +294,7 @@ const FILE_TREE: Record<string, unknown[]> = {
 }
 const FILE_ROOTS = { '2894561234': 'library', '301': 'pending', '303': 'existing', '304': 'redundant' }
 
-type Route = unknown | ((q: URLSearchParams) => unknown)
+type Route = unknown | ((q: URLSearchParams, init?: RequestInit) => unknown)
 
 
 // ---- 影视转存 / 资源订阅（2026-10-08 合并页预览用） ----
@@ -352,8 +356,136 @@ for (const s of SUBS) {
   }
 }
 
+// ---- 多个媒体库（库卡片 / 二级分类落点 / 转存入口，2026-10-15） ----
+
+let mockCategoryYaml = `movie:
+  电影/动画电影:
+    genre_ids: '16'
+    library: '动漫'
+  电影/华语电影:
+    original_language: 'zh,cn,bo,za'
+  电影/纪录片:
+    genre_ids: '99'
+  电影/外语电影:
+
+tv:
+  电视剧/国漫:
+    genre_ids: '16'
+    origin_country: 'CN,TW,HK'
+    library: '动画'
+  电视剧/日番:
+    genre_ids: '16'
+    origin_country: 'JP'
+    library: '动漫'
+  电视剧/纪录片:
+    genre_ids: '99'
+  电视剧/综艺:
+    genre_ids: '10764,10767'
+  电视剧/国产剧:
+    origin_country: 'CN,TW,HK'
+  电视剧/未分类:
+`
+
+type MockLib = { cid: string; name: string; path: string }
+const mockLibs: MockLib[] = [
+  { cid: '2894561234', name: '媒体库', path: '/媒体库' },
+  { cid: '200', name: '动漫', path: '/动漫' },
+  { cid: '300', name: '4K', path: '/4K' },
+]
+let mockInboxes: { cid: string; name: string; lib: string; problem?: string }[] = [
+  { cid: 's-anime', name: '动漫', lib: '200' },
+  { cid: 's-4k', name: '4K', lib: '300', problem: '这个子目录已经不在转存目录下（换过转存目录或在网盘上挪走了），整理不会再扫它' },
+]
+/** 转存目录里已有、没绑定的子目录：名字 → 里面几项（演示「同名且不空要确认」） */
+const mockStagingDirs: Record<string, number> = { 纪录片: 5, 临时: 0 }
+
+function mockRules(src = mockCategoryYaml) {
+  const rules: { media_type: 'movie' | 'tv'; name: string; library?: string }[] = []
+  let mt: 'movie' | 'tv' = 'movie'
+  let cur: { media_type: 'movie' | 'tv'; name: string; library?: string } | null = null
+  for (const line of src.split('\n')) {
+    if (line === 'movie:' || line === 'tv:') mt = line === 'tv:' ? 'tv' : 'movie'
+    else if (/^ {2}\S.*:$/.test(line)) rules.push((cur = { media_type: mt, name: line.trim().slice(0, -1) }))
+    else if (cur && /^ {4}library:/.test(line)) cur.library = line.split(':')[1].trim().replace(/^'|'$/g, '')
+  }
+  return rules
+}
+
+function mockLibrariesView() {
+  const rules = mockRules()
+  const libOf = (v?: string) => (v ? mockLibs.find((l) => l.name === v || l.cid === v) : mockLibs[0])
+  return {
+    libs: mockLibs.map((l, i) => ({
+      cid: l.cid,
+      name: l.name,
+      path: l.path,
+      local: `/media/${l.name}`,
+      default: i === 0,
+      rules: rules.filter((r) => libOf(r.library)?.cid === l.cid).map(({ media_type, name }) => ({ media_type, name })),
+      inboxes: mockInboxes.filter((b) => b.lib === l.cid).map((b) => ({ ...b, lib_name: l.name })),
+      emby:
+        l.cid === '200'
+          ? { covered: false, partial: false, unmapped: false, suggest: '/mnt/emby/动漫' }
+          : { covered: true, partial: false, unmapped: false },
+    })),
+    orphan_rules: rules.filter((r) => !libOf(r.library)),
+    rename_fixes: [{ from: '动画', to: '动漫', lib: '200' }],
+    names_known: true,
+    staging_root: '301',
+    local_root: '/media',
+    emby_configured: true,
+  }
+}
+
+function mockSaveLibraries(init?: RequestInit) {
+  const req = JSON.parse(String(init?.body ?? '{}')) as {
+    extra_libs: { cid: string; path: string }[]
+    inboxes: { cid?: string; name: string; lib: string; confirm?: boolean }[]
+  }
+  const need = req.inboxes
+    .filter((b) => !b.cid && mockStagingDirs[b.name] && !b.confirm)
+    .map((b) => ({ name: b.name, lib: b.lib, items: mockStagingDirs[b.name] }))
+  if (need.length) return { __status: 409, error: '转存目录里已有同名子目录，里面有东西', confirm: need }
+  const keep = new Set(req.extra_libs.map((e) => e.cid))
+  for (let i = mockLibs.length - 1; i > 0; i--) if (!keep.has(mockLibs[i].cid)) mockLibs.splice(i, 1)
+  for (const e of req.extra_libs) {
+    if (!mockLibs.some((l) => l.cid === e.cid)) {
+      const name = e.path.split('/').filter(Boolean).pop() || e.cid
+      mockLibs.push({ cid: e.cid, name, path: e.path || `/${name}` })
+    }
+  }
+  mockInboxes = req.inboxes.map((b) => {
+    const old = mockInboxes.find((o) => o.cid && o.cid === b.cid)
+    return old ? { ...old, lib: b.lib } : { cid: b.cid || `s-${b.name}`, name: b.name, lib: b.lib }
+  })
+  return { message: '已保存', jobs: [], subs_moved: 0, data: mockLibrariesView() }
+}
+
 const ROUTES: Record<string, Route> = {
   ...(subRoutes as Record<string, Route>),
+  '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
+    init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
+  '/scrape/categories': (_q: URLSearchParams, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body ?? '{}')) as { yaml: string; confirm_lib_change?: boolean }
+      const libName = (v?: string) => (v ? (mockLibs.find((l) => l.name === v || l.cid === v)?.name ?? v) : mockLibs[0].name)
+      const before = new Map(mockRules().map((r) => [`${r.media_type}:${r.name}`, libName(r.library)]))
+      const changes = mockRules(body.yaml)
+        .map((r) => ({ r, from: before.get(`${r.media_type}:${r.name}`), to: libName(r.library) }))
+        .filter((x) => x.from !== undefined && x.from !== x.to)
+        .map(({ r, from, to }) => ({ media_type: r.media_type, name: r.name, from, to, titles: 40 }))
+      if (changes.length && !body.confirm_lib_change)
+        return { __status: 409, error: '有分类换了媒体库', lib_changes: changes }
+      mockCategoryYaml = body.yaml
+      return { message: '保存成功' }
+    }
+    return { config: mockCategoryYaml }
+  },
+  '/staging/libs': () => ({
+    root: '301',
+    items: mockInboxes.map((b) => ({ ...b, lib_name: mockLibs.find((l) => l.cid === b.lib)?.name })),
+    libs: mockLibs.map((l, i) => ({ cid: l.cid, name: l.name, primary: i === 0 })),
+  }),
   '/config/setting': (q: URLSearchParams) => {
     const v = SETTINGS[q.get('key') ?? '']
     return v === undefined ? {} : { value: JSON.stringify(v) }
@@ -581,9 +713,11 @@ export function installMockApi() {
       // 留一点延迟，好让骨架屏/加载态在演示里真的出现
       await new Promise((r) => setTimeout(r, 180))
       const route = ROUTES[path]
-      const body = typeof route === 'function' ? route(new URLSearchParams(query)) : route
+      const body = typeof route === 'function' ? route(new URLSearchParams(query), init) : route
+      // 路由可以带 __status 模拟非 200（409 要用户确认之类）
+      const status = (body as { __status?: number } | null)?.__status ?? 200
       return new Response(JSON.stringify(body), {
-        status: 200,
+        status,
         headers: { 'Content-Type': 'application/json' },
       })
     }

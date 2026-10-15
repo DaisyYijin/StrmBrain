@@ -14,6 +14,9 @@ import WashHelp from './WashHelp.vue'
 import RuleBuilder from './RuleBuilder.vue'
 import RuleOutline from './RuleOutline.vue'
 import { lintCategory, lintWash, outlineCategory, outlineWash } from './ruleLint'
+import { withDest, type DestLib } from './ruleDest'
+import { libraryApi } from '@/api'
+import { ApiError } from '@/api/client'
 
 /** 二级分类与洗版两个页签结构完全一致，只有接口、文案和体检口径不同 */
 const props = defineProps<{
@@ -22,13 +25,14 @@ const props = defineProps<{
   hint?: string
   note: string
   load: () => Promise<{ config?: string; default_config?: string }>
-  persist: (yaml: string) => Promise<unknown>
+  /** confirmLibChange：用户已确认「换了库的分类，已入库的留在原库」（只有二级分类用，后端 409 时才带） */
+  persist: (yaml: string, opts?: { confirmLibChange?: boolean }) => Promise<unknown>
   /** 库里没有配置时填入编辑器的起始模板。洗版不传：后端首次部署就播种了真实
       配置，这里再兜底显示一份默认策略只会让「清空=不洗版」看着像还在生效 */
   fallback?: string
 }>()
 
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
 
 const yaml = ref('')
 const defaultTemplate = ref(props.fallback || '')
@@ -59,9 +63,56 @@ async function save() {
     await props.persist(yaml.value)
     message.success('保存成功')
   } catch (e) {
-    toastError(e, '保存失败：请检查 YAML 缩进与格式')
+    const changes = e instanceof ApiError && e.status === 409 ? (e.data.lib_changes as LibChange[] | undefined) : undefined
+    if (changes?.length) await confirmLibChange(changes)
+    else toastError(e, '保存失败：请检查 YAML 缩进与格式')
   } finally {
     saving.value = false
+  }
+}
+
+/** 后端说「有分类换了媒体库、原来的库里已有片」（categorylib.go 的 categoryLibChanges） */
+interface LibChange {
+  media_type: 'movie' | 'tv'
+  name: string
+  from: string
+  to: string
+  titles: number
+}
+
+/** 换了库的分类：已入库的片留在原库、不搬，之后的新集进新库。说清楚再存（设计文档 §3.4） */
+async function confirmLibChange(changes: LibChange[]) {
+  const stay = changes.reduce((n, c) => n + c.titles, 0)
+  const ok = await dialog.confirm({
+    title: '有分类换了媒体库',
+    content:
+      changes.map((c) => `${c.name}：${c.from} → ${c.to}（原来的库里已有 ${c.titles} 部）`).join('\n') +
+      `\n\n已经入库的 ${stay} 部留在原来的库里，不会自动搬；在追的剧之后的新集会进新库，一部剧可能分在两个库里。` +
+      `想把已有的也挪过去，保存后到「网盘文件」对这些片目点「整理」。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '保存', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  try {
+    await props.persist(yaml.value, { confirmLibChange: true })
+    message.success('保存成功')
+  } catch (e) {
+    toastError(e, '保存失败')
+  }
+}
+
+/** 多个媒体库时大纲上标出每条规则落进哪个库（只有二级分类；一个库时不显示，是噪音） */
+const destLibs = ref<DestLib[]>([])
+async function loadDestLibs() {
+  if (props.kind !== 'category') return
+  try {
+    const v = await libraryApi.getLibraries()
+    // 名字认不全时按名字写的规则会被误标「认不出」：宁可不标
+    destLibs.value = v.names_known && v.libs.length > 1 ? v.libs.map((l) => ({ cid: l.cid, name: l.name, default: l.default })) : []
+  } catch {
+    destLibs.value = []
   }
 }
 
@@ -69,7 +120,11 @@ async function save() {
 const issues = computed(() => (props.kind === 'category' ? lintCategory(yaml.value) : lintWash(yaml.value)))
 const errors = computed(() => issues.value.filter(i => i.level === 'error').length)
 const warns = computed(() => issues.value.filter(i => i.level === 'warn').length)
-const outline = computed(() => (props.kind === 'category' ? outlineCategory(yaml.value) : outlineWash(yaml.value)))
+const outline = computed(() => {
+  if (props.kind !== 'category') return outlineWash(yaml.value)
+  const groups = outlineCategory(yaml.value)
+  return destLibs.value.length ? withDest(groups, yaml.value, destLibs.value) : groups
+})
 
 const LEVEL_TEXT = { error: '错误', warn: '不生效', info: '提示' }
 
@@ -77,7 +132,10 @@ function jump(line: number) {
   if (line > 0) editor.value?.focusLine(line)
 }
 
-onMounted(read)
+onMounted(() => {
+  void read()
+  void loadDestLibs()
+})
 </script>
 
 <template>

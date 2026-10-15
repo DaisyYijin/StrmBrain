@@ -8,8 +8,7 @@
  *   3) 分类规则讲顺序，写在兜底后面等于白写 → 插入点由结构决定（见 ruleEdit）。
  */
 import { computed, ref, watch } from 'vue'
-import { configApi } from '@/api'
-import type { FullSyncConfig } from '@/api/sync'
+import { libraryApi } from '@/api'
 import HMultiSelect, { type MultiGroup, type MultiOption } from '@/components/hero/HMultiSelect.vue'
 import HSelect, { type SelectOption } from '@/components/hero/HSelect.vue'
 import HButton from '@/components/hero/HButton.vue'
@@ -49,25 +48,23 @@ const prodCountries = ref<string[]>([])
 const langs = ref<string[]>([])
 const years = ref('')
 const regex = ref('')
-/** 整理进哪个媒体库：空 = 主媒体库；值是附加媒体库的目录名（YAML 的 library） */
+/** 整理进哪个媒体库：空 = 默认库（其余都放这里）；值是库目录名（YAML 的 library） */
 const library = ref('')
 const libOptions = ref<SelectOption<string>[]>([])
 
-/** 附加媒体库清单（账号与媒体库里配的），没有附加库时不显示这一项 */
+/** 媒体库清单（账号与媒体库里配的），只有一个库时不显示这一项 */
 async function loadLibOptions() {
   try {
-    const full = await configApi.getSetting<Partial<FullSyncConfig>>('full', {})
-    const extras = (full.extra_libs ?? []).filter(e => e.cid && e.cid !== full.cid)
-    libOptions.value = extras.length
-      ? [
-          { label: '主媒体库（不写 library）', value: '' },
-          ...extras.map(e => {
-            // YAML 里写目录名：比 cid 好认；没存路径的老配置只能写 cid
-            const name = (e.path ?? '').split('/').filter(Boolean).pop() || e.cid
-            return { label: e.path ? `${name}（${e.path}）` : `cid ${e.cid}`, value: name }
-          }),
-        ]
-      : []
+    const { libs } = await libraryApi.getLibraries()
+    libOptions.value =
+      libs.length > 1
+        ? libs.map(l =>
+            l.default
+              ? { label: `${l.name || '默认库'}（其余都放这里，不写 library）`, value: '' }
+              : // YAML 里写目录名：比 cid 好认；名字还没读到的只能写 cid
+                { label: l.name || `cid ${l.cid}`, value: l.name || l.cid },
+          )
+        : []
   } catch {
     libOptions.value = []
   }

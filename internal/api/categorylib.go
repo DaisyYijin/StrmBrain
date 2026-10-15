@@ -211,8 +211,9 @@ func libValueMatches(val string, lib libRoot) bool {
 // ---- 保存二级分类时的改库确认（§3.4） ----
 
 // categoryLibConfirm 保存二级分类时，改了库且这一类已有片目就先返回 409 让用户确认。
-// 阶段 2 前端能处理这个 409 之前不打开：老前端收到 409 只会弹「保存失败」
-var categoryLibConfirm = false
+// 2026-10-15 阶段 2 起打开（前端 YamlRuleTab 认这个 409、弹确认后带 confirm_lib_change 重发）。
+// 留着开关是给测试与回退用的：前端要是又不认了，关掉它比让用户永远存不了强
+var categoryLibConfirm = true
 
 // categoryLibChange 一条规则换了库
 type categoryLibChange struct {

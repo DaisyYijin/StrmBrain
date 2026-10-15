@@ -7,14 +7,15 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HTabs from '@/components/hero/HTabs.vue'
-import { ChevronRight, Info, Plus, QrCode, ShieldCheck, X } from '@lucide/vue'
+import { ChevronRight, Info, QrCode, ShieldCheck } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
+import LibraryCards from '@/components/accounts/LibraryCards.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
-import Cid115Input, { type CidValue } from '@/components/Cid115Input.vue'
+import Cid115Input from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
 import { configApi, libraryApi, organizeApi, storageApi } from '@/api'
 import type { LibLeftover } from '@/api/library'
@@ -72,18 +73,15 @@ watch(
 )
 
 /**
- * 附加媒体库（full.extra_libs）。主库以外再挂几个 115 目录，同步、海报墙、深度删除和主库一样管；
- * 整理按分类规则的 library 决定放进哪个库。编辑时只改这份副本，点「保存媒体库位置」才写回 media.model。
+ * 其他媒体库（full.extra_libs）由下面的库卡片管（LibraryCards，PUT /libraries）。
+ * 它存完之后这边手里的 full 要跟上：「保存媒体库位置」是整存 full 的，拿着旧的 extra_libs 一存就把刚加的库冲掉了
  */
-const extraLibs = ref<CidValue[]>([])
-const extraInputs = ref<(InstanceType<typeof Cid115Input> | null)[]>([])
-watch(
-  () => media.model.value.extra_libs,
-  (v) => {
-    extraLibs.value = (v ?? []).map((e) => ({ cid: e.cid, path: e.path || e.cid }))
-  },
-  { immediate: true },
-)
+const libCards = ref<InstanceType<typeof LibraryCards> | null>(null)
+async function onLibsSaved(extras: { cid: string; path: string }[]) {
+  if (media.dirty.value) media.model.value.extra_libs = extras
+  else await media.load()
+  void loadLeftovers()
+}
 /**
  * 移出配置的媒体库在本地留下的 STRM 与台账（后端 libleft.go）。删掉一个附加库、或 115 上给库改了名之后出现；
  * 只列出来，用户点了才清，清理也只动本地
@@ -105,7 +103,7 @@ onUnmounted(offFinished)
 async function cleanLeftover(l: LibLeftover) {
   const ok = await dialog.confirm({
     title: `清理「${l.name}」的本地残留`,
-    content: `将删除本地媒体库根目录下的「${l.name}」整个目录（STRM、字幕、NFO、图片），以及台账里它的 ${l.files} 行。网盘上的文件不动；以后想要回来，把这个库加回附加媒体库再跑一次全量同步即可。Emby 里对应的媒体库请自己在 Emby 里删除或刷新。`,
+    content: `将删除本地媒体库根目录下的「${l.name}」整个目录（STRM、字幕、NFO、图片），以及台账里它的 ${l.files} 行。网盘上的文件不动；以后想要回来，把这个库加回媒体库再跑一次全量同步即可。Emby 里对应的媒体库请自己在 Emby 里删除或刷新。`,
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
       { label: '清理本地', value: true, variant: 'danger' },
@@ -121,13 +119,6 @@ async function cleanLeftover(l: LibLeftover) {
   }
 }
 
-function addExtraLib() {
-  extraLibs.value.push({ cid: '', path: '' })
-}
-function removeExtraLib(i: number) {
-  extraLibs.value.splice(i, 1)
-  extraInputs.value.splice(i, 1)
-}
 
 /**
  * 工作目录（转存/待整理、已存在、冗余）的现状，连同媒体库一起在「工作目录」卡里列出来。
@@ -318,33 +309,11 @@ async function saveMedia() {
     }
   }
   media.model.value.cid_path = readablePath
-
-  // 附加媒体库：空行丢掉；填了却解析不出 cid 的拦下来，别静默丢掉用户要加的库
-  const extras: { cid: string; path: string }[] = []
-  for (let i = 0; i < extraLibs.value.length; i++) {
-    const row = extraLibs.value[i]
-    if (!row.path.trim() && !row.cid) continue
-    const ecid = (await extraInputs.value[i]?.ensureCid()) ?? row.cid
-    if (!ecid || ecid === '0') {
-      message.error(`第 ${i + 1} 个附加媒体库的路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid`)
-      return
-    }
-    if (ecid === cid || extras.some((e) => e.cid === ecid)) {
-      message.error(`第 ${i + 1} 个附加媒体库和前面的媒体库是同一个目录`)
-      return
-    }
-    let p = row.path.trim()
-    if (!p || /^\d+$/.test(p)) {
-      try {
-        p = (await storageApi.path115(ecid)).path
-      } catch {
-        p = ''
-      }
-    }
-    extras.push({ cid: ecid, path: p })
+  // extra_libs 原样带回去（库卡片存完会同步到 media.model，见 onLibsSaved）
+  if (await media.save()) {
+    void loadLeftovers()
+    void libCards.value?.reload() // 默认库换了目录：卡片上的名字、本地目录跟着变
   }
-  media.model.value.extra_libs = extras
-  if (await media.save()) void loadLeftovers() // 刚移掉的库会出现在残留里
 }
 
 function reset() {
@@ -475,32 +444,9 @@ onMounted(() => {
               <FieldRow
                 label="115 媒体库目录"
                 required
-                tip="主媒体库。分类规则没写 library 的都整理到这里；全量同步、增量同步与洗版判定都以各库为准。"
+                tip="「其余都放这里」的那个库：二级分类里没指定库的规则都整理到这里。要再加别的 115 目录，用下面的「添加媒体库」。"
               >
                 <Cid115Input ref="cidInput" v-model="cidValue" />
-              </FieldRow>
-
-              <FieldRow
-                label="附加媒体库"
-                tip="主媒体库以外的 115 目录，同步、海报墙、深度删除都和主库一样管，本地 STRM 放在「本地根目录/库目录名」下。各库之间不能互相包含，目录名也不能重名。要把某一类整理进附加库，在「自动整理 → 二级分类」的规则里写 library: 库目录名（规则生成器里可以直接选）。Emby 路径映射的本地一侧请留空（跟随本地根目录），只填某个库目录的话，其他库在 Emby 里对不上。"
-              >
-                <div class="extra-libs">
-                  <div v-for="(_row, i) in extraLibs" :key="i" class="extra-lib">
-                    <Cid115Input
-                      :ref="(el) => (extraInputs[i] = el as InstanceType<typeof Cid115Input> | null)"
-                      v-model="extraLibs[i]"
-                      placeholder="选择另一个 115 媒体库目录"
-                      class="extra-lib-input"
-                    />
-                    <HButton variant="ghost" icon-only :aria-label="`移除第 ${i + 1} 个附加媒体库`" @click="removeExtraLib(i)">
-                      <template #icon><X :size="15" /></template>
-                    </HButton>
-                  </div>
-                  <HButton variant="secondary" size="sm" @click="addExtraLib">
-                    <template #icon><Plus :size="15" /></template>
-                    添加媒体库
-                  </HButton>
-                </div>
               </FieldRow>
 
               <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
@@ -527,6 +473,8 @@ onMounted(() => {
                 <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
               </FormActions>
             </SectionCard>
+
+            <LibraryCards v-if="!libUnset" ref="libCards" @saved="onLibsSaved" />
           </div>
 
           <!-- ==== 右：工作目录一览（宽屏吸顶，左边表单滚动时一直看得见） ==== -->
@@ -622,22 +570,6 @@ onMounted(() => {
   justify-content: space-between;
   gap: 8px;
   padding: 2px 0;
-}
-.extra-libs {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-.extra-lib {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-}
-.extra-lib-input {
-  flex: 1;
-  min-width: 0;
 }
 .media-note :deep(svg) {
   flex-shrink: 0;

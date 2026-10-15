@@ -54,13 +54,23 @@ function setPick(v: string) {
   }
 }
 
-/** 下拉选项：转存目录本身 + 各绑定子目录（失效的不给选） */
-const options = computed(() => [
-  { label: '转存目录', value: '' },
-  ...items.value
-    .filter((s) => !s.problem)
-    .map((s) => ({ label: `${s.name} → ${s.lib_name || '媒体库'}`, value: s.cid })),
-])
+/**
+ * 一个入口在下拉里的名字：用户选的是「进哪个库」，所以写库名（2026-10-15 起，MULTI-LIB-SIMPLIFY-PLAN.md §2.2）。
+ * 入口子目录名和库名不一样、或者一个库开了几个入口时，括号里补上子目录名，免得两项看着一样
+ */
+export function stagingSubLabel(s: StagingLib, all: StagingLib[] = items.value): string {
+  const lib = s.lib_name || '媒体库'
+  const twins = all.filter((x) => x.lib === s.lib && !x.problem).length > 1
+  return s.name !== lib || twins ? `${lib}（转存/${s.name}）` : lib
+}
+
+/** 能选的入口（失效的不给选），值是子目录 cid */
+export function stagingSubChoices(): { label: string; value: string }[] {
+  return items.value.filter((s) => !s.problem).map((s) => ({ label: stagingSubLabel(s), value: s.cid }))
+}
+
+/** 下拉选项：转存目录本身（按分类选库）+ 各入口 */
+const options = computed(() => [{ label: '转存目录（按分类选库）', value: '' }, ...stagingSubChoices()])
 
 /** 当前选的子目录；绑定被删掉了就退回转存目录 */
 const current = computed(() => (items.value.some((s) => s.cid === pick.value && !s.problem) ? pick.value : ''))

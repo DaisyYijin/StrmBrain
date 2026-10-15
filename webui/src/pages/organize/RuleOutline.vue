@@ -27,6 +27,7 @@ const emit = defineEmits<{ jump: [number] }>()
           :class="{ muted: it.muted }"
           @click="emit('jump', it.line)"
         >
+          <span v-if="it.dest" class="ro-dest" :class="`is-${it.dest.tone}`" :title="it.dest.hint">{{ it.dest.text }}</span>
           <span class="label">{{ it.label }}</span>
           <span v-for="t in it.tags" :key="t" class="ro-tag">{{ t }}</span>
           <span v-if="it.muted" class="ro-tag warn">不会生效</span>
@@ -115,6 +116,23 @@ const emit = defineEmits<{ jump: [number] }>()
 
 .label {
   font-weight: 600;
+}
+/* 落点：库名放在分类目录前面，连起来读就是完整路径；默认库的压淡，认不出的标红 */
+.ro-dest {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.ro-dest.is-default {
+  background: var(--surface-secondary);
+  color: var(--muted);
+}
+.ro-dest.is-bad {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 .ro-tag {
   padding: 1px 6px;

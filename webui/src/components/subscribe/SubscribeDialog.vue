@@ -18,7 +18,7 @@ import { resourcesApi } from '@/api'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubForm, Subscription, TmdbSeason } from '@/api/subscribe'
 import { useTransferSources } from '@/composables/transferSources'
-import { useStagingSubs } from '@/composables/stagingSubs'
+import { stagingSubChoices, useStagingSubs } from '@/composables/stagingSubs'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
@@ -46,8 +46,8 @@ const { items: stagingItems } = useStagingSubs()
 const subdirOptions = computed(() => {
   const out = [
     { label: '跟随订阅设置', value: '' },
-    { label: '转存目录', value: 'root' },
-    ...stagingItems.value.filter((s) => !s.problem).map((s) => ({ label: `${s.name} → ${s.lib_name || '媒体库'}`, value: s.cid })),
+    { label: '转存目录（按分类选库）', value: 'root' },
+    ...stagingSubChoices(),
   ]
   // 选过的子目录后来解绑了：仍显示出来，免得下拉是空的、看不出原来选了什么
   const cur = form.value.subdir
@@ -253,7 +253,7 @@ async function submit() {
       <FieldRow
         v-if="stagingItems.length"
         label="转存到"
-        hint="按来源分库：转存进绑定了媒体库的子目录，整理时落进那个库（优先于分类规则）。跟随设置 = 订阅设置里的默认值"
+        hint="选一个库的转存入口：整理时直接落进那个库，不看分类规则。跟随设置 = 订阅设置里的默认值"
       >
         <HSelect v-model="form.subdir" :options="subdirOptions" aria-label="转存到" />
       </FieldRow>

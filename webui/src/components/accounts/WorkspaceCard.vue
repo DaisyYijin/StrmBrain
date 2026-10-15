@@ -36,8 +36,8 @@ const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component
   existing: { label: '已存在', desc: '洗版判输或重复的文件搬到这里', icon: Copy, to: { name: 'organize', query: { tab: 'basic' } } },
   redundant: { label: '冗余', desc: '被新版本替换下来的旧文件', icon: Archive, to: { name: 'organize', query: { tab: 'basic' } } },
 }
-/** 附加媒体库那几行的文案（图标、去向同主库） */
-const EXTRA_LIB = { label: '附加媒体库', desc: '同步、海报墙与主库一样管；整理按分类规则的 library 放进来' }
+/** 其他媒体库那几行的文案（图标、去向同默认库） */
+const EXTRA_LIB = { label: '媒体库', desc: '放什么、从哪进，在「媒体库」卡片里看' }
 const labelOf = (s: WsSlot) => (s.extra ? EXTRA_LIB.label : META[s.key].label)
 const descOf = (s: WsSlot) => (s.extra ? EXTRA_LIB.desc : META[s.key].desc)
 </script>
