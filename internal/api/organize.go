@@ -687,6 +687,14 @@ var (
 	classifyRuleAt    = map[string]time.Time{}
 )
 
+// forgetClassifyRules 规则表刚被改写（媒体库卡片移除库时改了 library）：别等 10 秒过期
+func forgetClassifyRules() {
+	classifyRuleMu.Lock()
+	classifyRuleCache = map[string][]model.CategoryRule{}
+	classifyRuleAt = map[string]time.Time{}
+	classifyRuleMu.Unlock()
+}
+
 func classifyRules(mediaType string) []model.CategoryRule {
 	classifyRuleMu.Lock()
 	defer classifyRuleMu.Unlock()

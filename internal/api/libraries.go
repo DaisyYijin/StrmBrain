@@ -1,0 +1,275 @@
+package api
+
+import (
+	"net/http"
+	"path"
+	"path/filepath"
+	"strings"
+
+	"115-station/internal/model"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ==================== 媒体库卡片（2026-10-15，MULTI-LIB-SIMPLIFY-PLAN.md） ====================
+//
+// 「账号与媒体库 → 媒体库」按库一张卡片：库在哪（115 目录、本地目录）、从哪进（转存入口 = 绑定的转存子目录）、
+// 哪些分类规则落进来（只读，改去二级分类）、Emby 有没有覆盖它。存储一概不动：
+// full.extra_libs、staging_libs、分类 YAML 的 library 还是原来那三份，这里只是一个汇总读、一个合并写。
+//
+// 分类归属**只在二级分类里改**（§0.5：卡片上只剩一个分类名，条件、顺序看不到，用户会以为是在定义「什么是动漫」）。
+// 卡片保存只在移除库时碰 YAML：删掉指向它的 library，否则整理到这一类会报错停下（categorylib.go）。
+//
+// GET 零 115 请求：库名与位置一律读路径缓存，缓存没有的退回配置里存的显示路径（选目录时带来的），
+// 都没有就空着，界面显示 cid。
+
+// libraryView 一张库卡片
+type libraryView struct {
+	Cid     string `json:"cid"`
+	Name    string `json:"name"`  // 115 目录名 = 本地第一层；认不出为空
+	Path    string `json:"path"`  // 网盘绝对路径；认不出为空
+	Local   string `json:"local"` // 本地目录（本地根 / 库名）；库名认不出为空
+	Default bool   `json:"default"`
+	// Rules 落进这个库的分类规则（默认库：没写 library 的那些）
+	Rules   []ruleLibRef     `json:"rules"`
+	Inboxes []stagingLibView `json:"inboxes"`
+	Emby    *libEmbyState    `json:"emby,omitempty"`
+}
+
+// libEmbyState 这个库在 Emby 里有没有被某个媒体库覆盖（只读，§3.7）
+type libEmbyState struct {
+	Covered bool `json:"covered"` // 某个 Emby 媒体库的目录就是它或它的上层
+	Partial bool `json:"partial"` // 只覆盖了它下面的一部分（比如按分类建的 Emby 库）
+	// Unmapped 路径映射的本地一侧不包含这个库：Emby 看到的路径换不回本地，入库刷新、深删、对账都对不上
+	Unmapped bool `json:"unmapped"`
+	// Suggest 应该在 Emby 里添加的路径（按路径映射换算）；换算不出为空
+	Suggest string `json:"suggest,omitempty"`
+}
+
+// libRenameFix 规则里写的库名认不出，但能认出是哪个库改了名（库在 115 上改名后配置里留的旧显示路径对得上）
+type libRenameFix struct {
+	From string `json:"from"` // YAML 里写的旧名
+	To   string `json:"to"`   // 现在的库名
+	Lib  string `json:"lib"`  // 库 cid
+}
+
+// libNameSource 一个库的名字与位置：路径缓存优先，其次配置里存的显示路径
+type libNameSource struct {
+	Cid      string
+	Shown    string // 配置里存的显示路径（full.cid_path / extra_libs[].path），可能过时
+	CachedOK bool
+	Cached   model.PathCache
+}
+
+// libRootOf 名字与网盘路径。缓存里的是 115 现在的样子；显示路径是选目录那一刻的样子
+func (s libNameSource) libRootOf() libRoot {
+	r := libRoot{Cid: s.Cid}
+	if s.CachedOK {
+		r.Name, r.Abs = s.Cached.Name, s.Cached.Path
+		if r.Name == "" && r.Abs != "" {
+			r.Name = path.Base(r.Abs)
+		}
+		return r
+	}
+	if p := strings.TrimRight(strings.TrimSpace(s.Shown), "/"); p != "" && strings.HasPrefix(p, "/") {
+		r.Name, r.Abs = path.Base(p), p
+	}
+	return r
+}
+
+// staleName 配置里显示路径的目录名与 115 现在的名字不同时，返回旧名（库在 115 上改过名）
+func (s libNameSource) staleName() string {
+	if !s.CachedOK {
+		return ""
+	}
+	p := strings.TrimRight(strings.TrimSpace(s.Shown), "/")
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	if old := path.Base(p); old != "" && old != s.Cached.Name {
+		return old
+	}
+	return ""
+}
+
+// libNameSources 当前配置的各库（主库在前），名字只看缓存与配置，零 115 请求
+func libNameSources(fullRaw string) []libNameSource {
+	cfg := parseFullCfg(fullRaw)
+	shown := map[string]string{strings.TrimSpace(cfg.Cid): jsonStrField(fullRaw, "cid_path")}
+	for _, e := range cfg.ExtraLibs {
+		shown[strings.TrimSpace(e.Cid)] = e.Path
+	}
+	cids := cfg.libCids()
+	out := make([]libNameSource, 0, len(cids))
+	for _, cid := range cids {
+		s := libNameSource{Cid: cid, Shown: shown[cid]}
+		s.Cached, s.CachedOK = lookupCachedRow(cid)
+		out = append(out, s)
+	}
+	return out
+}
+
+// libRenameFixes 认不出的规则里，哪些写的正好是某个库改名前的名字（零请求：比的是配置里存的旧显示路径）
+func libRenameFixes(orphans []ruleLibRef, sources []libNameSource) []libRenameFix {
+	stale := map[string]libNameSource{}
+	for _, s := range sources {
+		if old := s.staleName(); old != "" {
+			stale[old] = s
+		}
+	}
+	seen := map[string]bool{}
+	var out []libRenameFix
+	for _, o := range orphans {
+		v := strings.Trim(strings.TrimSpace(o.Library), "/")
+		s, ok := stale[v]
+		if !ok || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, libRenameFix{From: v, To: s.Cached.Name, Lib: s.Cid})
+	}
+	return out
+}
+
+// libEmbyCoverage 一个库的本地目录在 Emby 里的覆盖情况。locations 是各 Emby 媒体库的目录（Emby 路径）。
+// 纯函数：路径映射的换算都走 embyPathToLocal / embyPathRoots，与入库刷新、深删同一套
+func libEmbyCoverage(pathMapping string, locations []string, libLocal string) libEmbyState {
+	var st libEmbyState
+	lib := strings.TrimRight(filepath.ToSlash(libLocal), "/")
+	if lib == "" {
+		return st
+	}
+	for _, loc := range locations {
+		local := strings.TrimRight(filepath.ToSlash(embyPathToLocal(pathMapping, loc)), "/")
+		if local == "" {
+			continue
+		}
+		switch {
+		case local == lib || strings.HasPrefix(lib, local+"/"):
+			st.Covered = true
+		case strings.HasPrefix(local, lib+"/"):
+			st.Partial = true
+		}
+	}
+	if st.Covered {
+		st.Partial = false
+	}
+	localRoot, embyRoot := embyPathRoots(pathMapping)
+	if strings.Contains(pathMapping, "#") && embyRoot != "" {
+		lr := strings.TrimRight(localRoot, "/")
+		switch {
+		case lib == lr:
+			st.Suggest = embyRoot
+		case lr != "" && strings.HasPrefix(lib, lr+"/"):
+			st.Suggest = embyRoot + lib[len(lr):]
+		default:
+			st.Unmapped = true
+		}
+	} else if !st.Covered {
+		st.Suggest = lib // 没配映射：两边看到的是同一个路径
+	}
+	return st
+}
+
+// librariesView GET /libraries 的全部内容
+type librariesView struct {
+	Libs        []libraryView  `json:"libs"`
+	OrphanRules []ruleLibRef   `json:"orphan_rules"`
+	RenameFixes []libRenameFix `json:"rename_fixes"`
+	// NamesKnown 各库名字都认得出（缓存或配置里有）。认不出时按名字写的规则会被误算成「认不出的库」，
+	// 界面据此不下结论（同 libleft.go：认不准宁可不说）
+	NamesKnown  bool   `json:"names_known"`
+	StagingRoot string `json:"staging_root"`
+	LocalRoot   string `json:"local_root"`
+	// Emby 整体状态：没配 / 读失败时给原因，库卡片上就不显示覆盖情况
+	EmbyConfigured bool   `json:"emby_configured"`
+	EmbyError      string `json:"emby_error,omitempty"`
+}
+
+// buildLibrariesView 组装库卡片。embyLocs 为 nil 表示没读 Emby（没配或读失败）
+func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bindings []stagingLib,
+	stagingRoot, localRoot, pathMapping string, embyLocs []string) librariesView {
+	roots := make([]libRoot, len(sources))
+	choices := make([]libChoice, len(sources))
+	known := true
+	for i, s := range sources {
+		roots[i] = s.libRootOf()
+		choices[i] = libChoice{Cid: s.Cid, Name: roots[i].Name, Primary: i == 0}
+		if roots[i].Name == "" {
+			known = false
+		}
+	}
+	byLib, orphans := rulesByLib(rows, roots)
+	if !known {
+		orphans = nil // 名字认不全时按名字写的规则认不出是正常的，不报
+	}
+	views := stagingLibViews(bindings, choices, stagingRoot)
+	inboxes := map[string][]stagingLibView{}
+	for _, v := range views {
+		inboxes[v.Lib] = append(inboxes[v.Lib], v)
+	}
+	root := strings.TrimRight(filepath.ToSlash(localRoot), "/")
+	out := librariesView{
+		Libs:        make([]libraryView, 0, len(sources)),
+		OrphanRules: orphans,
+		RenameFixes: libRenameFixes(orphans, sources),
+		NamesKnown:  known,
+		StagingRoot: stagingRoot,
+		LocalRoot:   root,
+	}
+	for i, r := range roots {
+		v := libraryView{Cid: r.Cid, Name: r.Name, Path: r.Abs, Default: i == 0,
+			Rules: byLib[r.Cid], Inboxes: inboxes[r.Cid]}
+		if r.Name != "" && root != "" {
+			v.Local = root + "/" + r.Name
+		}
+		if v.Rules == nil {
+			v.Rules = []ruleLibRef{}
+		}
+		if v.Inboxes == nil {
+			v.Inboxes = []stagingLibView{}
+		}
+		if embyLocs != nil && v.Local != "" {
+			st := libEmbyCoverage(pathMapping, embyLocs, v.Local)
+			v.Emby = &st
+		}
+		out.Libs = append(out.Libs, v)
+	}
+	if out.OrphanRules == nil {
+		out.OrphanRules = []ruleLibRef{}
+	}
+	if out.RenameFixes == nil {
+		out.RenameFixes = []libRenameFix{}
+	}
+	return out
+}
+
+// librariesNow 当前状态（GET 与 PUT 的响应共用）。零 115 请求；Emby 配了才读一次它的媒体库列表
+func (h *Handler) librariesNow() librariesView {
+	var rows []model.CategoryRule
+	if h.DB != nil {
+		h.DB.Where("media_type IN ?", []string{"movie", "tv"}).Order("priority ASC").Find(&rows)
+	}
+	cfg, embyOK := loadEmbyRefreshCfg()
+	var locs []string
+	embyErr := ""
+	if embyOK {
+		if folders, err := embyVirtualFolders(cfg); err != nil {
+			embyErr = err.Error()
+		} else {
+			locs = []string{}
+			for _, f := range folders {
+				locs = append(locs, f.Locations...)
+			}
+		}
+	}
+	v := buildLibrariesView(libNameSources(h.getSettingValue("full")), rows, loadStagingLibs(),
+		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs)
+	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
+	return v
+}
+
+// GetLibraries GET /libraries
+func (h *Handler) GetLibraries(c *gin.Context) {
+	c.JSON(http.StatusOK, h.librariesNow())
+}

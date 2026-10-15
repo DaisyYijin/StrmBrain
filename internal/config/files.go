@@ -328,6 +328,33 @@ func (c *Config) SaveSetting(key, value string) error {
 	return os.Rename(tmp, c.SettingFile())
 }
 
+// SaveSettings 一次保存几个配置，同一次原子落盘：要么全写进去，要么一个都没变。
+// 几个 key 互相引用时用它（媒体库卡片同时改 full / staging_libs / subscribe），
+// 逐个 SaveSetting 的话中途失败会留下互相指着不存在的东西的配置
+func (c *Config) SaveSettings(kv map[string]string) error {
+	if len(kv) == 0 {
+		return nil
+	}
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	s, err := c.LoadSettings()
+	if err != nil {
+		return fmt.Errorf("读取现有配置失败，为防覆盖丢失已中止保存: %w", err)
+	}
+	for k, v := range kv {
+		s[k] = v
+	}
+	data, err := yaml.Marshal(&s)
+	if err != nil {
+		return err
+	}
+	tmp := c.SettingFile() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, c.SettingFile())
+}
+
 // EnsureConfigDir 确保配置目录存在
 func (c *Config) EnsureConfigDir() error {
 	return os.MkdirAll(c.ConfigDir, 0755)

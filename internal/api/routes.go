@@ -324,6 +324,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/files/library/episodes/preview", h.PreviewFileEpisodes)
 		protected.POST("/files/library/episodes", h.SubmitFileEpisodes)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
+		// 媒体库卡片：汇总读（零 115 请求）+ 合并写（附加库 / 转存入口 / 移除库，libraries.go）
+		protected.GET("/libraries", h.GetLibraries)
+		protected.PUT("/libraries", h.SaveLibraries)
 		protected.GET("/library/leftovers", h.ListLibLeftovers)
 		protected.POST("/library/leftovers/clean", h.CleanLibLeftover)
 
@@ -1206,6 +1209,8 @@ func (h *Handler) ListCategories(c *gin.Context) {
 func (h *Handler) SaveCategories(c *gin.Context) {
 	var req struct {
 		Yaml string `json:"yaml"`
+		// ConfirmLibChange 用户已确认「换了库的分类，已入库的留在原库」（categoryLibChanges）
+		ConfirmLibChange bool `json:"confirm_lib_change"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -1226,6 +1231,13 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	if err := h.checkRuleLibraries(rows); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	// 换了库的分类：已入库的片留在原库、之后的新集进新库（不搬），先让用户知道（MULTI-LIB-SIMPLIFY-PLAN.md §3.4）
+	if categoryLibConfirm && !req.ConfirmLibChange {
+		if changes := h.categoryLibChangesNow(rows); len(changes) > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "有分类换了媒体库", "lib_changes": changes})
+			return
+		}
 	}
 	// 存储 YAML 到 ScrapeRule 表（界面回显源）
 	var rule model.ScrapeRule
