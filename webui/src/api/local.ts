@@ -93,6 +93,8 @@ export interface LocalTitleList {
   missing?: number
   /** 目录筛选的选项：片目所在目录与各级上层，按段排好序；count 不套用其余筛选 */
   dirs?: LocalTitleDir[]
+  /** 配置的各媒体库名（按配置顺序）；只有一个库、或有库名字认不出时为空，海报墙不显示按库切换 */
+  libs?: string[]
 }
 
 export interface LocalTitleDir {

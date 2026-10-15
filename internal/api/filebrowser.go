@@ -251,7 +251,10 @@ func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCatego
 	if r := roles[it.ID]; r != "" {
 		return fileRowActions{Block: "整理工作区目录（" + workspaceRoleText(r) + "）不能整理或移动"}
 	}
-	if chainRoleIndex(chain, roles, "library") >= 0 {
+	if idx := chainRoleIndex(chain, roles, "library"); idx >= 0 {
+		if _, self := layout.selfDepth(chain[idx].Name); self {
+			return fileRowActions{Block: "「" + chain[idx].Name + "」是自己整理的库：本站只同步和刮削，不在这里整理或移动"}
+		}
 		if libName, rel, ok := libTitleOf(chain, roles, layout, it); ok {
 			return fileRowActions{Organize: true, Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
 		}

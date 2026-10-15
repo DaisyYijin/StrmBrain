@@ -88,6 +88,9 @@ func libTitleAround(chain []browseCrumb, roles map[string]string, layout libCate
 	if idx < 0 {
 		return libFileTitle{}, false
 	}
+	if _, self := layout.selfDepth(chain[idx].Name); self {
+		return libFileTitle{}, false // 自己整理的库：不指定季集（libopts.go）
+	}
 	parts := make([]string, 0, len(chain))
 	for j := idx + 1; j < len(chain); j++ {
 		parts = append(parts, chain[j].Name)
@@ -113,7 +116,7 @@ func episodeRowAction(t libFileTitle, layout libCategoryLayout, name string, isD
 	if !videoExts[strings.ToLower(pathExt(name))] {
 		return "字幕、NFO、图片跟着同名视频走"
 	}
-	if layout[path.Dir(t.titleRel)] == "movie" {
+	if mt, _ := layout.catType(path.Dir(t.titleRel)); mt == "movie" {
 		return "电影片目里的文件跟着片目走，请在片目那一层操作"
 	}
 	return ""

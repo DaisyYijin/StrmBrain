@@ -2,16 +2,18 @@
 /**
  * 多个媒体库：一库一卡（docs/115-station-notes/MULTI-LIB-SIMPLIFY-PLAN.md）。
  *
- * 卡片只管「库在哪、从哪进」：115 目录、本地目录、转存入口（绑定的转存子目录）、移除。
+ * 卡片只管「库在哪、做什么、从哪进」：115 目录、本地目录、谁来整理（LIBRARY-ROLES-PLAN.md）、
+ * 转存入口（绑定的转存子目录）、移除。
+ * 「我自己整理」的库本站不往里放东西：没有分类、没有转存入口，只声明片目在第几层（按台账马上给预览）。
  * **分类归属只读**，改去二级分类：卡片上只剩一个分类名，条件、顺序看不到，
  * 「往动漫库添加日番」会被读成在定义「什么是动漫」（§0.5）。
  *
- * 默认库（full.cid，「其余都放这里」）的 115 目录仍在上面「媒体库位置」里改，这里只列出来。
+ * 默认库（full.cid，「默认放这里」）的 115 目录仍在上面「媒体库位置」里改，这里只列出来。
  * 只有一个库时整张卡片不出现，只留一行「添加媒体库」。
  *
  * 保存走 PUT /libraries：附加库与入口整份替换；移除库是单独的一步（确认框里说清后果，立刻保存）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { FolderInput, Plus, Trash2, TriangleAlert, X } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -22,10 +24,12 @@ import HButton from '@/components/hero/HButton.vue'
 import HCheckbox from '@/components/hero/HCheckbox.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import { configApi, libraryApi, storageApi } from '@/api'
 import { ApiError } from '@/api/client'
-import type { LibInboxConfirm, LibInboxReq, LibrariesView, LibraryView } from '@/api/library'
+import type { LibInboxConfirm, LibInboxReq, LibMode, LibOpt, LibPreview, LibrariesView, LibraryView } from '@/api/library'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
 import { useQueueStore } from '@/stores/queue'
@@ -50,6 +54,14 @@ interface DraftLib {
   inboxes: { cid?: string; name: string; problem?: string }[]
   /** 入口开关打开、还没有任何入口时的新入口名 */
   inboxDraft?: string
+  /** 谁来整理；新加的库要用户选（空 = 还没选） */
+  mode: LibMode | ''
+  /** 自己整理的库：片目在第几层 */
+  depth: number
+  /** 按 depth 认出来的片目（不参与「有没有改动」的比较） */
+  preview?: LibPreview | null
+  previewing?: boolean
+  expanded?: boolean
 }
 
 const view = ref<LibrariesView | null>(null)
@@ -64,16 +76,24 @@ function draftsFrom(v: LibrariesView): DraftLib[] {
     cid: l.cid,
     view: l,
     inboxes: l.inboxes.map((b) => ({ cid: b.cid, name: b.name, problem: b.problem })),
+    mode: l.mode === 'self' ? 'self' : 'organize',
+    depth: l.depth || 2,
   }))
 }
 const serialize = (d: DraftLib[]) =>
-  JSON.stringify(d.map((x) => ({ cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null })))
+  JSON.stringify(
+    d.map((x) => ({
+      cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null,
+      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0,
+    })),
+  )
 const dirty = computed(() => serialize(drafts.value) !== snapshot)
 
 function apply(v: LibrariesView) {
   view.value = v
   drafts.value = draftsFrom(v)
   snapshot = serialize(drafts.value)
+  for (const d of drafts.value) if (d.mode === 'self') void loadPreview(d)
 }
 
 async function load() {
@@ -104,11 +124,96 @@ function libLabel(d: DraftLib) {
 // ---- 添加 ----
 
 function addLib() {
-  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [] })
+  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2 })
 }
 function dropNew(i: number) {
   drafts.value.splice(i, 1)
 }
+
+// ---- 谁来整理 ----
+
+const MODE_OPTS: { label: string; value: LibMode }[] = [
+  { label: '本站整理', value: 'organize' },
+  { label: '我自己整理', value: 'self' },
+]
+const DEPTH_OPTS = [
+  { label: '库 / 片目', value: 1 },
+  { label: '库 / 分类 / 片目', value: 2 },
+  { label: '库 / 分类 / 子分类 / 片目', value: 3 },
+]
+
+function modeHint(d: DraftLib) {
+  if (d.view?.default) return '首个媒体库暂时只能由本站整理：二级分类里没指定库的规则都放进它'
+  if (d.mode === 'organize') return '转存、下载进来的内容由本站识别、改名，按分类放进这个库'
+  if (d.mode === 'self') return '本站不往这个库里放东西；同步 STRM、海报墙、刮削、Emby 探测照常'
+  return '选一下：内容由本站整理进来，还是目录你自己管'
+}
+
+/** 切换整理方式。已有的库要先说清后果（规则回默认库、入口解绑），新加的库直接切 */
+async function setMode(d: DraftLib, to: LibMode) {
+  if (to === d.mode) return
+  if (!d.isNew) {
+    const lines =
+      to === 'self'
+        ? [
+            ...(d.view?.rules.length ? [`${d.view.rules.map((r) => r.name).join('、')} 改回「${defaultName.value}」（二级分类里的 library 会被删掉）`] : []),
+            ...(inboxOn(d) ? ['转存入口解绑：子目录和里面的东西不删，引用它的订阅改为转存到转存目录本身'] : []),
+            '库里已有的片原地不动；之后本站不再往里整理，网盘文件页里也不能整理、移动它下面的片',
+          ]
+        : [
+            '已有的片不搬、不改名',
+            '不在分类目录下的片海报墙会认不出（可以在网盘文件页对它们「整理」）',
+            '之后在二级分类里给规则选这个库、或打开转存入口，内容才会整理进来',
+          ]
+    const ok = await dialog.confirm({
+      title: `「${libLabel(d)}」改成${to === 'self' ? '我自己整理' : '本站整理'}`,
+      content: `${lines.map((s) => `· ${s}`).join('\n')}\n\n保存后生效。`,
+      actions: [
+        { label: '取消', value: false, variant: 'tertiary' },
+        { label: '改', value: true, variant: 'primary' },
+      ],
+    })
+    if (!ok) return
+  }
+  d.mode = to
+  if (to === 'self') {
+    d.inboxes = []
+    d.inboxDraft = undefined
+    void loadPreview(d)
+  }
+}
+
+/** 按选的层级预览认出来的片目（只读台账，零 115 请求）。新加的库按输入的目录名查 */
+async function loadPreview(d: DraftLib) {
+  if (d.isNew && !d.pick?.path) {
+    d.preview = null
+    return
+  }
+  const depth = d.depth
+  d.previewing = true
+  try {
+    const p = await libraryApi.previewLibrary(d.cid, depth, d.isNew ? libLabel(d) : undefined)
+    if (d.depth === depth) d.preview = p // 连着切了几次层级：只留最后一次的
+  } catch (e) {
+    toastError(e, '读取片目预览失败')
+  } finally {
+    d.previewing = false
+  }
+}
+// 新加的库先选了「我自己整理」、后选目录：目录定了再预览
+watch(
+  () => drafts.value.map((d) => (d.isNew && d.mode === 'self' ? (d.pick?.path ?? '') : '')).join('\n'),
+  () => {
+    for (const d of drafts.value) if (d.isNew && d.mode === 'self') void loadPreview(d)
+  },
+)
+function setDepth(d: DraftLib, v: number) {
+  d.depth = v
+  void loadPreview(d)
+}
+
+/** 本站整理却什么都进不来：不是默认库、没有分类、没有入口 */
+const idle = (d: DraftLib) => d.mode === 'organize' && !d.isNew && !d.view?.default && !d.view?.rules.length && !inboxOn(d)
 
 // ---- 转存入口 ----
 
@@ -131,6 +236,10 @@ async function resolveNew(): Promise<boolean> {
   for (let i = 0; i < drafts.value.length; i++) {
     const d = drafts.value[i]
     if (!d.isNew) continue
+    if (!d.mode) {
+      message.error('新加的媒体库还没选谁来整理：本站整理，还是我自己整理')
+      return false
+    }
     const cid = (await newInputs.value[i]?.ensureCid()) ?? d.pick?.cid ?? ''
     if (!cid || cid === '0') {
       message.error('新加的媒体库目录无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
@@ -158,7 +267,9 @@ function buildReq(list: DraftLib[], confirmed: Set<string>) {
     const name = d.inboxDraft?.trim()
     if (name && !d.inboxes.length) inboxes.push({ name, lib: d.cid, confirm: confirmed.has(name) })
   }
-  return { extra_libs, inboxes }
+  const opts: Record<string, LibOpt> = {}
+  for (const d of list) if (d.mode === 'self') opts[d.cid] = { mode: 'self', depth: d.depth }
+  return { extra_libs, inboxes, opts }
 }
 
 /** 发请求；同名子目录已存在且不空时问一次，确认了带上 confirm 重发 */
@@ -289,7 +400,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
     <HButton size="sm" variant="secondary" @click="addLib"><Plus :size="14" />添加媒体库</HButton>
   </div>
 
-  <SectionCard v-else-if="!loading && view" title="媒体库" hint="每个库在哪、从哪进来；放什么由二级分类决定">
+  <SectionCard v-else-if="!loading && view" title="媒体库" hint="每个库在哪、由谁整理；怎么分类在二级分类里定">
     <HAlert v-if="anyUnmapped" status="warning" title="Emby 路径映射只对得上一部分库" class="mb">
       路径映射的本地一侧只填了某一个库的目录，其他库在 Emby 里的路径换不回本地（入库刷新、删除联动都会对不上）。
       <template #actions>
@@ -303,7 +414,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
       <article v-for="(d, i) in drafts" :key="d.cid || `new-${i}`" class="lib">
         <header class="lib-head">
           <h3>{{ libLabel(d) }}</h3>
-          <span v-if="d.view?.default" class="tag-rest">其余都放这里</span>
+          <span v-if="d.view?.default" class="tag-rest">默认放这里</span>
           <span v-if="d.isNew" class="tag-new">新加，保存后生效</span>
           <span class="grow" />
           <HButton v-if="d.isNew" size="sm" variant="ghost" @click="dropNew(i)"><X :size="14" />不加了</HButton>
@@ -328,8 +439,68 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           <template v-if="d.view?.default"><span class="sep">·</span>在上面「媒体库位置」里改</template>
         </p>
 
+        <!-- 谁来整理（LIBRARY-ROLES-PLAN.md） -->
+        <div class="row">
+          <div class="row-label">整理</div>
+          <div class="row-body">
+            <HSegmented
+              :model-value="d.mode || undefined"
+              :options="MODE_OPTS"
+              size="sm"
+              :disabled="d.view?.default"
+              :aria-label="`${libLabel(d)} 由谁整理`"
+              @update:model-value="(v) => setMode(d, v as LibMode)"
+            />
+            <p class="muted small">{{ modeHint(d) }}</p>
+          </div>
+        </div>
+
+        <!-- 自己整理：片目在第几层 + 预览 -->
+        <div v-if="d.mode === 'self'" class="row">
+          <div class="row-label">片目在</div>
+          <div class="row-body">
+            <HSelect
+              :model-value="d.depth"
+              :options="DEPTH_OPTS"
+              class="depth"
+              aria-label="片目在第几层"
+              @update:model-value="(v) => setDepth(d, Number(v))"
+            />
+            <template v-if="d.preview">
+              <p v-if="!d.preview.total" class="muted small">
+                {{ d.isNew ? '台账里还没有这个目录的视频：保存后跑一次全量同步，再回来看认得对不对。' : '按这个层级一部都认不出来；还没同步过的话先跑一次全量同步。' }}
+              </p>
+              <template v-else>
+                <p class="cat-line">
+                  认出 {{ d.preview.total }} 部：
+                  <template v-for="(t, k) in d.preview.titles.slice(0, 4)" :key="t.key">
+                    <span v-if="k" class="sep">·</span>{{ t.title }}
+                  </template>
+                  <template v-if="d.preview.total > 4"> …</template>
+                  <button class="cat-link btn-link" @click="d.expanded = !d.expanded">{{ d.expanded ? '收起' : '看全部' }}</button>
+                </p>
+                <p v-if="d.preview.odd" class="warn-line">
+                  <TriangleAlert :size="13" />有 {{ d.preview.odd }} 部看着不像一部片，层级可能选错了（展开看原因）
+                </p>
+                <p v-if="d.preview.loose" class="muted small">另有 {{ d.preview.loose }} 个视频比片目那一层还浅，不算任何一部。</p>
+                <ul v-if="d.expanded" class="titles">
+                  <li v-for="t in d.preview.titles" :key="t.key" :class="{ odd: t.odd }">
+                    <MediaTypeChip :type="t.media_type" />
+                    <span class="t-name">{{ t.title }}</span>
+                    <span v-if="t.odd" class="t-odd">{{ t.odd }}</span>
+                    <span v-else class="muted t-path">{{ t.key }}</span>
+                  </li>
+                  <li v-if="d.preview.total > d.preview.titles.length" class="muted">还有 {{ d.preview.total - d.preview.titles.length }} 部没列出</li>
+                </ul>
+              </template>
+            </template>
+            <p v-else-if="d.previewing" class="muted small">正在按台账认片目…</p>
+            <p v-else-if="d.isNew" class="muted small">选好 115 目录后这里会按台账预览认出的片目。</p>
+          </div>
+        </div>
+
         <!-- 分类：只读，改去二级分类（§0.5） -->
-        <div v-if="!d.isNew" class="row">
+        <div v-if="!d.isNew && d.mode === 'organize'" class="row">
           <div class="row-label">分类</div>
           <div class="row-body">
             <p class="cat-line">
@@ -339,16 +510,17 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
                   <span v-if="k" class="sep">·</span><MediaTypeChip :type="r.media_type" /> {{ r.name }}
                 </template>
               </template>
-              <template v-else>
-                没有规则指向这里，{{ inboxOn(d) ? '只收转存入口进来的' : '要么在二级分类里给规则选这个库，要么打开下面的转存入口' }}
-              </template>
+              <template v-else-if="inboxOn(d)">没有规则指向这里，只收转存入口进来的</template>
+              <span v-else class="warn-line">
+                <TriangleAlert :size="13" />没有分类指向这里，也没有转存入口：什么都不会整理进来。在二级分类里给规则选这个库、打开下面的转存入口，或者改成「我自己整理」
+              </span>
             </p>
-            <RouterLink :to="CATEGORY_LINK" class="cat-link">去二级分类修改 →</RouterLink>
+            <RouterLink :to="CATEGORY_LINK" class="cat-link">{{ idle(d) ? '去二级分类给规则选这个库 →' : '去二级分类修改 →' }}</RouterLink>
           </div>
         </div>
 
-        <!-- 转存入口 -->
-        <div class="row">
+        <!-- 转存入口：只有本站整理的库有 -->
+        <div v-if="d.mode === 'organize'" class="row">
           <div class="row-label">转存入口</div>
           <div class="row-body">
             <div class="inbox-line">
@@ -570,6 +742,60 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 .x:hover {
   background: var(--surface-secondary);
   color: var(--foreground);
+}
+.warn-line {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--warning);
+}
+.warn-line svg {
+  flex: none;
+  margin-top: 4px;
+}
+.btn-link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.depth {
+  width: 240px;
+  margin-bottom: 4px;
+}
+.titles {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 280px;
+  overflow: auto;
+  list-style: none;
+  border-radius: var(--r-sm);
+  background: var(--surface-secondary);
+  font-size: 12.5px;
+}
+.titles li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.t-name {
+  flex: none;
+}
+.titles li.odd .t-name,
+.t-odd {
+  color: var(--warning);
+}
+.t-path,
+.t-odd {
+  margin: 0 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .miss-dir + .miss-dir {
   margin-left: 6px;

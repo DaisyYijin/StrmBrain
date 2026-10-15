@@ -30,6 +30,9 @@ type libraryView struct {
 	Path    string `json:"path"`  // 网盘绝对路径；认不出为空
 	Local   string `json:"local"` // 本地目录（本地根 / 库名）；库名认不出为空
 	Default bool   `json:"default"`
+	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
+	Mode  string `json:"mode"`
+	Depth int    `json:"depth"`
 	// Rules 落进这个库的分类规则（默认库：没写 library 的那些）
 	Rules   []ruleLibRef     `json:"rules"`
 	Inboxes []stagingLibView `json:"inboxes"`
@@ -314,6 +317,13 @@ func (h *Handler) librariesNow() librariesView {
 	v := buildLibrariesView(libNameSources(h.getSettingValue("full")), rows, loadStagingLibs(),
 		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs)
 	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
+	opts := loadLibOpts()
+	for i := range v.Libs {
+		v.Libs[i].Mode = "organize"
+		if o := opts.of(v.Libs[i].Cid); o.self() {
+			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()
+		}
+	}
 	return v
 }
 

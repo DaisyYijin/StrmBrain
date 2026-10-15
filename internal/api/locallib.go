@@ -416,8 +416,26 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"configured": true, "root": root,
 		"items": list[offset:end], "total": len(list), "offset": offset, "limit": limit,
-		"stats": st, "missing": missing, "dirs": localTitleDirs(all),
+		"stats": st, "missing": missing, "dirs": localTitleDirs(all), "libs": localLibNames(h.getSettingValue("full")),
 	})
+}
+
+// localLibNames 海报墙顶部「按库切换」的库名（配置顺序；名字读缓存，零 115 请求）。
+// 只有一个库、或有库名字认不出时返回空：切换就不显示，免得少一个库
+func localLibNames(fullRaw string) []string {
+	src := libNameSources(fullRaw)
+	if len(src) < 2 {
+		return []string{}
+	}
+	out := make([]string, 0, len(src))
+	for _, s := range src {
+		n := s.libRootOf().Name
+		if n == "" {
+			return []string{}
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // localTitleDir 目录筛选的一项：片目所在的目录与它的各级上层，Count 是这个目录下（含子目录）的片目数

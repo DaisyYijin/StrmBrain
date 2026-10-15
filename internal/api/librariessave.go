@@ -32,6 +32,8 @@ type libSaveReq struct {
 	Inboxes   []libInboxReq  `json:"inboxes"`
 	// CleanLocal 这次被移除的库里，要同时清理本地 STRM 与台账的（库 cid）。保存成功后入 libclean 队列
 	CleanLocal []string `json:"clean_local"`
+	// Opts 每个库让本站做什么（libopts.go，库 cid → 选项），整份替换；不带这个字段 = 沿用现在的
+	Opts map[string]libOpt `json:"opts"`
 }
 
 // libInboxReq 一个转存入口：Cid 是已有的子目录；Cid 为空 = 按 Name 在转存目录下建（同名的已存在就复用）
@@ -67,6 +69,7 @@ type libSaveInput struct {
 	StagingRoot  string
 	OldBindings  []stagingLib
 	CategoryYAML string // 没存过 YAML（规则来自种子）为空
+	OptsRaw      string // 现在的 lib_opts 原文
 }
 
 // libSavePlan 规划结果：要写什么
@@ -79,6 +82,10 @@ type libSavePlan struct {
 	YAMLChanged bool
 	Unbound     map[string]bool // 这次解绑的子目录 cid（订阅里引用它们的要退回）
 	Clean       []string        // 要清本地的库名
+	OptsJSON    string          // 要写的 lib_opts
+	OptsChanged bool
+	// ToSelf 这次改成自己整理的库（原来是本站整理）：指向它的规则回默认库、入口解绑，与移除库同一套收尾
+	ToSelf []libRoot
 }
 
 // planLibrariesSave 校验并算出要写的东西。不写任何东西；要用户确认时返回 confirms（不报错）
@@ -101,7 +108,7 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 			return plan, nil, errors.New("媒体库不能选网盘根目录，请选一个具体的文件夹")
 		}
 		if e.Cid == primary {
-			return plan, nil, errors.New("附加的媒体库和「其余都放这里」的那个库是同一个目录")
+			return plan, nil, errors.New("附加的媒体库和「默认放这里」的那个库是同一个目录")
 		}
 		extras = append(extras, e)
 	}
@@ -126,6 +133,40 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		}
 	}
 
+	// ---- 整理方式 ----
+	oldOpts := parseLibOpts(in.OptsRaw)
+	opts := libOpts{Libs: map[string]libOpt{}}
+	if req.Opts == nil {
+		opts = oldOpts // 老客户端不带：沿用（marshalLibOpts 会去掉已移除的库）
+	}
+	for cid, o := range req.Opts {
+		cid = strings.TrimSpace(cid)
+		if !nextSet[cid] {
+			continue
+		}
+		switch o.Mode {
+		case "", "organize":
+			continue
+		case libModeSelf:
+		default:
+			return plan, nil, fmt.Errorf("不认识的整理方式「%s」", o.Mode)
+		}
+		if cid == primary {
+			return plan, nil, errors.New("首个媒体库暂时只能由本站整理：它还兼着「默认放这里」")
+		}
+		if o.Depth < 1 || o.Depth > libOptDepthMax {
+			return plan, nil, errors.New("自己整理的库要选片目在第几层（1–3 层）")
+		}
+		opts.Libs[cid] = o
+	}
+	for _, l := range in.OldLibs {
+		if nextSet[l.Cid] && opts.of(l.Cid).self() && !oldOpts.of(l.Cid).self() {
+			plan.ToSelf = append(plan.ToSelf, l)
+		}
+	}
+	plan.OptsJSON = marshalLibOpts(opts, next)
+	plan.OptsChanged = plan.OptsJSON != strings.TrimSpace(in.OptsRaw) && !(plan.OptsJSON == "{}" && strings.TrimSpace(in.OptsRaw) == "")
+
 	// ---- 转存入口 ----
 	if len(req.Inboxes) > 0 && in.StagingRoot == "" {
 		return plan, nil, errors.New("先设置转存目录，才能给媒体库开转存入口")
@@ -139,6 +180,9 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		ib.Cid, ib.Name, ib.Lib = strings.TrimSpace(ib.Cid), strings.TrimSpace(ib.Name), strings.TrimSpace(ib.Lib)
 		if !nextSet[ib.Lib] {
 			return plan, nil, fmt.Errorf("转存入口「%s」指向的媒体库不在这次保存的媒体库里", ib.Name)
+		}
+		if opts.of(ib.Lib).self() {
+			return plan, nil, fmt.Errorf("转存入口「%s」指向的是自己整理的库，本站不往里整理", ib.Name)
 		}
 		if ib.Cid != "" {
 			if taken[ib.Cid] {
@@ -203,16 +247,17 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		}
 	}
 
-	// ---- 移除库：指向它的规则回默认库 ----
+	// ---- 移除库、改成自己整理：指向它的规则回默认库 ----
 	plan.YAML = in.CategoryYAML
-	if len(plan.Removed) > 0 && strings.TrimSpace(in.CategoryYAML) != "" {
-		for _, r := range plan.Removed {
+	drop := append(append([]libRoot{}, plan.Removed...), plan.ToSelf...)
+	if len(drop) > 0 && strings.TrimSpace(in.CategoryYAML) != "" {
+		for _, r := range drop {
 			if r.Name == "" {
-				return plan, nil, fmt.Errorf("读不出要移除的媒体库（cid=%s）的名字，没法确认分类规则里有没有指向它：稍后再试", r.Cid)
+				return plan, nil, fmt.Errorf("读不出媒体库（cid=%s）的名字，没法确认分类规则里有没有指向它：稍后再试", r.Cid)
 			}
 		}
 		out, changed, err := rewriteCategoryLibrary(in.CategoryYAML, func(_, _, old string) (string, bool) {
-			for _, r := range plan.Removed {
+			for _, r := range drop {
 				if libValueMatches(old, r) {
 					return "", false
 				}
@@ -220,7 +265,7 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 			return old, true
 		})
 		if err != nil {
-			return plan, nil, fmt.Errorf("移除媒体库要把指向它的分类规则改回默认库，但%v", err)
+			return plan, nil, fmt.Errorf("要把指向这个库的分类规则改回默认库，但%v", err)
 		}
 		plan.YAML, plan.YAMLChanged = out, changed
 	}
@@ -300,7 +345,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	stagingRoot := h.shareFolderCid()
 	plan, confirms, err := planLibrariesSave(libSaveInput{
 		FullRaw: fullRaw, OldLibs: oldLibs, StagingRoot: stagingRoot,
-		OldBindings: loadStagingLibs(), CategoryYAML: catRule.Config,
+		OldBindings: loadStagingLibs(), CategoryYAML: catRule.Config, OptsRaw: h.getSettingValue(libOptsKey),
 	}, req, libSaveDeps{
 		listRoot: func() ([]dirEntry, error) {
 			o, err := needOps()
@@ -379,6 +424,9 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	if string(bindingsJSON) != h.getSettingValue(stagingLibsKey) {
 		settings[stagingLibsKey] = string(bindingsJSON)
 	}
+	if plan.OptsChanged {
+		settings[libOptsKey] = plan.OptsJSON
+	}
 	if v, ok := subscribeCfgWithoutSubdir(h.getSettingValue("subscribe"), plan.Unbound); ok {
 		settings["subscribe"] = v
 	}
@@ -444,6 +492,14 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 
 	// ---- 收尾 ----
 	forgetClassifyRules()
+	if plan.OptsChanged || plan.FullChanged {
+		// 片目认在哪一层变了：海报墙、刮削、对账读的台账聚合都得重算
+		forgetLedgerTitles()
+		forgetLocalTitles()
+	}
+	for _, r := range plan.ToSelf {
+		log.Printf("[媒体库] ✓ 「%s」改成自己整理：本站不再往里整理，指向它的分类规则回默认库、转存入口解绑", r.Name)
+	}
 	for _, r := range plan.Removed {
 		log.Printf("[媒体库] ✓ 已移除媒体库「%s」（cid=%s），网盘上的目录不动", r.Name, r.Cid)
 	}

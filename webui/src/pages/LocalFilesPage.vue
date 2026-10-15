@@ -56,6 +56,8 @@ const keyword = ref('')
 /** 目录筛选：库名/分类（含子目录），空 = 全部 */
 const dir = ref('')
 const dirs = ref<LocalTitleDir[]>([])
+/** 配置的各媒体库名：两个以上时顶部按库切换（库就是目录筛选的第一段） */
+const libs = ref<string[]>([])
 const type = ref<'' | 'movie' | 'tv'>('')
 const status = ref<'' | LocalTitleStatus>('')
 /** 只看 Emby 里还缺媒体信息的（有 Emby 快照才显示这个开关） */
@@ -92,6 +94,7 @@ function apply(d: LocalTitleList) {
   stats.value = d.stats
   missing.value = d.missing ?? 0
   dirs.value = d.dirs ?? []
+  libs.value = d.libs ?? []
   loaded.value = true
 }
 
@@ -145,18 +148,36 @@ const typeOptions = computed(() => [
   { label: `电影 ${stats.value.movie}`, value: 'movie' as const },
   { label: `剧集 ${stats.value.tv}`, value: 'tv' as const },
 ])
+/** 按库切换（LIBRARY-ROLES-PLAN.md §5）：选库就是把目录筛选设成库名，目录下拉只列这个库里面的 */
+const libMode = computed(() => libs.value.length > 1)
+const lib = computed({
+  get: () => (libMode.value ? (dir.value.split('/')[0] ?? '') : ''),
+  set: (v: string) => (dir.value = v),
+})
+const libOptions = computed(() => [
+  { label: '全部库', value: '' },
+  ...libs.value.map((l) => ({ label: `${l} ${dirs.value.find((d) => d.path === l)?.count ?? 0}`, value: l })),
+])
+/** 目录下拉里的目录：按库切换时只列所选库下面的（没选库时不显示下拉） */
+const dirsInScope = computed(() => (libMode.value ? dirs.value.filter((d) => d.path.startsWith(`${lib.value}/`)) : dirs.value))
 /** 目录下拉：列表里按层级缩进成一棵树、带片目数；收起时只显示目录名。只有一个目录时没得选，不显示 */
 const dirOptions = computed(() => [
-  { label: '全部目录', value: '' },
-  ...dirs.value.map((d) => {
+  libMode.value ? { label: '整个库', value: lib.value } : { label: '全部目录', value: '' },
+  ...dirsInScope.value.map((d) => {
     const segs = d.path.split('/')
-    return { label: segs[segs.length - 1], value: d.path, indent: segs.length - 1, hint: String(d.count) }
+    const base = libMode.value ? 1 : 0
+    return { label: segs[segs.length - 1], value: d.path, indent: segs.length - 1 - base, hint: String(d.count) }
   }),
 ])
-const showDirs = computed(() => dirs.value.filter((d) => !dirs.value.some((o) => o.path.startsWith(`${d.path}/`))).length > 1)
+const showDirs = computed(() => {
+  if (libMode.value && !lib.value) return false
+  const ds = dirsInScope.value
+  return ds.filter((d) => !ds.some((o) => o.path.startsWith(`${d.path}/`))).length > 1
+})
 // 目录被删光了（换了分类规则、刷新后没了）：退回全部，免得停在一个空结果上
 watch(dirs, (v) => {
-  if (dir.value && !v.some((d) => d.path === dir.value)) dir.value = ''
+  // 选中的是一个还没有片目的库：留着（显示空墙），别弹回「全部库」
+  if (dir.value && !v.some((d) => d.path === dir.value) && !libs.value.includes(dir.value)) dir.value = ''
 })
 const statusOptions = computed(() => [
   { label: `全部 ${stats.value.all}`, value: '' as const },
@@ -558,6 +579,7 @@ onBeforeUnmount(() => {
           <div class="toolbar">
             <HSearchField v-model="keyword" class="filter" placeholder="搜索片名 / 路径 / TMDB 编号" />
             <div class="segs">
+              <HSegmented v-if="libMode" v-model="lib" :options="libOptions" size="sm" aria-label="媒体库" />
               <HSelect v-if="showDirs" v-model="dir" :options="dirOptions" aria-label="目录" class="dir" :title="dir || '全部目录'" />
               <HSegmented v-model="type" :options="typeOptions" size="sm" aria-label="类型" />
               <HSegmented v-if="showStatus" v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />

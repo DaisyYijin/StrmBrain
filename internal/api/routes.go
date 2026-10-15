@@ -326,6 +326,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
 		// 媒体库卡片：汇总读（零 115 请求）+ 合并写（附加库 / 转存入口 / 移除库，libraries.go）
 		protected.GET("/libraries", h.GetLibraries)
+		protected.GET("/libraries/preview", h.PreviewLibrary)
 		protected.PUT("/libraries", h.SaveLibraries)
 		protected.POST("/libraries/fix-rename", h.FixLibraryRename)
 		protected.GET("/library/leftovers", h.ListLibLeftovers)

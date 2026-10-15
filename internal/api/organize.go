@@ -57,6 +57,8 @@ type OrgConfig struct {
 	// SubLibs 绑定了媒体库的转存子目录（stagingsub.go）：子目录 cid → 绑定。
 	// 子目录也是工作区根（不当条目、不被清理）；扫描根换成它时 classify 按它选库
 	SubLibs map[string]stagingLib `json:"-"`
+	// SelfLibs 自己整理的库（libopts.go，库 cid）：仍在 OtherLibs 里当保护子树，但不是整理的落点
+	SelfLibs map[string]bool `json:"-"`
 }
 
 // workspaceRootCids 整理引擎永不当条目处理的根：媒体库（全部）、待整理、已存在、冗余、转存
@@ -139,7 +141,7 @@ func ruleLibOf(cfg *OrgConfig, sink *orgSink, val string) (string, error) {
 	cids := append([]string{cfg.Library}, cfg.OtherLibs...)
 	roots := make([]libRoot, 0, len(cids))
 	for _, cid := range cids {
-		roots = append(roots, libRoot{Cid: cid, Name: sink.libNameOf(sinkLibCid(cfg, cid))})
+		roots = append(roots, libRoot{Cid: cid, Name: sink.libNameOf(sinkLibCid(cfg, cid)), Self: cfg.SelfLibs[cid]})
 	}
 	return pickRuleLib(val, roots)
 }
@@ -154,10 +156,14 @@ func sinkLibCid(cfg *OrgConfig, cid string) string {
 	return cid
 }
 
-// recordLibOK 记录所在的媒体库还在配置里（空 = 主库，总是在）
+// recordLibOK 记录所在的媒体库还在配置里、而且还由本站整理（空 = 主库，总是在）。
+// 改成自己整理的库不再接受重新整理：那会往里放东西、改名，和「本站不碰」对不上
 func recordLibOK(cfg *OrgConfig, libCid string) bool {
 	if libCid == "" || libCid == cfg.Library {
 		return true
+	}
+	if cfg.SelfLibs[libCid] {
+		return false
 	}
 	for _, c := range cfg.OtherLibs {
 		if c == libCid {
@@ -322,6 +328,7 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	}
 	cfg.OtherLibs = fullCfg.otherLibCids()
 	cfg.SubLibs = stagingLibMap(loadStagingLibs())
+	cfg.SelfLibs = loadLibOpts().selfCids()
 	if cfg.Library == "" {
 		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
 	}

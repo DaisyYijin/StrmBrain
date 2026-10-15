@@ -17,7 +17,7 @@ func TestFindLibLeftovers(t *testing.T) {
 		"电影":  {7, 3}, // 老台账：不带库名，第一段是分类目录
 		"剧集":  {2, 1},
 	}
-	layout := libCategoryLayout{"电影/华语电影": "movie", "剧集": "tv"}
+	layout := catLayout(map[string]string{"电影/华语电影": "movie", "剧集": "tv"})
 	got := findLibLeftovers(counts, []string{"影视", "动漫库"}, layout)
 	if len(got) != 1 || got[0].Name != "旧库" || got[0].Files != 3 || got[0].Videos != 1 {
 		t.Fatalf("只有「旧库」是残留，实得 %+v", got)

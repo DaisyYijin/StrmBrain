@@ -48,19 +48,19 @@ const prodCountries = ref<string[]>([])
 const langs = ref<string[]>([])
 const years = ref('')
 const regex = ref('')
-/** 整理进哪个媒体库：空 = 默认库（其余都放这里）；值是库目录名（YAML 的 library） */
+/** 整理进哪个媒体库：空 = 默认库（默认放这里）；值是库目录名（YAML 的 library） */
 const library = ref('')
 const libOptions = ref<SelectOption<string>[]>([])
 
-/** 媒体库清单（账号与媒体库里配的），只有一个库时不显示这一项 */
+/** 媒体库清单（账号与媒体库里配的），只有一个库时不显示这一项。自己整理的库不能选：本站不往里整理 */
 async function loadLibOptions() {
   try {
     const { libs } = await libraryApi.getLibraries()
     libOptions.value =
       libs.length > 1
-        ? libs.map(l =>
+        ? libs.filter(l => l.mode !== 'self').map(l =>
             l.default
-              ? { label: `${l.name || '默认库'}（其余都放这里，不写 library）`, value: '' }
+              ? { label: `${l.name || '默认库'}（默认放这里，不写 library）`, value: '' }
               : // YAML 里写目录名：比 cid 好认；名字还没读到的只能写 cid
                 { label: l.name || `cid ${l.cid}`, value: l.name || l.cid },
           )

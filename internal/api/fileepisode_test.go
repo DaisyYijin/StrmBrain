@@ -31,7 +31,7 @@ func TestGuessEpisodeResolutionLikeDigits(t *testing.T) {
 }
 
 func episodeTestLayout() (libCategoryLayout, map[string]string, []browseCrumb) {
-	layout := libCategoryLayout{"动漫番剧": "tv", "电影": "movie"}
+	layout := catLayout(map[string]string{"动漫番剧": "tv", "电影": "movie"})
 	roles := map[string]string{"lib": "library"}
 	chain := []browseCrumb{{"lib", "影视"}, {"cat", "动漫番剧"}, {"title", "蜡笔小新.1992.{tmdbid=323180}"}, {"s0", "Season 0"}}
 	return layout, roles, chain

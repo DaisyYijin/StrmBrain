@@ -63,7 +63,7 @@ func findLibLeftovers(counts map[string][2]int64, libNames []string, layout libC
 	for _, n := range libNames {
 		keep[n] = true
 	}
-	for dir := range layout {
+	for dir := range layout.cats {
 		top, _, _ := strings.Cut(dir, "/")
 		keep[top] = true
 	}

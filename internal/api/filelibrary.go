@@ -37,10 +37,10 @@ func init() {
 
 // isCategoryOrAncestor 这个库内相对路径是分类目录，或是某个多级分类的上级（电视剧 之于 电视剧/日番）
 func (l libCategoryLayout) isCategoryOrAncestor(rel string) bool {
-	if _, ok := l[rel]; ok {
+	if _, ok := l.catType(rel); ok {
 		return true
 	}
-	for c := range l {
+	for c := range l.cats {
 		if strings.HasPrefix(c, rel+"/") {
 			return true
 		}
@@ -55,7 +55,7 @@ func (l libCategoryLayout) isTitleRel(rel string) bool {
 	if rel == "" || parent == "." {
 		return false
 	}
-	if _, ok := l[parent]; !ok {
+	if _, ok := l.catType(parent); !ok {
 		return false
 	}
 	return !l.isCategoryOrAncestor(rel)
@@ -82,6 +82,9 @@ func libTitleOf(chain []browseCrumb, roles map[string]string, layout libCategory
 		return "", "", false
 	}
 	libName, rel = itemLibRel(chain, idx, it)
+	if _, self := layout.selfDepth(libName); self {
+		return libName, rel, false // 自己整理的库：本站不整理、不移动（libopts.go）
+	}
 	return libName, rel, layout.isTitleRel(rel)
 }
 
@@ -157,7 +160,8 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if err != nil {
 		return jobOutcome{}, fmt.Errorf("读取片目失败: %w", err)
 	}
-	rec := libTitleRecord(it, fp.Cid, rel, layout[path.Dir(rel)], files)
+	catMT, _ := layout.catType(path.Dir(rel))
+	rec := libTitleRecord(it, fp.Cid, rel, catMT, files)
 	// 片目现在在哪个库：重新整理据此认旧的本地产物（分类规则指定别的库时会整部搬过去）
 	rec.LibCid = recordLibCid(chain[chainRoleIndex(chain, roles, "library")].Cid)
 	if rec.VideoCount == 0 {

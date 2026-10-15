@@ -70,6 +70,8 @@ type libRoot struct {
 	Cid  string
 	Name string // 115 目录名 = 本地第一层
 	Abs  string // 网盘绝对路径
+	// Self 自己整理的库（libopts.go）：本站不往里整理，分类规则选到它就报错
+	Self bool
 }
 
 // resolveLibRoots 把库清单解析成名字与网盘路径（都走路径缓存，命中不打接口）。
@@ -122,12 +124,21 @@ func (h *Handler) resolveConfiguredLibRoots(cookie string) ([]libRoot, error) {
 	if len(cids) == 0 {
 		return nil, fmt.Errorf("未配置媒体库目录")
 	}
-	return resolveLibRoots(func(cid string) string {
+	roots, err := resolveLibRoots(func(cid string) string {
 		if info, err := get115DirInfo(cookie, cid); err == nil {
 			return info.n
 		}
 		return ""
 	}, func(cid string) string { return absPathOf(cookie, cid) }, cids)
+	markSelfLibs(roots, loadLibOpts().selfCids())
+	return roots, err
+}
+
+// markSelfLibs 按 lib_opts 标出自己整理的库
+func markSelfLibs(roots []libRoot, self map[string]bool) {
+	for i := range roots {
+		roots[i].Self = self[roots[i].Cid]
+	}
 }
 
 // panDirOfLocal 本地相对目录（第一段是库名）→ 网盘绝对路径。
@@ -178,7 +189,7 @@ func pickRuleLib(val string, libs []libRoot) (string, error) {
 	}
 	for _, l := range libs {
 		if l.Cid == val {
-			return l.Cid, nil
+			return selfLibGuard(val, l.Cid, libs)
 		}
 	}
 	found := ""
@@ -193,7 +204,17 @@ func pickRuleLib(val string, libs []libRoot) (string, error) {
 	if found == "" {
 		return "", fmt.Errorf("分类规则指定的媒体库「%s」不在媒体库配置里（到「账号与媒体库」添加附加媒体库，或改分类规则的 library）", val)
 	}
-	return found, nil
+	return selfLibGuard(val, found, libs)
+}
+
+// selfLibGuard 选中的库是自己整理的库就报错：本站不往里整理，退回默认库也不对（用户没让放那儿）
+func selfLibGuard(val, cid string, libs []libRoot) (string, error) {
+	for _, l := range libs {
+		if l.Cid == cid && l.Self {
+			return "", fmt.Errorf("分类规则指定的媒体库「%s」是自己整理的库，本站不往里整理（改分类规则的 library，或在「账号与媒体库」把它改成本站整理）", strings.Trim(val, "/"))
+		}
+	}
+	return cid, nil
 }
 
 // recordLibCid 整理记录的 LibCid：主库记空（老记录都是空，口径一致），附加库记 cid

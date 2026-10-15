@@ -391,7 +391,45 @@ const mockLibs: MockLib[] = [
   { cid: '2894561234', name: '媒体库', path: '/媒体库' },
   { cid: '200', name: '动漫', path: '/动漫' },
   { cid: '300', name: '4K', path: '/4K' },
+  { cid: '400', name: '老库', path: '/老库' },
 ]
+/** 每个库的整理方式（后端 lib_opts）：老库是用户自己整理的 */
+let mockOpts: Record<string, { mode: 'self'; depth: number }> = { '400': { mode: 'self', depth: 2 } }
+/** 老库的台账（演示片目层级预览：纪录片多一层子分类、美剧有季目录） */
+const MOCK_SELF_FILES = [
+  '欧美电影/阿凡达 (2009)/阿凡达.strm',
+  '欧美电影/盗梦空间 (2010)/盗梦空间.strm',
+  '欧美电影/敦刻尔克 (2017).strm',
+  '华语电影/霸王别姬 (1993)/霸王别姬.strm',
+  '美剧/绝命毒师/Season 1/绝命毒师 S01E01.strm',
+  '美剧/黑镜/Season 1/黑镜 S01E01.strm',
+  '纪录片/BBC/地球脉动 (2006)/地球脉动 S01E01.strm',
+  '纪录片/BBC/蓝色星球 (2001)/蓝色星球 S01E01.strm',
+  '散落.strm',
+]
+function mockPreview(name: string, depth: number) {
+  const titles = new Map<string, { key: string; title: string; media_type: 'movie' | 'tv'; videos: number; odd?: string }>()
+  let loose = 0
+  for (const f of name === '老库' ? MOCK_SELF_FILES : []) {
+    const segs = f.split('/')
+    const n = segs.length
+    let key: string
+    if (n > depth) key = segs.slice(0, depth).join('/')
+    else if (n === depth && !/E\d+/.test(f)) key = f
+    else {
+      loose++
+      continue
+    }
+    const t = titles.get(key) ?? { key: `${name}/${key}`, title: key.split('/').pop()!.replace(/\.strm$/, ''), media_type: 'movie' as const, videos: 0 }
+    t.videos++
+    if (/S\d+E\d+/.test(f)) t.media_type = 'tv'
+    if (/^Season \d+$/.test(t.title)) t.odd = '像季目录，层级可能选深了'
+    else if (n > depth + 1 && /\(\d{4}\)/.test(segs[depth]) && !/^Season/.test(segs[depth])) t.odd = '里面像是还有好几部片，层级可能选浅了'
+    titles.set(key, t)
+  }
+  const list = [...titles.values()].sort((a, b) => Number(!!b.odd) - Number(!!a.odd))
+  return { lib: name, depth, total: list.length, titles: list, odd: list.filter((t) => t.odd).length, loose }
+}
 let mockInboxes: { cid: string; name: string; lib: string; problem?: string }[] = [
   { cid: 's-anime', name: '动漫', lib: '200' },
   { cid: 's-4k', name: '4K', lib: '300', problem: '这个子目录已经不在转存目录下（换过转存目录或在网盘上挪走了），整理不会再扫它' },
@@ -421,6 +459,8 @@ function mockLibrariesView() {
       path: l.path,
       local: `/media/${l.name}`,
       default: i === 0,
+      mode: mockOpts[l.cid] ? 'self' : 'organize',
+      depth: mockOpts[l.cid]?.depth ?? 0,
       rules: rules.filter((r) => libOf(r.library)?.cid === l.cid).map(({ media_type, name }) => ({ media_type, name })),
       inboxes: mockInboxes.filter((b) => b.lib === l.cid).map((b) => ({ ...b, lib_name: l.name })),
       emby:
@@ -442,6 +482,7 @@ function mockSaveLibraries(init?: RequestInit) {
   const req = JSON.parse(String(init?.body ?? '{}')) as {
     extra_libs: { cid: string; path: string }[]
     inboxes: { cid?: string; name: string; lib: string; confirm?: boolean }[]
+    opts?: Record<string, { mode: 'self'; depth: number }>
   }
   const need = req.inboxes
     .filter((b) => !b.cid && mockStagingDirs[b.name] && !b.confirm)
@@ -459,6 +500,7 @@ function mockSaveLibraries(init?: RequestInit) {
   ;(SETTINGS.full as { extra_libs: { cid: string; path: string }[] }).extra_libs = mockLibs
     .slice(1)
     .map((l) => ({ cid: l.cid, path: l.path }))
+  if (req.opts) mockOpts = { ...req.opts }
   mockInboxes = req.inboxes.map((b) => {
     const old = mockInboxes.find((o) => o.cid && o.cid === b.cid)
     return old ? { ...old, lib: b.lib } : { cid: b.cid || `s-${b.name}`, name: b.name, lib: b.lib }
@@ -470,6 +512,8 @@ const ROUTES: Record<string, Route> = {
   ...(subRoutes as Record<string, Route>),
   '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
     init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
+  '/libraries/preview': (q: URLSearchParams) =>
+    mockPreview(q.get('name') || mockLibs.find((l) => l.cid === q.get('cid'))?.name || '', Number(q.get('depth')) || 2),
   '/libraries/fix-rename': () => {
     mockCategoryYaml = mockCategoryYaml.split("library: '动画'").join("library: '动漫'")
     return { message: '已把分类规则里的「动画」改成「动漫」', data: mockLibrariesView() }
@@ -655,7 +699,8 @@ const ROUTES: Record<string, Route> = {
       const tv = cat.endsWith('剧集')
       const status = (['ok', 'ok', 'partial', 'miss'] as const)[i % 4]
       return {
-        key: `影视/${tv ? '剧集' : '电影'}/${cat}/${title} (${year})`,
+        // 每三部放一部进自己整理的「老库」（库/分类/片目），演示海报墙按库切换
+        key: i % 3 === 2 ? `老库/${tv ? '美剧' : '欧美电影'}/${title} (${year})` : `媒体库/${tv ? '剧集' : '电影'}/${cat}/${title} (${year})`,
         title, year, tmdb_id: i % 5 === 4 ? 0 : 1000 + i, media_type: tv ? 'tv' : 'movie', category: cat,
         videos: tv ? 8 + i : 1, has_nfo: status !== 'miss', has_poster: status === 'ok', status,
         last_at: new Date(Date.now() - i * 3_600_000).toISOString(),
@@ -663,10 +708,19 @@ const ROUTES: Record<string, Route> = {
     })
     const type = q.get('type') ?? ''
     const status = q.get('status') ?? ''
-    const items = all.filter((t) => (!type || t.media_type === type) && (!status || t.status === status))
-    const inType = all.filter((t) => !type || t.media_type === type)
+    const dir = q.get('dir') ?? ''
+    const inDir = all.filter((t) => !dir || t.key.startsWith(`${dir}/`))
+    const items = inDir.filter((t) => (!type || t.media_type === type) && (!status || t.status === status))
+    const inType = inDir.filter((t) => !type || t.media_type === type)
+    const dirCount = new Map<string, number>()
+    for (const t of all) {
+      const segs = t.key.split('/')
+      for (let n = 1; n < segs.length; n++) dirCount.set(segs.slice(0, n).join('/'), (dirCount.get(segs.slice(0, n).join('/')) ?? 0) + 1)
+    }
     return {
       configured: true, root: '/strm', items, total: items.length, missing: 0,
+      dirs: [...dirCount].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)),
+      libs: mockLibs.map((l) => l.name),
       stats: {
         all: inType.length, ok: inType.filter((t) => t.status === 'ok').length,
         partial: inType.filter((t) => t.status === 'partial').length, miss: inType.filter((t) => t.status === 'miss').length,

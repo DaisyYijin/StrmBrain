@@ -243,7 +243,7 @@ func TestIncrMultiLibAbortsOnBadExtra(t *testing.T) {
 // 附加库里的片目和主库一样：能认、能整理、能移（整理落进哪个库由分类规则决定，第 2 期）
 func TestRowActionsOtherLib(t *testing.T) {
 	roles := map[string]string{"100": "library", "500": "library", "300": "redundant"}
-	layout := libCategoryLayout{"电影/华语电影": "movie", "剧集/国产剧": "tv"}
+	layout := catLayout(map[string]string{"电影/华语电影": "movie", "剧集/国产剧": "tv"})
 
 	other := []browseCrumb{{"500", "动漫库"}, {"501", "电影"}, {"502", "华语电影"}}
 	a := rowActionsOf(other, roles, layout, fileEntry{ID: "503", Name: "某片 (2020)", IsDir: true})

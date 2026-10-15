@@ -73,6 +73,9 @@ func sourceLibOf(cfg *OrgConfig) (cid string, ok bool, err error) {
 	if !bound || cfg.Pending == "" {
 		return "", false, nil
 	}
+	if cfg.SelfLibs[s.Lib] {
+		return "", true, fmt.Errorf("转存子目录「%s」绑定的媒体库（cid=%s）已改成自己整理，本站不往里整理：到「账号与媒体库 → 媒体库」改绑或解绑", s.Name, s.Lib)
+	}
 	if !recordLibOK(cfg, s.Lib) || s.Lib == "" {
 		return "", true, fmt.Errorf("转存子目录「%s」绑定的媒体库（cid=%s）已不在媒体库配置里：到「影视转存 → 设置 → 转存目录」改绑，或把库加回附加媒体库", s.Name, s.Lib)
 	}
@@ -310,6 +313,16 @@ func normStagingLibs(in []stagingLib, root string, libCids []string, old map[str
 	return out, nil
 }
 
+// inboxSelfLibErr 转存入口不能绑到自己整理的库（libopts.go：本站不往里整理）
+func inboxSelfLibErr(items []stagingLib, self map[string]bool) error {
+	for _, s := range items {
+		if self[strings.TrimSpace(s.Lib)] {
+			return fmt.Errorf("子目录「%s」选的媒体库是自己整理的库，本站不往里整理，不能做转存入口", s.Name)
+		}
+	}
+	return nil
+}
+
 // SaveStagingLibs PUT /staging/libs：整份替换
 func (h *Handler) SaveStagingLibs(c *gin.Context) {
 	var req struct {
@@ -317,6 +330,10 @@ func (h *Handler) SaveStagingLibs(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if err := inboxSelfLibErr(req.Items, loadLibOpts().selfCids()); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	cookie, _ := h.get115Cookie()

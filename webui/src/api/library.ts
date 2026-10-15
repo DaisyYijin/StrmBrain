@@ -53,11 +53,23 @@ export interface LibraryView {
   name: string
   path: string
   local: string
-  /** 「其余都放这里」的那个库（full.cid） */
+  /** 「默认放这里」的那个库（full.cid） */
   default: boolean
+  /** 谁来整理：organize 本站整理 / self 我自己整理（后端 libopts.go） */
+  mode: LibMode
+  /** 自己整理的库：片目在库下第几层（1–3） */
+  depth: number
   rules: RuleLibRef[]
   inboxes: LibInbox[]
   emby?: LibEmbyState
+}
+
+export type LibMode = 'organize' | 'self'
+
+/** 一个库让本站做什么；不在 opts 里的库按本站整理 */
+export interface LibOpt {
+  mode: LibMode
+  depth?: number
 }
 
 export interface LibRenameFix {
@@ -92,6 +104,8 @@ export interface LibSaveReq {
   inboxes: LibInboxReq[]
   /** 这次移除的库里要同时清本地的（库 cid） */
   clean_local?: string[]
+  /** 每个库的整理方式（库 cid → 选项），整份替换 */
+  opts: Record<string, LibOpt>
 }
 
 /** 409：转存目录里已有同名子目录、里面有东西，要用户确认 */
@@ -102,6 +116,28 @@ export interface LibInboxConfirm {
 }
 
 export const getLibraries = () => http.get<LibrariesView>('/libraries')
+
+/** 自己整理的库按某个层级认出来的片目（后端 libpreview.go，只读台账） */
+export interface LibPreviewTitle {
+  key: string
+  title: string
+  media_type: 'movie' | 'tv'
+  videos: number
+  /** 看着不像一部片的原因 */
+  odd?: string
+}
+export interface LibPreview {
+  lib: string
+  depth: number
+  total: number
+  titles: LibPreviewTitle[]
+  odd: number
+  /** 比片目层还浅、不属于任何片目的视频数 */
+  loose: number
+}
+/** name：新加、还没保存的库按它查台账 */
+export const previewLibrary = (cid: string, depth: number, name?: string) =>
+  http.get<LibPreview>('/libraries/preview', { params: { cid, depth, name } })
 export const saveLibraries = (req: LibSaveReq) =>
   http.put<{ message: string; jobs?: number[]; subs_moved: number; data: LibrariesView }>('/libraries', req)
 /** 库在 115 上改了名：把分类规则里写的旧名换成新名（新名由后端认，只传旧名） */
