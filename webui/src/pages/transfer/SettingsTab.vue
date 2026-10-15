@@ -10,6 +10,7 @@ import PansouSource from '@/components/transfer/sources/PansouSource.vue'
 import TgSource from '@/components/transfer/sources/TgSource.vue'
 import MukakuSource from '@/components/transfer/sources/MukakuSource.vue'
 import Re0Source from '@/components/transfer/sources/Re0Source.vue'
+import DianSource from '@/components/transfer/sources/DianSource.vue'
 import FolderSettings from './FolderSettings.vue'
 import SubSettings from '@/pages/subscribe/SubSettings.vue'
 import type { SourceKey } from '@/api/transfer'
@@ -32,12 +33,13 @@ const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
   { key: 'tg', title: 'TG 频道', hint: '搜 Telegram 公开频道的网页版，不用登录' },
   { key: 'mukaku', title: '不太灵影视', hint: '站内资源需 VIP Token' },
   { key: 're0', title: 'RE0', hint: '账号密码网页登录，解锁花站内积分' },
+  { key: 'dian', title: '癫影', hint: 'm.dian115.com，账号密码网页登录，解锁花站内积分' },
 ]
 const SUB_SECS: { key: SubSec; title: string }[] = [
   { key: 'check', title: '检查' },
   { key: 'cond', title: '资源条件' },
   { key: 'offline', title: '离线下载' },
-  { key: 'unlock', title: 'RE0 自动解锁' },
+  { key: 'unlock', title: '自动解锁' },
   { key: 'notify', title: '通知' },
 ]
 
@@ -109,6 +111,7 @@ const subSec = computed(() => SUB_SECS.find((s) => s.key === sec.value)?.key)
         <TgSource v-else-if="source.key === 'tg'" @changed="reload" />
         <MukakuSource v-else-if="source.key === 'mukaku'" @changed="reload" />
         <Re0Source v-else-if="source.key === 're0'" @changed="reload" />
+        <DianSource v-else-if="source.key === 'dian'" @changed="reload" />
       </SectionCard>
 
       <!-- 订阅设置整存整取：保持挂载，小节之间切换不丢没保存的改动 -->

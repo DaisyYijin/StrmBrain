@@ -155,6 +155,9 @@ export interface SubscribeConfig {
   share_preview_max: number
   re0_unlock_max: number
   re0_daily_budget: number
+  /** 癫影自动解锁：积分与 RE0 分开算 */
+  dian_unlock_max: number
+  dian_daily_budget: number
   exclude_default: string
   notify: string
   offline_mode: Exclude<OfflineMode, ''>
@@ -180,7 +183,7 @@ export const retryAttempt = (id: number, aid: number) =>
   http.post<{ message?: string }>(`/subscriptions/${id}/attempts/${aid}/retry`)
 export const seasons = (tmdbId: number) =>
   http.get<{ data: TmdbSeason[]; status?: string; ended?: boolean }>('/subscriptions/seasons', { params: { tmdb_id: tmdbId } })
-export const getConfig = () => http.get<{ data: SubscribeConfig; re0_spent_today: number }>('/subscribe/config')
+export const getConfig = () => http.get<{ data: SubscribeConfig; re0_spent_today: number; dian_spent_today?: number }>('/subscribe/config')
 export const saveConfig = (c: SubscribeConfig) => http.post<{ data: SubscribeConfig; message?: string }>('/subscribe/config', c)
 
 /** 订阅转回表单（编辑时用） */

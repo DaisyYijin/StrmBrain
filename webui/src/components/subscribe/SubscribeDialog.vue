@@ -267,7 +267,7 @@ async function submit() {
         </FieldRow>
         <FieldRow
           label="画质门槛"
-          hint="只要命中洗版策略前 N 条规则的资源；留空 = 不限，只用来排先后。RE0 要花积分的资源不论这里怎么设，都要命中至少一条规则"
+          hint="只要命中洗版策略前 N 条规则的资源；留空 = 不限，只用来排先后。RE0 / 癫影要花积分的资源不论这里怎么设，都要命中至少一条规则"
         >
           <HNumberInput v-model="rankLimit" :min="1" placeholder="不限" aria-label="画质门槛" />
         </FieldRow>

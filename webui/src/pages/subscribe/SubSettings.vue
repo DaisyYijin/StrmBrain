@@ -25,6 +25,7 @@ defineProps<{ section: 'check' | 'cond' | 'offline' | 'unlock' | 'notify' }>()
 const { message } = useFeedback()
 const cfg = ref<SubscribeConfig | null>(null)
 const spent = ref(0)
+const dianSpent = ref(0)
 const saving = ref(false)
 const notify = ref<string[]>([])
 const { items: stagingItems } = useStagingSubs()
@@ -45,6 +46,7 @@ async function load() {
     const d = await subscribeApi.getConfig()
     cfg.value = { ...d.data, cond: { ...subscribeApi.blankCond(), ...d.data.cond } }
     spent.value = d.re0_spent_today
+    dianSpent.value = d.dian_spent_today ?? 0
     notify.value = (d.data.notify || '').split(',').filter(Boolean)
   } catch (e) {
     toastError(e, '读取订阅设置失败')
@@ -160,12 +162,20 @@ async function save() {
       </FieldRow>
     </SectionCard>
 
-    <SectionCard v-show="section === 'unlock'" title="RE0 自动解锁" hint="解锁之前看不到分享里有什么，积分花了拿不回来，所以只有下面几条都满足才会花">
+    <SectionCard v-show="section === 'unlock'" title="自动解锁" hint="RE0 与癫影的资源要花站内积分解锁，积分花了拿不回来，所以只有下面几条都满足才会花。两个站的积分各算各的">
+      <div class="unlock-head">RE0</div>
       <FieldRow label="单条上限" hint="一条资源要的积分不超过它才自动解锁；0 = 不自动解锁（解锁过的、免费的照常用）">
-        <div class="unit"><HNumberInput v-model="cfg.re0_unlock_max" :min="0" aria-label="积分" /><span>积分</span></div>
+        <div class="unit"><HNumberInput v-model="cfg.re0_unlock_max" :min="0" aria-label="RE0 单条上限积分" /><span>积分</span></div>
       </FieldRow>
       <FieldRow label="每日预算" :hint="`每天自动解锁最多花多少；0 = 不限。今天已花 ${spent} 积分`">
-        <div class="unit"><HNumberInput v-model="cfg.re0_daily_budget" :min="0" aria-label="积分" /><span>积分</span></div>
+        <div class="unit"><HNumberInput v-model="cfg.re0_daily_budget" :min="0" aria-label="RE0 每日预算积分" /><span>积分</span></div>
+      </FieldRow>
+      <div class="unlock-head">癫影</div>
+      <FieldRow label="单条上限" hint="同上。癫影的分享自带文件清单，解锁前按文件核对缺集；剧集的离线（磁力 / ed2k）分享常是一批链接，订阅不用（电影照常）">
+        <div class="unit"><HNumberInput v-model="cfg.dian_unlock_max" :min="0" aria-label="癫影单条上限积分" /><span>积分</span></div>
+      </FieldRow>
+      <FieldRow label="每日预算" :hint="`每天自动解锁最多花多少；0 = 不限。今天已花 ${dianSpent} 积分`">
+        <div class="unit"><HNumberInput v-model="cfg.dian_daily_budget" :min="0" aria-label="癫影每日预算积分" /><span>积分</span></div>
       </FieldRow>
       <HAlert status="accent" class="note">
         另外几道闸是固定的：资源标题要能看出包含缺的集（「全集」「合集」这种估不出的不花钱）、画质要命中洗版策略里至少一条规则、
@@ -196,6 +206,15 @@ async function save() {
 </template>
 
 <style scoped>
+.unlock-head {
+  margin: 10px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.unlock-head:first-of-type {
+  margin-top: 0;
+}
 .stack {
   display: flex;
   flex-direction: column;

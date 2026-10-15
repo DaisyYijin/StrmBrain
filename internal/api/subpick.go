@@ -108,7 +108,7 @@ type subCand struct {
 	Span  int
 	// Stale 发布时间早于缺集里最早那集的播出日：不可能有缺的集（「持续更新」的分享内容会变，所以只排后、不丢）
 	Stale bool
-	Paid  int // 要花的 RE0 积分（0 = 不花）
+	Paid  int // 要花的积分（RE0 / 癫影，看 Item.Source；0 = 不花）
 	// Exact RE0 文件预览核实过、这条资源能补上的集（电影是一个零值）；nil = 没预览过，覆盖按标题估计
 	Exact []epKey
 }
@@ -123,7 +123,7 @@ func (c subCand) coversAnyMissing(missing map[epKey]bool, movie bool) bool {
 		}
 		return false
 	}
-	if movie || !(c.Cov.known() || c.Item.Action == "offline") {
+	if movie || !(c.Cov.known() || c.Item.offline()) {
 		return true
 	}
 	return c.Cov.coversAny(missing)
@@ -131,7 +131,7 @@ func (c subCand) coversAnyMissing(missing map[epKey]bool, movie bool) bool {
 
 // share 提交后能不能按集挑（115 分享，含 RE0 解锁出来的）
 func (c subCand) share() bool {
-	return c.Item.Action == "transfer" || c.Item.Action == "unlock"
+	return (c.Item.Action == "transfer" || c.Item.Action == "unlock") && !c.Item.offline()
 }
 
 // subTried 这条资源以前对这个订阅的结果
@@ -153,6 +153,8 @@ type subPickCtx struct {
 	Identity *subIdentity
 	Re0Max   int // RE0 单条自动解锁上限，0 = 不自动解锁
 	Re0Left  int // 今天还能花多少，<0 = 不限
+	DianMax  int // 癫影：同上，积分与 RE0 分开算
+	DianLeft int
 	// Re0Preview 付费解锁前看一眼 RE0 的文件预览：返回按文件能补上的缺集（电影挑得出能用的视频就是一个零值），
 	// 一集都补不上时 why 说明原因；err 非空 = 预览不可用，退回按标题判。nil = 不预览（测试 / 没接）
 	Re0Preview func(it ResourceItem) (covered []epKey, why string, err error)
@@ -163,6 +165,14 @@ type subPickCtx struct {
 	MissingAir  map[epKey]time.Time
 	// Skipped 因资源条件 / 离线策略跳过的条数，按原因计（传了才记），任务结果里说清为什么没用
 	Skipped map[string]int
+}
+
+// paidCap 这个来源的单条自动解锁上限与今天还能花多少（RE0 / 癫影各算各的）
+func (c subPickCtx) paidCap(src string) (max, left int) {
+	if src == "dian" {
+		return c.DianMax, c.DianLeft
+	}
+	return c.Re0Max, c.Re0Left
 }
 
 // offlineRipe 这一集播出够久了，分享还没补上才轮到离线
@@ -223,6 +233,14 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		if !it.Relevant || it.Action == "open" || it.Kind == "pan" {
 			continue
 		}
+		// 癫影剧集的离线分享解锁出来常是一批 ed2k（一集一条）：一条资源就是十几个离线任务，
+		// 「一个订阅一轮最多一个离线任务」和每月上限都管不住，所以订阅不用（找资源里手动解锁照常）。
+		// 电影不拦：癫影上电影的分享九成是离线（2026-10-15 盗梦空间 103 条里 94 条），一部片一条链接；
+		// 万一解锁出好几条，tryOne 停下交给用户
+		if it.Source == "dian" && it.offline() && !movie {
+			c.skip("癫影离线资源")
+			continue
+		}
 		hash := subResHash(it)
 		if hash == "" {
 			continue
@@ -246,8 +264,8 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			continue
 		}
 		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）。
-		// RE0 不查：它是按 TMDB 编号列的资源，本来就是这一部，再按标题找证据只会误杀（相关性同样对它放行）
-		if c.Identity != nil && it.Source != "re0" {
+		// RE0 / 癫影不查：它们是按 TMDB 编号列的资源，本来就是这一部，再按标题找证据只会误杀（相关性同样对它放行）
+		if c.Identity != nil && !resByTmdb(it.Source) {
 			if ok, why := subTwinVerdict(it.Title, *c.Identity, resCoverageOf(it.Title)); !ok {
 				c.skip(why)
 				continue
@@ -259,7 +277,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			c.skip(why)
 			continue
 		}
-		if verdict == condUnknown && it.Action == "offline" {
+		if verdict == condUnknown && it.offline() {
 			c.skip("磁力" + why)
 			continue
 		}
@@ -289,7 +307,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		// 离线只能整包下，标题估计不出覆盖缺集的不下（多出来的集交给整理去重，但不能全是多余的）。
 		// 115 离线配额按任务数扣，所以另有策略：只转存分享的不下、只下合集包的不下单集磁力、
 		// 剧集只算播出满等待时间的缺集（新集先等分享）
-		if it.Action == "offline" {
+		if it.offline() {
 			if c.OfflineMode == subOfflineShareOnly {
 				c.skip("只转存分享")
 				continue
@@ -325,8 +343,9 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				if c.Sub.RankLimit == 0 && it.Rank < 0 {
 					continue
 				}
-				over := c.Re0Max <= 0 || cand.Paid > c.Re0Max || (c.Re0Left >= 0 && cand.Paid > c.Re0Left)
-				// 上限以内的先看 RE0 文件预览：按真实文件名核对缺集与资源条件，标题没写的也能用、标题写了文件里却没有的也拦得住。
+				capMax, capLeft := c.paidCap(it.Source)
+				over := capMax <= 0 || cand.Paid > capMax || (capLeft >= 0 && cand.Paid > capLeft)
+				// 上限以内的先看文件预览（RE0 OpenAPI 的预览 / 癫影列表里自带的文件清单）：按真实文件名核对缺集与资源条件，标题没写的也能用、标题写了文件里却没有的也拦得住。
 				// 超限的不预览（只通知用户手动解锁，不值得多一次请求）
 				if !over && c.Re0Preview != nil {
 					covered, pwhy, err := c.Re0Preview(it)

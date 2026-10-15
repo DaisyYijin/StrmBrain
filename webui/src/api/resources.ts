@@ -142,3 +142,15 @@ export const re0RunCheckin = () => http.post<{ message: string }>('/re0/checkin/
 export const re0OAuthStart = (redirectUri: string) =>
   http.get<{ authorize_url?: string }>('/re0/oauth/start', { params: { redirect_uri: redirectUri } })
 export const re0EgressIP = () => http.get<{ ip: string; ipv6: boolean; exact: boolean }>('/re0/egress-ip')
+
+// ============ 癫影（m.dian115.com）：浏览器与 RE0 共用，进度读 re0Browser 的 op ============
+export const dianConfig = () =>
+  http.get<{ email?: string; password?: string; configured?: boolean }>('/dian/config')
+export const dianSaveConfig = (body: { email: string; password: string }) =>
+  http.post<{ message?: string }>('/dian/config', body)
+// 要开浏览器、登录一次
+export const dianCheck = () =>
+  http.get<{ message: string; user?: string; points?: number; vip?: boolean }>('/dian/check', { timeoutMs: 200_000 })
+export const dianCheckin = () => http.get<Re0Checkin>('/dian/checkin')
+export const dianSaveCheckin = (enabled: boolean) => http.post('/dian/checkin', { enabled })
+export const dianRunCheckin = () => http.post<{ message: string }>('/dian/checkin/run', {}, { timeoutMs: 260_000 })

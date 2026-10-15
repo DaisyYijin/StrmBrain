@@ -181,8 +181,8 @@ func re0BrowserInit(dataDir string) {
 	}
 	tag, ok := cloakPlatform()
 	if !ok {
-		if re0WebConfigured(loadRe0Cfg()) {
-			log.Printf("[RE0浏览器] ✗ 平台 %s 没有 CloakBrowser 预编译包，RE0 网页登录不可用", tag)
+		if re0WebConfigured(loadRe0Cfg()) || dianConfigured(loadDianCfg()) {
+			log.Printf("[RE0浏览器] ✗ 平台 %s 没有 CloakBrowser 预编译包，RE0 网页登录与癫影不可用", tag)
 		}
 		return
 	}
@@ -191,11 +191,11 @@ func re0BrowserInit(dataDir string) {
 		cloakPruneOld(cloakVersion())
 		return
 	}
-	if !re0WebConfigured(loadRe0Cfg()) {
-		log.Printf("[RE0浏览器] ○ 本地没有 CloakBrowser %s；未配置 RE0 网页登录，暂不下载", cloakVersion())
+	if !re0WebConfigured(loadRe0Cfg()) && !dianConfigured(loadDianCfg()) {
+		log.Printf("[RE0浏览器] ○ 本地没有 CloakBrowser %s；未配置 RE0 网页登录与癫影，暂不下载", cloakVersion())
 		return
 	}
-	ensureCloak("启动时检查：已配置 RE0 网页登录、本地没有浏览器")
+	ensureCloak("启动时检查：已配置 RE0 网页登录或癫影、本地没有浏览器")
 }
 
 // ensureCloak 本地没有就在后台下载，已装好 / 正在下载时什么都不做（幂等，随便调）。返回是否已经可用

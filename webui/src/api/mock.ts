@@ -328,9 +328,10 @@ const subRoutes: Record<string, unknown> = {
   '/subscriptions': { data: SUBS },
   '/subscribe/config': {
     re0_spent_today: 5,
+    dian_spent_today: 0,
     data: {
       enabled: true, air_delay_hours: 6, movie_wait: 'digital', max_subs_per_round: 10, fresh_interval_min: 60, gap_interval_hours: 12, max_eps_per_sub: 50, max_res_per_sub: 50, try_cooldown_sec: 5, max_snap_dirs: 40, share_preview_max: 8,
-      re0_unlock_max: 10, re0_daily_budget: 30, exclude_default: '预告,花絮', notify: 'created,ingested,stalled',
+      re0_unlock_max: 10, re0_daily_budget: 30, dian_unlock_max: 0, dian_daily_budget: 0, exclude_default: '预告,花絮', notify: 'created,ingested,stalled',
       offline_mode: 'pack', offline_wait_hours: 24, offline_monthly: 30, offline_reserve: 10,
       cond: { pix: '2160p,1080p', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },
     },
@@ -347,6 +348,8 @@ const subRoutes: Record<string, unknown> = {
   '/re0/browser': { browser: { state: 'downloading', version: '146.0.7680.177.5', platform: 'linux-x64', done: 98566144, total: 216890134, speed: 5242880, source: 'GitHub Releases' }, running: false, channel: 'web' },
   '/re0/check': { app_ok: true, app_name: 'StrmStation', authorized: true, user: 'demo', level: 'V3', points: 128 },
   '/re0/checkin': { enabled: true, done_today: true, hour: 8, last_result: '签到成功 +3 积分' },
+  '/dian/config': { email: 'demo@example.com', password: '••••', configured: true },
+  '/dian/checkin': { enabled: false, done_today: false, hour: 8 },
 }
 for (const s of SUBS) {
   subRoutes[`/subscriptions/${s.id}`] = {
@@ -665,6 +668,7 @@ const ROUTES: Record<string, Route> = {
       { key: 'tg', label: 'TG 频道', enabled: true, reason: '' },
       { key: 'mukaku', label: '不太灵', enabled: true, reason: '未设置 VIP Token（资源仅 VIP 可见）' },
       { key: 're0', label: 'RE0', enabled: true, reason: '' },
+      { key: 'dian', label: '癫影', enabled: true, reason: '' },
     ],
     folder: '3100000000000000001',
     folder_path: '/StrmStation/转存',

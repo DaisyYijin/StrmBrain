@@ -220,7 +220,7 @@ const selOwned = computed(() => {
           </div>
           <p v-if="selected.cand?.overview" class="sel-overview">{{ selected.cand.overview }}</p>
           <p v-else-if="!selected.cand" class="sel-overview">
-            直接用关键词搜，没经过 TMDB：结果不做片名比对，RE0 不可用（它按 TMDB 条目查资源）。
+            直接用关键词搜，没经过 TMDB：结果不做片名比对，RE0 与癫影不可用（它们按 TMDB 条目查资源）。
           </p>
         </div>
       </div>

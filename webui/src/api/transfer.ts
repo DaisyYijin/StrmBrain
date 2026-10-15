@@ -2,7 +2,7 @@ import { http } from './client'
 
 // ============ 影视转存：按影片聚合各资源站（后端 transferhub.go） ============
 
-export type SourceKey = 'gy' | 'pansou' | 'tg' | 'mukaku' | 're0'
+export type SourceKey = 'gy' | 'pansou' | 'tg' | 'mukaku' | 're0' | 'dian'
 
 export interface TransferSource {
   key: SourceKey

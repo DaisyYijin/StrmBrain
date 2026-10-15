@@ -518,11 +518,12 @@ func (h *Handler) SubTmdbSeasons(c *gin.Context) {
 // SubscribeGetConfig GET /subscribe/config
 func (h *Handler) SubscribeGetConfig(c *gin.Context) {
 	cfg := loadSubscribeCfg()
-	spent := 0
+	spent, dianSpent := 0, 0
 	if h.DB != nil {
-		spent = subPointsSpentToday(h, time.Now())
+		spent = subPointsSpentToday(h, time.Now(), "re0")
+		dianSpent = subPointsSpentToday(h, time.Now(), "dian")
 	}
-	c.JSON(http.StatusOK, gin.H{"data": cfg, "re0_spent_today": spent})
+	c.JSON(http.StatusOK, gin.H{"data": cfg, "re0_spent_today": spent, "dian_spent_today": dianSpent})
 }
 
 // SubscribeSaveConfig POST /subscribe/config

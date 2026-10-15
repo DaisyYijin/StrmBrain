@@ -76,10 +76,13 @@ type subscribeCfg struct {
 	// SharePreviewMax 一轮先列几条排在前面的 115 分享、按文件实际能补几集重排（subpreview.go），0 = 不预看
 	SharePreviewMax int `json:"share_preview_max"`
 	// RE0 自动解锁：单条积分 ≤ Re0UnlockMax 才解锁，0 = 不自动解锁；Re0DailyBudget 每天上限，0 = 不限
-	Re0UnlockMax   int    `json:"re0_unlock_max"`
-	Re0DailyBudget int    `json:"re0_daily_budget"`
-	ExcludeDefault string `json:"exclude_default"` // 内置排除词，订阅自己的 Exclude 叠加在上面
-	Notify         string `json:"notify"`          // 推哪几类通知：created,submit,ingested,done,stalled
+	Re0UnlockMax   int `json:"re0_unlock_max"`
+	Re0DailyBudget int `json:"re0_daily_budget"`
+	// 癫影自动解锁：口径同 RE0，两个站的积分各算各的（维护者定的），所以上限与预算分开设
+	DianUnlockMax   int    `json:"dian_unlock_max"`
+	DianDailyBudget int    `json:"dian_daily_budget"`
+	ExcludeDefault  string `json:"exclude_default"` // 内置排除词，订阅自己的 Exclude 叠加在上面
+	Notify          string `json:"notify"`          // 推哪几类通知：created,submit,ingested,done,stalled
 	// NotifyVer 通知类型清单的版本：新增类型时加一，老配置读出来时把新类型补进 Notify。
 	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
 	NotifyVer int `json:"notify_ver"`
@@ -185,6 +188,12 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	}
 	if c.Re0DailyBudget < 0 {
 		c.Re0DailyBudget = 0
+	}
+	if c.DianUnlockMax < 0 {
+		c.DianUnlockMax = 0
+	}
+	if c.DianDailyBudget < 0 {
+		c.DianDailyBudget = 0
 	}
 	c.ExcludeDefault = strings.TrimSpace(c.ExcludeDefault)
 	if !validSubOfflineMode(c.OfflineMode) {

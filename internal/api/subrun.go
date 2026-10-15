@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -185,8 +186,10 @@ type subRunner struct {
 	// subs 绑定了媒体库的转存子目录（stagingsub.go），按订阅选的子目录建包装目录
 	subs     map[string]stagingLib
 	cookie   string
-	re0Left  int  // 今天还能自动解锁多少积分，<0 = 不限
-	stopPaid bool // 解锁报了积分不足 / 没登录：这一轮不再付费解锁
+	re0Left  int // 今天还能自动解锁多少 RE0 积分，<0 = 不限
+	dianLeft int // 癫影同上（两个站的积分各算各的）
+	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
+	stopPaid map[string]bool
 	// 离线：offlineStop 非空 = 这一轮不再提交离线（原因）；offlineLeft 本月还能提交几个、quotaLeft 115 剩余配额，<0 = 不限 / 没查
 	offlineChecked         bool
 	offlineStop            string
@@ -263,7 +266,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		return nil, err
 	}
 	cfg := loadSubscribeCfg()
-	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, sleep: subSleep}
+	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, dianLeft: -1, sleep: subSleep}
 	if r.target == "" {
 		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
@@ -276,10 +279,10 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		return nil, err
 	}
 	if cfg.Re0DailyBudget > 0 {
-		r.re0Left = cfg.Re0DailyBudget - subPointsSpentToday(h, time.Now())
-		if r.re0Left < 0 {
-			r.re0Left = 0
-		}
+		r.re0Left = max(cfg.Re0DailyBudget-subPointsSpentToday(h, time.Now(), "re0"), 0)
+	}
+	if cfg.DianDailyBudget > 0 {
+		r.dianLeft = max(cfg.DianDailyBudget-subPointsSpentToday(h, time.Now(), "dian"), 0)
 	}
 	r.search = r.searchAll
 	r.mkdir = ops.mkdir
@@ -293,12 +296,42 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	return r, nil
 }
 
-// subPointsSpentToday 今天（本地 0 点起）自动解锁已经花了多少 RE0 积分
-func subPointsSpentToday(h *Handler, now time.Time) int {
+// subPointsSpentToday 今天（本地 0 点起）自动解锁在这个来源（re0 / dian）已经花了多少积分
+func subPointsSpentToday(h *Handler, now time.Time, source string) int {
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
 	var sum int64
-	h.DB.Model(&model.SubAttempt{}).Where("created_at >= ? AND points > 0", start).Select("COALESCE(SUM(points), 0)").Scan(&sum)
+	h.DB.Model(&model.SubAttempt{}).Where("created_at >= ? AND points > 0 AND source = ?", start, source).
+		Select("COALESCE(SUM(points), 0)").Scan(&sum)
 	return int(sum)
+}
+
+// paidLeft 这个来源今天还能自动解锁多少积分，<0 = 不限
+func (r *subRunner) paidLeft(src string) int {
+	if src == "dian" {
+		return r.dianLeft
+	}
+	return r.re0Left
+}
+
+// paidSpend 记一笔自动解锁花掉的积分
+func (r *subRunner) paidSpend(src string, n int) {
+	if src == "dian" {
+		if r.dianLeft >= 0 {
+			r.dianLeft = max(r.dianLeft-n, 0)
+		}
+		return
+	}
+	if r.re0Left >= 0 {
+		r.re0Left = max(r.re0Left-n, 0)
+	}
+}
+
+// paidCfg 这个来源的单条上限与每日预算
+func (r *subRunner) paidCfg(src string) (unlockMax, budget int) {
+	if src == "dian" {
+		return r.cfg.DianUnlockMax, r.cfg.DianDailyBudget
+	}
+	return r.cfg.Re0UnlockMax, r.cfg.Re0DailyBudget
 }
 
 // run 处理一个订阅；ran=false 表示没到时间、跳过（不进结果）
@@ -538,7 +571,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
 		Include: splitKeywords(sub.Include),
 		Cond:    subCondOf(r.cfg, sub.Cond), Identity: identity,
-		Re0Max: r.cfg.Re0UnlockMax, Re0Left: r.re0Left,
+		Re0Max: r.cfg.Re0UnlockMax, Re0Left: r.re0Left, DianMax: r.cfg.DianUnlockMax, DianLeft: r.dianLeft,
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
 		MissingAir: ev.MissingAir, Skipped: map[string]int{},
 	}
@@ -565,7 +598,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			item.Note = joinNote(item.Note, fmt.Sprintf("这一轮试了 %d 条资源，到了上限，剩下的下一轮接着试", tries))
 			break
 		}
-		if c.Paid > 0 && (paidUsed || r.stopPaid || (r.re0Left >= 0 && c.Paid > r.re0Left)) {
+		if left := r.paidLeft(c.Item.Source); c.Paid > 0 && (paidUsed || r.stopPaid[c.Item.Source] || (left >= 0 && c.Paid > left)) {
 			continue
 		}
 		// 前面的资源补上了一部分：预览核实的 / 标题写明的范围里已经没有还缺的，就不用再试它
@@ -573,7 +606,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			continue
 		}
 		// 离线：一个订阅一轮最多一个任务（配额按任务数扣），剩下的缺集里要有播出够久的，再过每月上限与 115 配额
-		if c.Item.Action == "offline" {
+		if c.Item.offline() {
 			if offlineUsed {
 				pctx.skip("一轮只下一个")
 				continue
@@ -775,26 +808,33 @@ func (c resCoverage) coversAny(missing map[epKey]bool) bool {
 	return false
 }
 
-// recordOverLimit 要花积分、超过上限 / 预算的 RE0 资源：同一条只通知一次（记一笔 paid）
+// recordOverLimit 要花积分、超过上限 / 预算的 RE0 / 癫影资源：同一条只通知一次（记一笔 paid），按来源各推一条
 func (r *subRunner) recordOverLimit(sub *model.Subscription, over []subCand, tried map[string]subTried) {
-	var lines []string
+	lines := map[string][]string{}
+	var order []string
 	for _, c := range over {
 		if _, seen := tried[c.Hash]; seen {
 			continue
 		}
-		reason := fmt.Sprintf("需要 %d 积分，超过自动解锁上限 %d", c.Paid, r.cfg.Re0UnlockMax)
-		if r.cfg.Re0UnlockMax <= 0 {
+		unlockMax, _ := r.paidCfg(c.Item.Source)
+		reason := fmt.Sprintf("需要 %d 积分，超过自动解锁上限 %d", c.Paid, unlockMax)
+		if unlockMax <= 0 {
 			reason = fmt.Sprintf("需要 %d 积分，没开自动解锁", c.Paid)
-		} else if c.Paid <= r.cfg.Re0UnlockMax {
+		} else if c.Paid <= unlockMax {
 			reason = fmt.Sprintf("需要 %d 积分，超出今天的预算", c.Paid)
 		}
 		r.h.DB.Create(&model.SubAttempt{SubID: sub.ID, Hash: c.Hash, Source: c.Item.Source, Kind: c.Item.Kind,
 			Title: truncateStr(c.Item.Title, 480), Status: subAttemptPaid, Reason: reason})
 		tried[c.Hash] = subTried{Status: subAttemptPaid}
-		lines = append(lines, fmt.Sprintf("• %s（%s）", truncateStr(c.Item.Title, 60), reason))
+		if _, ok := lines[c.Item.Source]; !ok {
+			order = append(order, c.Item.Source)
+		}
+		lines[c.Item.Source] = append(lines[c.Item.Source], fmt.Sprintf("• %s（%s）", truncateStr(c.Item.Title, 60), reason))
 	}
-	if len(lines) > 0 {
-		r.notify("💰 订阅：RE0 上有资源需要积分", fmt.Sprintf("订阅《%s》在 RE0 有 %d 条资源需要手动解锁（去「影视转存 → 找资源」）：\n%s", sub.Title, len(lines), strings.Join(lines, "\n")), sub, true)
+	for _, src := range order {
+		label := botSourceLabel(src)
+		r.notify("💰 订阅："+label+"上有资源需要积分", fmt.Sprintf("订阅《%s》在%s有 %d 条资源需要手动解锁（去「影视转存 → 找资源」）：\n%s",
+			sub.Title, label, len(lines[src]), strings.Join(lines[src], "\n")), sub, true)
 	}
 }
 
@@ -818,24 +858,32 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 		return att, nil
 	}
 
-	// RE0 解锁（免费 / 解锁过的也要调一次换出链接）：上限与预算在挑选时已核过
+	// RE0 / 癫影解锁（免费 / 解锁过的也要调一次换出链接）：上限与预算在挑选时已核过
 	rl, err := r.h.resolveResourceLink(resSubmitReq{Source: c.Item.Source, Action: c.Item.Action, URL: c.Item.URL,
 		Code: c.Item.Code, Ref: c.Item.Ref, Title: c.Item.Title, Confirm: c.Item.Action == "unlock"})
 	if err != nil {
 		if c.Item.Action == "unlock" && c.Paid > 0 && re0StopUnlocking(err) {
-			r.stopPaid = true
-			r.notify("⚠ RE0 自动解锁失败", "RE0 解锁报错："+err.Error()+"\n本轮停止自动解锁", sub, false)
+			if r.stopPaid == nil {
+				r.stopPaid = map[string]bool{}
+			}
+			r.stopPaid[c.Item.Source] = true
+			label := botSourceLabel(c.Item.Source)
+			r.notify("⚠ "+label+" 自动解锁失败", label+" 解锁报错："+err.Error()+"\n本轮停止在"+label+"自动解锁", sub, false)
 		}
 		return fail("换链接失败："+err.Error(), true)
 	}
 	if rl.Unlocked && c.Paid > 0 {
 		att.Points = c.Paid
-		if r.re0Left >= 0 {
-			r.re0Left -= c.Paid
-		}
-		r.notify("🔓 订阅自动解锁 RE0 资源", r.re0SpentText(sub, c), sub, false)
+		r.paidSpend(c.Item.Source, c.Paid)
+		r.notify("🔓 订阅自动解锁"+botSourceLabel(c.Item.Source)+"资源", r.re0SpentText(sub, c), sub, false)
 	}
 	att.URL = truncateStr(rl.URL, 1000)
+	if len(rl.More) > 0 {
+		// 解锁出一批离线链接：订阅一轮只提交一个离线任务，不替用户拆，链接交给用户手动提交
+		r.notify("⚠ 订阅：解锁出多条离线链接", fmt.Sprintf("订阅《%s》解锁「%s」得到 %d 条离线链接，订阅不自动提交，请手动处理：\n%s",
+			sub.Title, truncateStr(c.Item.Title, 60), len(rl.More)+1, strings.Join(append([]string{rl.URL}, rl.More...), "\n")), sub, true)
+		return fail(fmt.Sprintf("解锁出 %d 条离线链接，订阅不自动提交（已推通知）", len(rl.More)+1), false)
+	}
 
 	switch rl.Action {
 	case "transfer":
@@ -847,9 +895,9 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 }
 
 func (r *subRunner) re0SpentText(sub *model.Subscription, c subCand) string {
-	s := fmt.Sprintf("订阅《%s》自动解锁「%s」，花费 %d 积分", sub.Title, truncateStr(c.Item.Title, 60), c.Paid)
-	if r.cfg.Re0DailyBudget > 0 {
-		s += fmt.Sprintf("（今日已用 %d / 预算 %d）", r.cfg.Re0DailyBudget-r.re0Left, r.cfg.Re0DailyBudget)
+	s := fmt.Sprintf("订阅《%s》在%s自动解锁「%s」，花费 %d 积分", sub.Title, botSourceLabel(c.Item.Source), truncateStr(c.Item.Title, 60), c.Paid)
+	if _, budget := r.paidCfg(c.Item.Source); budget > 0 {
+		s += fmt.Sprintf("（今日已用 %d / 预算 %d）", budget-r.paidLeft(c.Item.Source), budget)
 	}
 	return s
 }
@@ -937,6 +985,9 @@ func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool
 	}
 	used := 0
 	return func(it ResourceItem) ([]epKey, string, error) {
+		if it.Source == "dian" {
+			return r.dianPreview(sub, it, missing)
+		}
 		if it.Ref == "" || used >= subRe0PreviewMax {
 			return nil, "", errSubPreviewOff
 		}
@@ -963,6 +1014,37 @@ func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool
 		}
 		return pick.Covered, "", nil
 	}
+}
+
+// dianPreview 癫影列表里自带的文件清单（不花积分、不发请求）当预览，判法同 RE0 预览。
+// 清单是空的（老分享没填）就退回按标题判
+func (r *subRunner) dianPreview(sub *model.Subscription, it ResourceItem, missing map[epKey]bool) ([]epKey, string, error) {
+	if len(it.files) == 0 {
+		return nil, "", errSubPreviewOff
+	}
+	entries := make([]shareEntry, 0, len(it.files))
+	for i, f := range it.files {
+		f = strings.Trim(strings.ReplaceAll(f, "\\", "/"), "/")
+		dir, name := "", f
+		if j := strings.LastIndex(f, "/"); j >= 0 {
+			dir, name = f[:j], f[j+1:]
+		}
+		if name != "" {
+			entries = append(entries, shareEntry{ID: "dianp" + strconv.Itoa(i), Name: name, Dir: dir})
+		}
+	}
+	pick := pickShareEpisodes(entries, r.sharePickOpts(sub, it, missing))
+	if len(pick.Picks) == 0 {
+		log.Printf("[订阅] ○ 《%s》癫影「%s」文件清单里没有能用的：%s", sub.Title, truncateStr(it.Title, 50), pick.summary())
+		if len(pick.Rejected) > 0 {
+			return nil, "不符合资源条件", nil
+		}
+		return nil, "里没有缺的集", nil
+	}
+	if sub.MediaType == "movie" {
+		return []epKey{{}}, "", nil
+	}
+	return pick.Covered, "", nil
 }
 
 // tryOffline 磁力 / ed2k：整包离线进包装目录。挑不了集，在路上的集按标题估计算

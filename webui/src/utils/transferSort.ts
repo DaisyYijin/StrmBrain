@@ -9,6 +9,7 @@ export const SOURCE_LABEL: Record<SourceKey, string> = {
   tg: 'TG 频道',
   mukaku: '不太灵',
   re0: 'RE0',
+  dian: '癫影',
 }
 
 const PAN_LABEL: Record<string, string> = {

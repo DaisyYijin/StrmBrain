@@ -1247,14 +1247,22 @@ func parseRe0JSONResources(body []byte) []re0Resource {
 	return re0NormalizeRows(env.Data)
 }
 
-// re0NormalizeRows 页面数据 → re0Resource。只留 115（website 写了别的就丢），按 slug 去重。
-// unlock_points 为空按免费算（插件同口径）
+// re0NormalizeRows 页面数据 → re0Resource。只留 115 分享与 ED2K（website 写了别的就丢），按 slug 去重。
+// unlock_points 为空按免费算（插件同口径）。
+// ED2K 资源站方也放在「115网盘」那一组里，行上 website 是 "ed2k"：解锁出来是 ed2k 链接，走 115 离线。
+// 插件只会转存分享所以把它们剔掉，照抄的话只有 ED2K 资源的片会显示「没有 115 资源」（2026-10-15 现场，tv/332261）
 func re0NormalizeRows(rows []map[string]any) []re0Resource {
 	var out []re0Resource
 	seen := map[string]bool{}
 	for _, r := range rows {
-		if w, ok := r["website"]; ok && w != nil && fmt.Sprint(w) != "115" {
-			continue
+		pan := "115"
+		if w, ok := r["website"]; ok && w != nil {
+			switch ws := strings.ToLower(fmt.Sprint(w)); ws {
+			case "115", "ed2k":
+				pan = ws
+			default:
+				continue
+			}
 		}
 		slug, _ := r["slug"].(string)
 		if !re0SlugRe.MatchString(slug) {
@@ -1276,7 +1284,7 @@ func re0NormalizeRows(rows []map[string]any) []re0Resource {
 		item := re0Resource{
 			Slug:            slug,
 			Title:           firstNonEmpty(re0Str(r["remark"]), re0Str(r["title"]), "未命名"),
-			PanType:         "115",
+			PanType:         pan,
 			ShareSize:       firstNonEmpty(re0Str(r["share_size"]), re0Str(r["size"])),
 			VideoResolution: re0StrList(r["video_resolution"]),
 			Source:          re0StrList(r["source"]),
@@ -1329,7 +1337,7 @@ func re0StrList(v any) []string {
 
 // ==================== 解锁 ====================
 
-// re0ShareJS 从页面上找 115 分享链接（链接 / 输入框 / 正文）
+// re0ShareJS 从页面上找 115 分享链接（链接 / 输入框 / 正文），ED2K 资源找 ed2k 链接
 const re0ShareJS = `() => {
 	const ok = v => {
 		try {
@@ -1343,7 +1351,16 @@ const re0ShareJS = `() => {
 		if (v && ok(v.trim())) return v.trim();
 	}
 	for (const v of (document.body?.innerText || '').match(/https?:\/\/[^\s<>"']+/g) || []) if (ok(v)) return v;
-	return '';
+	// ED2K 资源解锁出来的是 ed2k 链接（文件名可能带空格，按 |file|名|大小|hash| 的结构抓）
+	const ed = /ed2k:\/\/\|file\|[^|\r\n]+\|\d+\|[0-9a-fA-F]{32}\|(?:[^|\s]*\|)*\/?/;
+	const dec = v => { try { return decodeURIComponent(v); } catch { return v; } };
+	for (const el of document.querySelectorAll('a[href], input, textarea')) {
+		const v = (el.tagName === 'A' ? el.getAttribute('href') : el.value) || '';
+		const m = (v.startsWith('ed2k') ? dec(v) : v).match(ed);
+		if (m) return m[0];
+	}
+	const m = (document.body?.innerText || '').match(ed);
+	return m ? m[0] : '';
 }`
 
 // isRe0ShareURL 是不是 115 分享链接
@@ -1358,6 +1375,11 @@ func isRe0ShareURL(v string) bool {
 		return false
 	}
 	return regexp.MustCompile(`^/s/[^/\s]+/?$`).MatchString(u.Path)
+}
+
+// isRe0Ed2k 是不是 ed2k 文件链接（ED2K 资源解锁出来的）
+func isRe0Ed2k(v string) bool {
+	return classifyLink(strings.TrimSpace(v)) == "ed2k"
 }
 
 var re0ConfirmRe = regexp.MustCompile(`^\s*(确认解锁|确定解锁|Confirm unlock)\s*$`)
@@ -1382,7 +1404,7 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 				return nil
 			}
 			if res, err := p.Eval(re0ShareJS); err == nil {
-				if s := res.Value.Str(); isRe0ShareURL(s) {
+				if s := res.Value.Str(); isRe0ShareURL(s) || isRe0Ed2k(s) {
 					link = s
 					return nil
 				}
@@ -1411,14 +1433,16 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 			time.Sleep(250 * time.Millisecond)
 		}
 		if submitted {
-			return fmt.Errorf("点了解锁但 30 秒内没拿到 115 链接（%s）", re0URL(p))
+			return fmt.Errorf("点了解锁但 30 秒内没拿到 115 / ed2k 链接（%s）", re0URL(p))
 		}
 		return fmt.Errorf("页面上既没有分享链接也没有「确认解锁」按钮（%s）", re0URL(p))
 	})
 	if err != nil {
 		return "", "", err
 	}
-	if u, perr := url.Parse(link); perr == nil {
+	if isRe0Ed2k(link) {
+		// ed2k 没有提取码；文件名里的 ? 会被 url.Parse 当成查询串
+	} else if u, perr := url.Parse(link); perr == nil {
 		code = firstNonEmpty(u.Query().Get("password"), u.Query().Get("pwd"))
 	}
 	log.Printf("[RE0] ✦ 网页解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), map[bool]string{true: "这次花了积分", false: "之前已解锁"}[submitted])

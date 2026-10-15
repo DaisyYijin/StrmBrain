@@ -435,7 +435,7 @@ func (f *botFlow) renderUnlockAsk(i int) botView {
 	return botView{
 		Token: f.token,
 		Lines: []string{
-			fmt.Sprintf("💰 解锁第 %d 条要花 RE0 %s：", i+1, pts),
+			fmt.Sprintf("💰 解锁第 %d 条要花%s %s：", i+1, botSourceLabel(it.Source), pts),
 			resBotLabel(it, 80, false),
 			"确认后解锁并转存到 115，积分花了不退。",
 		},

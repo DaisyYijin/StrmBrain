@@ -14,7 +14,7 @@ import { transferApi } from '@/api'
 import type { ResourceItem, ResourceQuery, SourceKey, TransferSource } from '@/api/transfer'
 import { useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
-import { type KindGroup, type SortKey, kindGroup, pixGroup, resourceKey, sortResources } from '@/utils/transferSort'
+import { SOURCE_LABEL, type KindGroup, type SortKey, kindGroup, pixGroup, resourceKey, sortResources } from '@/utils/transferSort'
 import { RefreshCw } from '@lucide/vue'
 
 /**
@@ -220,11 +220,16 @@ async function act(it: ResourceItem) {
   }
   if (it.action === 'unlock') {
     const pts = it.points
+    // 磁力 / ed2k 资源解锁出来是离线链接（癫影一条可能是一批 ed2k，一条一个离线任务）
+    const then =
+      it.kind === 'magnet' || it.kind === 'ed2k'
+        ? '拿到链接后提交 115 离线下载（一批链接会逐条提交，每条占一个离线配额）'
+        : '拿到 115 分享后直接转存到转存目录'
     const ok = await dialog.confirm({
-      title: '解锁 RE0 资源',
+      title: `解锁${SOURCE_LABEL[it.source] ?? ''}资源`,
       content: it.owned
-        ? '这条资源已经解锁过，再次获取不扣积分。拿到 115 分享后直接转存到转存目录。'
-        : `解锁这条资源会消耗 ${pts != null ? `${pts} 个` : '若干'}站内积分，扣了不退。拿到 115 分享后直接转存到转存目录；不是 115 分享的会把链接交给你手动处理。`,
+        ? `这条资源已经解锁过，再次获取不扣积分。${then}。`
+        : `解锁这条资源会消耗 ${pts != null ? `${pts} 个` : '若干'}站内积分，扣了不退。${then}；都不是的会把链接交给你手动处理。`,
       actions: [
         { label: '取消', value: false, variant: 'tertiary' },
         { label: it.owned ? '获取并转存' : '确认解锁', value: true, variant: 'primary' },

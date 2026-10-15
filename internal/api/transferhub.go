@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -95,6 +96,9 @@ type ResourceItem struct {
 	Rank int `json:"rank"`
 	// SubmittedAt 这条链接之前提交过（来源链接台账里有），提交时间
 	SubmittedAt int64 `json:"submitted_at,omitempty"`
+
+	// files 癫影不解锁就给的文件清单（订阅付费解锁前按它核对缺集，subrun.go），不下发前端
+	files []string
 }
 
 // resResult 一个来源的搜索结果；Note 是给人看的附加说明（如不太灵匹配到了哪部站内影片）
@@ -119,7 +123,15 @@ var resSources = []resSource{
 	{Key: "tg", Label: "TG 频道", ready: tgResReady, search: tgResSearch},
 	{Key: "mukaku", Label: "不太灵", ready: mukakuReady, search: mukakuResSearch},
 	{Key: "re0", Label: "RE0", ready: re0Ready, search: re0ResSearch},
+	{Key: "dian", Label: "癫影", ready: dianReadyReason, search: dianResSearch},
 }
+
+// resPaidSource 要花积分解锁的来源（Action=unlock）：RE0 / 癫影。
+// 两个站的积分各算各的，订阅的自动解锁上限与预算也分开（subscribeCfg）
+func resPaidSource(src string) bool { return src == "re0" || src == "dian" }
+
+// resByTmdb 按 TMDB 编号列资源的来源：列出来的本来就是这一部，相关性与同名检查都放行
+func resByTmdb(src string) bool { return src == "re0" || src == "dian" }
 
 func resSourceOf(key string) *resSource {
 	for i := range resSources {
@@ -359,8 +371,12 @@ func re0ResSearch(h *Handler, q resQuery) (resResult, error) {
 			Size: r.ShareSize, Points: r.UnlockPoints, Owned: r.IsUnlocked,
 			TimeUnix: resParseTime(r.CreatedAt),
 		}
-		if strings.EqualFold(r.PanType, "115") {
+		switch strings.ToLower(r.PanType) {
+		case "115":
 			ri.Kind, ri.Pan = "share115", ""
+		case "ed2k", "magnet":
+			// RE0 把 ED2K 资源放在 115 那一组里，解锁出来是 ed2k 链接，走 115 离线（resolveResourceLink）
+			ri.Kind, ri.Pan = strings.ToLower(r.PanType), ""
 		}
 		if ri.TimeUnix > 0 {
 			ri.Time = time.Unix(ri.TimeUnix, 0).Format("2006-01-02")
@@ -373,6 +389,50 @@ func re0ResSearch(h *Handler, q resQuery) (resResult, error) {
 		out = append(out, ri)
 	}
 	return resResult{Items: out}, nil
+}
+
+// dianResSearch 癫影：按 TMDB 条目列分享。剧集一次给全部季，季集由站点标注（写进标题给覆盖估计用）
+func dianResSearch(h *Handler, q resQuery) (resResult, error) {
+	if q.TmdbID == 0 || (q.Type != "movie" && q.Type != "tv") {
+		return resResult{Note: "癫影按 TMDB 条目查资源，跳过 TMDB 时不可用"}, nil
+	}
+	list, err := dianListShares(q.Type, q.TmdbID)
+	if err != nil {
+		return resResult{}, err
+	}
+	out := make([]ResourceItem, 0, len(list))
+	for _, s := range list {
+		out = append(out, dianItemOf(s))
+	}
+	return resResult{Items: out}, nil
+}
+
+// dianItemOf 一条癫影分享 → ResourceItem。都要先解锁（Action=unlock），离线分享解锁出来是磁力 / ed2k
+func dianItemOf(s dianShare) ResourceItem {
+	ri := ResourceItem{
+		Source: "dian", Kind: "share115", Action: "unlock", Title: s.title(), Ref: dianRef(s),
+		Size: s.TotalSizeHuman, SizeBytes: s.TotalSizeBytes, Points: s.UnlockCost, Owned: s.owned(),
+		TimeUnix: resParseTime(s.CreatedAt), files: s.FileList,
+	}
+	if s.offline() {
+		ri.Kind = "magnet"
+		if strings.EqualFold(s.OfflineType, "ed2k") {
+			ri.Kind = "ed2k"
+		}
+	}
+	if ri.TimeUnix > 0 {
+		ri.Time = time.Unix(ri.TimeUnix, 0).Format("2006-01-02")
+	}
+	if zh, _ := s.TagDecoded["chn_sub"].(bool); zh || s.HasChineseSub {
+		ri.Tags.Zh = true
+	}
+	return ri
+}
+
+// offline 提交后是不是 115 离线（扣离线配额、只能整包下）：磁力 / ed2k，
+// 包括 RE0 要先解锁的 ED2K 资源（Action 是 unlock，解锁出来的是 ed2k 链接）
+func (it ResourceItem) offline() bool {
+	return it.Action == "offline" || (it.Action == "unlock" && (it.Kind == "ed2k" || it.Kind == "magnet"))
 }
 
 // ==================== 归一：类型 / 标签 / 相关性 / 排序 ====================
@@ -665,7 +725,7 @@ func resNormalize(q resQuery, items []ResourceItem) []ResourceItem {
 			}
 			it.SizeBytes = resParseSize(it.Size)
 		}
-		it.Relevant = it.Source == "re0" || resRelevant(q, it.Title) // RE0 本来就是按 TMDB 条目查的
+		it.Relevant = resByTmdb(it.Source) || resRelevant(q, it.Title) // RE0 / 癫影本来就是按 TMDB 条目查的
 		it.Rank = resWashRank(q.Type, it.Title)
 		out = append(out, it)
 	}
@@ -886,7 +946,30 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 
 	case "offline":
 		if status, msg := h.offlineSubmitCore(rl.URL, target, label, true); status != http.StatusOK {
+			if rl.Unlocked {
+				// 积分已经花了：把链接交回去，用户还能自己提交离线
+				return resSubmitResult{Message: "已解锁，但提交离线失败：" + msg, OpenURL: strings.Join(append([]string{rl.URL}, rl.More...), "\n")}, nil
+			}
 			return resSubmitResult{}, fmt.Errorf("%s", msg)
+		}
+		if len(rl.More) > 0 {
+			// 癫影一条离线分享常是一批 ed2k（一集一条）：逐条提交，一条一个离线任务
+			var failed []string
+			for _, l := range rl.More {
+				if status, msg := h.offlineSubmitCore(l, target, label, true); status != http.StatusOK {
+					failed = append(failed, l)
+					log.Printf("[资源] ✗ 离线提交失败（%s）：%s", truncateStr(l, 60), msg)
+				}
+			}
+			n := len(rl.More) + 1
+			if len(failed) > 0 {
+				return resSubmitResult{Message: fmt.Sprintf("已解锁，%d 条链接里 %d 条提交离线失败（链接附在下面，可以手动提交）", n, len(failed)),
+					OpenURL: strings.Join(failed, "\n")}, nil
+			}
+			return resSubmitResult{Message: fmt.Sprintf("已解锁并提交 %d 个 115 离线任务，完成后自动整理入库", n)}, nil
+		}
+		if rl.Unlocked {
+			return resSubmitResult{Message: "已解锁并提交 115 离线下载，完成后自动整理入库"}, nil
 		}
 		return resSubmitResult{Message: "已提交 115 离线下载，完成后自动整理入库"}, nil
 
@@ -903,8 +986,9 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 type resLink struct {
 	Action   string // transfer = 115 分享 / offline = 离线下载 / open = 交给用户自己打开
 	URL      string
-	Code     string // 分享提取码
-	Unlocked bool   // RE0 刚解锁出来的：积分可能已经花了，后续失败也要把链接交回去
+	Code     string   // 分享提取码
+	Unlocked bool     // RE0 刚解锁出来的：积分可能已经花了，后续失败也要把链接交回去
+	More     []string // 癫影一条离线分享解锁出好几条链接：URL 之外的那些（一条一个离线任务）
 }
 
 // resolveResourceLink 把一条资源换成能直接用的链接：直接贴的链接按形态分流、观影详情页取磁力、RE0 解锁。
@@ -955,15 +1039,37 @@ func (h *Handler) resolveResourceLink(req resSubmitReq) (resLink, error) {
 		return resLink{Action: "offline", URL: link}, nil
 
 	case "unlock":
-		if req.Source != "re0" || req.Ref == "" {
+		if !resPaidSource(req.Source) || req.Ref == "" {
 			return resLink{}, fmt.Errorf("参数错误")
 		}
 		if !req.Confirm {
-			return resLink{}, fmt.Errorf("解锁会消耗 RE0 积分，请确认后再提交")
+			return resLink{}, fmt.Errorf("解锁会消耗%s积分，请确认后再提交", resSourceOf(req.Source).Label)
+		}
+		if req.Source == "dian" {
+			u, err := dianUnlock(req.Ref)
+			if err != nil {
+				return resLink{}, fmt.Errorf("解锁失败: %w", err)
+			}
+			if u.Share != "" {
+				l, c := splitShareLink(u.Share)
+				if l == "" {
+					l = u.Share
+				}
+				return resLink{Action: "transfer", URL: l, Code: firstNonEmpty(c, u.Code), Unlocked: true}, nil
+			}
+			switch classifyLink(u.Links[0]) {
+			case "magnet", "ed2k", "http", "ftp":
+				return resLink{Action: "offline", URL: u.Links[0], More: u.Links[1:], Unlocked: true}, nil
+			}
+			return resLink{Action: "open", URL: strings.Join(u.Links, "\n"), Unlocked: true}, nil
 		}
 		unlocked, ucode, err := re0UnlockSlug(h, req.Ref)
 		if err != nil {
 			return resLink{}, fmt.Errorf("解锁失败: %w", err)
+		}
+		switch classifyLink(unlocked) {
+		case "magnet", "ed2k":
+			return resLink{Action: "offline", URL: unlocked, Unlocked: true}, nil
 		}
 		if !is115ShareLink(unlocked) {
 			return resLink{Action: "open", URL: unlocked, Code: ucode, Unlocked: true}, nil
@@ -1019,6 +1125,9 @@ func (h *Handler) TransferSaveSources(c *gin.Context) {
 	}
 	if re0On && re0WebConfigured(loadRe0Cfg()) {
 		ensureCloak("启用 RE0 来源")
+	}
+	if !slices.Contains(req.Disabled, "dian") && dianConfigured(loadDianCfg()) {
+		ensureCloak("启用癫影来源")
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
@@ -1146,7 +1255,7 @@ func resBotLabel(it ResourceItem, width int, withSource bool) string {
 	if it.Time != "" {
 		meta = append(meta, it.Time)
 	}
-	if it.Source == "re0" {
+	if resPaidSource(it.Source) {
 		switch {
 		case it.Owned:
 			meta = append(meta, "已解锁")
@@ -1190,9 +1299,9 @@ func resTagLine(t resTags) string {
 	return strings.Join(parts, "·")
 }
 
-// re0BotFree 机器人能不能直接解锁：解锁过的、或者明确 0 积分的（积分不知道的不算）
+// re0BotFree 机器人能不能直接解锁（RE0 / 癫影）：解锁过的、或者明确 0 积分的（积分不知道的不算）
 func re0BotFree(it ResourceItem) bool {
-	return it.Source == "re0" && (it.Owned || (it.Points != nil && *it.Points == 0))
+	return resPaidSource(it.Source) && (it.Owned || (it.Points != nil && *it.Points == 0))
 }
 
 // botSubmitResource 机器人选中一条资源后的处理，回复文案按结果分；返回是否提交成功。
@@ -1216,14 +1325,19 @@ func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string), paid
 			reply("⏳ 提交 115 离线下载…")
 		}
 	case "unlock":
+		then := "转存 115…"
+		if it.offline() {
+			then = "提交 115 离线下载…"
+		}
+		src := botSourceLabel(it.Source)
 		switch {
 		case re0BotFree(it):
-			reply("⏳ 解锁 RE0（免费 / 之前解锁过，不花积分）并转存 115…")
+			reply("⏳ 解锁" + src + "（免费 / 之前解锁过，不花积分）并" + then)
 		case paid:
-			reply("⏳ 解锁 RE0（花积分）并转存 115…")
+			reply("⏳ 解锁" + src + "（花积分）并" + then)
 		default:
 			// 没经过确认屏走到这里（不该发生）：不花积分
-			reply("这条 RE0 资源解锁要花积分，请重新点它，确认后再解锁。")
+			reply("这条" + src + "资源解锁要花积分，请重新点它，确认后再解锁。")
 			return false
 		}
 	}

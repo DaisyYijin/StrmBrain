@@ -56,7 +56,8 @@ const actionLabel = computed(() => {
     case 'open':
       return '打开链接'
     case 'unlock':
-      if (it.owned) return '获取并转存'
+      // RE0 的 ED2K 资源解锁出来是 ed2k 链接，后端交给 115 离线
+      if (it.owned) return it.kind === 'ed2k' || it.kind === 'magnet' ? '获取并离线' : '获取并转存'
       return it.points != null ? `解锁 · ${it.points} 积分` : '解锁'
   }
   return ''

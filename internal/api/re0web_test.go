@@ -121,6 +121,30 @@ func TestParseRe0PageResources(t *testing.T) {
 	}
 }
 
+// ED2K 资源站方也放在「115网盘」组里，行上 website 是 "ed2k"：要留下（解锁后走 115 离线），
+// 照插件那样剔掉的话只有 ED2K 资源的片显示「没有 115 资源」（2026-10-15 现场，tv/332261）
+func TestParseRe0PageResourcesEd2k(t *testing.T) {
+	raw := `0:["$","$L56",null,{"groupData":{"115":[{"slug":"e-1","website":"ed2k","remark":"S01E01 1080P Netflix WEB-DL AAC2.0 内封简繁字幕","share_size":"1.59GB","is_unlocked":true}],"quark":[{"slug":"q-1","website":"quark"}]}}]`
+	rows, ok := parseRe0PageResources(raw)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("ED2K 资源应当留下，得到 ok=%v %+v", ok, rows)
+	}
+	if r := rows[0]; r.Slug != "e-1" || r.PanType != "ed2k" || !r.IsUnlocked {
+		t.Errorf("解析不对: %+v", r)
+	}
+	if !isRe0Ed2k("ed2k://|file|Lupin S01E01 1080p.mkv|1707000000|0123456789ABCDEF0123456789ABCDEF|/") || isRe0Ed2k("https://115cdn.com/s/abc") {
+		t.Error("ed2k 链接判定不对")
+	}
+	// 订阅：RE0 的 ED2K 资源按离线算（过离线配额等闸门），不能当分享按集挑
+	it := ResourceItem{Source: "re0", Kind: "ed2k", Action: "unlock"}
+	if !it.offline() || (subCand{Item: it}).share() {
+		t.Error("RE0 ED2K 资源应当按离线处理")
+	}
+	if sh := (ResourceItem{Source: "re0", Kind: "share115", Action: "unlock"}); sh.offline() || !(subCand{Item: sh}).share() {
+		t.Error("RE0 115 分享仍按分享处理")
+	}
+}
+
 func TestParseRe0JSONResources(t *testing.T) {
 	rows := parseRe0JSONResources([]byte(`{"data":[{"href":"/resource/115/abc_1","title":"X"},{"slug":"bad slug!"},{"slug":"y","website":"baidu"}]}`))
 	if len(rows) != 1 || rows[0].Slug != "abc_1" {

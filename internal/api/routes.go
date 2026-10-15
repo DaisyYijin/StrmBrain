@@ -108,7 +108,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
 	re0BrowserInit(h.Config.DataDir) // RE0 网页登录：查本地有没有浏览器，配了网页登录又没有就后台下载（re0browser.go）
-	StartRe0CheckinScheduler(h)     // RE0 每日签到：08:00 后今天没签成就签
+	StartRe0CheckinScheduler(h)      // RE0 每日签到：08:00 后今天没签成就签
+	StartDianCheckinScheduler(h)     // 癫影每日签到：同 RE0
 	StartCoverGenScheduler(h)
 	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
@@ -408,8 +409,14 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/re0/checkin", h.Re0CheckinGet)
 		protected.POST("/re0/checkin", h.Re0CheckinSave)
 		protected.POST("/re0/checkin/run", h.Re0CheckinRun)
-		protected.GET("/re0/browser", h.Re0BrowserStatus)          // 网页登录用的浏览器：本地有没有、下载进度
+		protected.GET("/re0/browser", h.Re0BrowserStatus)             // 网页登录用的浏览器：本地有没有、下载进度
 		protected.POST("/re0/browser/download", h.Re0BrowserDownload) // 没有就下载；force 删掉重下
+		protected.GET("/dian/config", h.DianGetConfig)                // 癫影（dian.go / dianweb.go，浏览器与 RE0 共用）
+		protected.POST("/dian/config", h.DianSaveConfig)
+		protected.GET("/dian/check", h.DianCheck)
+		protected.GET("/dian/checkin", h.DianCheckinGet)
+		protected.POST("/dian/checkin", h.DianCheckinSave)
+		protected.POST("/dian/checkin/run", h.DianCheckinRun)
 
 		// 分享链接转存（转存到接收文件夹后由整理+增量接管）
 		protected.POST("/share/receive", h.ShareReceive)
@@ -1575,6 +1582,7 @@ var sensitiveSettingKeys = map[string]bool{
 	"emby":        true, // api_key
 	"emby-notify": true, // webhook token
 	"github":      true, // GitHub Token（github.go）
+	"dian":        true, // 癫影账号密码（dian.go）
 	// 下面三个界面走各自的专用接口（/re0/config 等），但通用接口同样读得到，漏了就是明文
 	"re0":      true, // 应用 Secret、Access / Refresh Token、网页登录密码（re0.go）
 	"guanying": true, // 密码与站点会话 Cookie（guanying.go）
