@@ -378,7 +378,12 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 
         <template v-if="d.view?.emby">
           <HAlert v-if="!d.view.emby.covered && !d.view.emby.unmapped" status="warning" class="mt">
-            {{ d.view.emby.partial ? 'Emby 只覆盖了这个库的一部分目录' : 'Emby 里还没有覆盖这个库的媒体库' }}<template v-if="d.view.emby.suggest">。要整库进 Emby，在 Emby 里新建媒体库，路径选 <code>{{ d.view.emby.suggest }}</code></template>。
+            <template v-if="d.view.emby.missing?.length">
+              这个库按分类进了 Emby，但还有分类目录不在任何 Emby 媒体库里：<code v-for="m in d.view.emby.missing" :key="m" class="miss-dir">{{ m }}</code>。在 Emby 里给它们建库（或加进已有的库），这些分类里的片才会出现在 Emby。
+            </template>
+            <template v-else>
+              {{ d.view.emby.partial ? 'Emby 只覆盖了这个库的一部分目录' : 'Emby 里还没有覆盖这个库的媒体库' }}<template v-if="d.view.emby.suggest">。要整库进 Emby，在 Emby 里新建媒体库，路径选 <code>{{ d.view.emby.suggest }}</code></template>。
+            </template>
           </HAlert>
         </template>
       </article>
@@ -565,6 +570,9 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 .x:hover {
   background: var(--surface-secondary);
   color: var(--foreground);
+}
+.miss-dir + .miss-dir {
+  margin-left: 6px;
 }
 .problem {
   flex-basis: 100%;

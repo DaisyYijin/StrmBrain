@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,25 +16,36 @@ func TestLibEmbyCoverage(t *testing.T) {
 	cases := []struct {
 		name, mapping, lib string
 		locs               []string
+		cats               []string
 		want               libEmbyState
 	}{
-		{"没配映射，Emby 库就是本地根", "", "/media/动漫", []string{"/media"},
+		{"没配映射，Emby 库就是本地根", "", "/media/动漫", []string{"/media"}, nil,
 			libEmbyState{Covered: true}},
-		{"没配映射，没有覆盖", "", "/media/动漫", []string{"/media/影视"},
+		{"没配映射，没有覆盖", "", "/media/动漫", []string{"/media/影视"}, nil,
 			libEmbyState{Suggest: "/media/动漫"}},
-		{"只覆盖了下面一部分", "", "/media/动漫", []string{"/media/动漫/电视剧/日番"},
+		{"只覆盖了下面一部分", "", "/media/动漫", []string{"/media/动漫/电视剧/日番"}, nil,
 			libEmbyState{Partial: true, Suggest: "/media/动漫"}},
-		{"映射后覆盖", "/media#/mnt/emby", "/media/动漫", []string{"/mnt/emby"},
+		{"映射后覆盖", "/media#/mnt/emby", "/media/动漫", []string{"/mnt/emby"}, nil,
 			libEmbyState{Covered: true, Suggest: "/mnt/emby/动漫"}},
-		{"映射后没覆盖，给出 Emby 路径", "/media#/mnt/emby", "/media/动漫", []string{"/mnt/emby/影视"},
+		{"映射后没覆盖，给出 Emby 路径", "/media#/mnt/emby", "/media/动漫", []string{"/mnt/emby/影视"}, nil,
 			libEmbyState{Suggest: "/mnt/emby/动漫"}},
-		{"映射本地一侧只填了一个库：别的库换算不回来", "/media/影视#/mnt/emby", "/media/动漫", []string{"/mnt/emby"},
+		{"映射本地一侧只填了一个库：别的库换算不回来", "/media/影视#/mnt/emby", "/media/动漫", []string{"/mnt/emby"}, nil,
 			libEmbyState{Unmapped: true}},
-		{"前缀相同不算覆盖", "", "/media/动漫2", []string{"/media/动漫"},
+		{"前缀相同不算覆盖", "", "/media/动漫2", []string{"/media/动漫"}, nil,
 			libEmbyState{Suggest: "/media/动漫2"}},
+		{"按分类各建一个 Emby 库，分类全覆盖", "", "/media/影视", []string{"/media/影视/电影", "/media/影视/剧集", "/media/影视/动漫番剧"},
+			[]string{"电影", "剧集", "动漫番剧"}, libEmbyState{Covered: true}},
+		{"多级分类被上一层覆盖", "", "/media/影视", []string{"/media/影视/电影"},
+			[]string{"电影/华语", "电影/外语"}, libEmbyState{Covered: true}},
+		{"按分类建库，漏了一个分类", "", "/media/影视", []string{"/media/影视/电影", "/media/影视/剧集"},
+			[]string{"电影", "剧集", "动漫番剧"}, libEmbyState{Partial: true, Missing: []string{"/media/影视/动漫番剧"}, Suggest: "/media/影视"}},
+		{"映射后按分类建库，缺的给 Emby 路径", "/media#/mnt/emby", "/media/影视", []string{"/mnt/emby/影视/电影"},
+			[]string{"电影", "剧集"}, libEmbyState{Partial: true, Missing: []string{"/mnt/emby/影视/剧集"}, Suggest: "/mnt/emby/影视"}},
+		{"Emby 库比分类还深，分类不算覆盖", "", "/media/影视", []string{"/media/影视/电影/华语"},
+			[]string{"电影"}, libEmbyState{Partial: true, Missing: []string{"/media/影视/电影"}, Suggest: "/media/影视"}},
 	}
 	for _, c := range cases {
-		if got := libEmbyCoverage(c.mapping, c.locs, c.lib); got != c.want {
+		if got := libEmbyCoverage(c.mapping, c.locs, c.lib, c.cats); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s：得到 %+v，应为 %+v", c.name, got, c.want)
 		}
 	}

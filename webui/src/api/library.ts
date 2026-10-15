@@ -39,6 +39,8 @@ export interface LibInbox {
 export interface LibEmbyState {
   covered: boolean
   partial: boolean
+  /** 按分类建 Emby 库时还没进 Emby 的分类目录（能换算时是 Emby 路径） */
+  missing?: string[]
   /** 路径映射的本地一侧不包含这个库 */
   unmapped: boolean
   /** 应在 Emby 里添加的路径 */

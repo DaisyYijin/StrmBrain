@@ -39,7 +39,9 @@ type libraryView struct {
 // libEmbyState 这个库在 Emby 里有没有被某个媒体库覆盖（只读，§3.7）
 type libEmbyState struct {
 	Covered bool `json:"covered"` // 某个 Emby 媒体库的目录就是它或它的上层
-	Partial bool `json:"partial"` // 只覆盖了它下面的一部分（比如按分类建的 Emby 库）
+	Partial bool `json:"partial"` // 只覆盖了它下面的一部分（比如按分类建的 Emby 库，但有分类没建）
+	// Missing 按分类建 Emby 库时还没进 Emby 的分类目录（能换算时是 Emby 路径，否则本地路径）
+	Missing []string `json:"missing,omitempty"`
 	// Unmapped 路径映射的本地一侧不包含这个库：Emby 看到的路径换不回本地，入库刷新、深删、对账都对不上
 	Unmapped bool `json:"unmapped"`
 	// Suggest 应该在 Emby 里添加的路径（按路径映射换算）；换算不出为空
@@ -131,42 +133,84 @@ func libRenameFixes(orphans []ruleLibRef, sources []libNameSource) []libRenameFi
 	return out
 }
 
-// libEmbyCoverage 一个库的本地目录在 Emby 里的覆盖情况。locations 是各 Emby 媒体库的目录（Emby 路径）。
+// libEmbyCoverage 一个库的本地目录在 Emby 里的覆盖情况。locations 是各 Emby 媒体库的目录（Emby 路径），
+// cats 是落进这个库的分类目录（相对库根，即分类规则名）。
+// 很多人在 Emby 里按分类各建一个库（电影 / 剧集 / 动漫），没有一个 Emby 库是这个库目录本身：
+// 只要每个分类目录都被某个 Emby 库覆盖，就算覆盖了，别再提示「整库新建」（2026-10-15 现场误报）。
 // 纯函数：路径映射的换算都走 embyPathToLocal / embyPathRoots，与入库刷新、深删同一套
-func libEmbyCoverage(pathMapping string, locations []string, libLocal string) libEmbyState {
+func libEmbyCoverage(pathMapping string, locations []string, libLocal string, cats []string) libEmbyState {
 	var st libEmbyState
 	lib := strings.TrimRight(filepath.ToSlash(libLocal), "/")
 	if lib == "" {
 		return st
 	}
+	locals := make([]string, 0, len(locations))
 	for _, loc := range locations {
-		local := strings.TrimRight(filepath.ToSlash(embyPathToLocal(pathMapping, loc)), "/")
-		if local == "" {
-			continue
-		}
-		switch {
-		case local == lib || strings.HasPrefix(lib, local+"/"):
-			st.Covered = true
-		case strings.HasPrefix(local, lib+"/"):
-			st.Partial = true
+		if local := strings.TrimRight(filepath.ToSlash(embyPathToLocal(pathMapping, loc)), "/"); local != "" {
+			locals = append(locals, local)
 		}
 	}
-	if st.Covered {
-		st.Partial = false
+	coveredBy := func(dir string) bool {
+		for _, local := range locals {
+			if local == dir || strings.HasPrefix(dir, local+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	st.Covered = coveredBy(lib)
+	if !st.Covered {
+		for _, local := range locals {
+			if strings.HasPrefix(local, lib+"/") {
+				st.Partial = true
+			}
+		}
 	}
 	localRoot, embyRoot := embyPathRoots(pathMapping)
-	if strings.Contains(pathMapping, "#") && embyRoot != "" {
-		lr := strings.TrimRight(localRoot, "/")
-		switch {
-		case lib == lr:
-			st.Suggest = embyRoot
-		case lr != "" && strings.HasPrefix(lib, lr+"/"):
-			st.Suggest = embyRoot + lib[len(lr):]
-		default:
-			st.Unmapped = true
+	mapped := strings.Contains(pathMapping, "#") && embyRoot != ""
+	lr := strings.TrimRight(localRoot, "/")
+	// toEmby 本地路径换成 Emby 里该填的路径；换算不出返回 false
+	toEmby := func(dir string) (string, bool) {
+		if !mapped {
+			return dir, true // 没配映射：两边看到的是同一个路径
 		}
-	} else if !st.Covered {
-		st.Suggest = lib // 没配映射：两边看到的是同一个路径
+		switch {
+		case dir == lr:
+			return embyRoot, true
+		case lr != "" && strings.HasPrefix(dir, lr+"/"):
+			return embyRoot + dir[len(lr):], true
+		}
+		return "", false
+	}
+	if st.Partial && len(cats) > 0 {
+		seen := map[string]bool{}
+		var missing []string
+		for _, c := range cats {
+			if c = libSubPath(c); c == "" || seen[c] {
+				continue
+			}
+			seen[c] = true
+			dir := lib + "/" + c
+			if coveredBy(dir) {
+				continue
+			}
+			if e, ok := toEmby(dir); ok {
+				dir = e
+			}
+			missing = append(missing, dir)
+		}
+		if len(seen) > 0 && len(missing) == 0 {
+			st.Covered, st.Partial = true, false
+		} else {
+			st.Missing = missing
+		}
+	}
+	if e, ok := toEmby(lib); ok {
+		if mapped || !st.Covered {
+			st.Suggest = e
+		}
+	} else {
+		st.Unmapped = true
 	}
 	return st
 }
@@ -230,7 +274,11 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 			v.Inboxes = []stagingLibView{}
 		}
 		if embyLocs != nil && v.Local != "" {
-			st := libEmbyCoverage(pathMapping, embyLocs, v.Local)
+			cats := make([]string, 0, len(v.Rules))
+			for _, rr := range v.Rules {
+				cats = append(cats, rr.Name)
+			}
+			st := libEmbyCoverage(pathMapping, embyLocs, v.Local, cats)
 			v.Emby = &st
 		}
 		out.Libs = append(out.Libs, v)
