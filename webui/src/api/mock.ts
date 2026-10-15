@@ -429,7 +429,8 @@ function mockLibrariesView() {
           : { covered: true, partial: false, unmapped: false },
     })),
     orphan_rules: rules.filter((r) => !libOf(r.library)),
-    rename_fixes: [{ from: '动画', to: '动漫', lib: '200' }],
+    // 「动画」是动漫库改名前的名字（演示一键修复）
+    rename_fixes: rules.some((r) => r.library === '动画') ? [{ from: '动画', to: '动漫', lib: '200' }] : [],
     names_known: true,
     staging_root: '301',
     local_root: '/media',
@@ -454,6 +455,10 @@ function mockSaveLibraries(init?: RequestInit) {
       mockLibs.push({ cid: e.cid, name, path: e.path || `/${name}` })
     }
   }
+  // 真后端存的就是 full.extra_libs：页面重读 full 时要看得到
+  ;(SETTINGS.full as { extra_libs: { cid: string; path: string }[] }).extra_libs = mockLibs
+    .slice(1)
+    .map((l) => ({ cid: l.cid, path: l.path }))
   mockInboxes = req.inboxes.map((b) => {
     const old = mockInboxes.find((o) => o.cid && o.cid === b.cid)
     return old ? { ...old, lib: b.lib } : { cid: b.cid || `s-${b.name}`, name: b.name, lib: b.lib }
@@ -465,6 +470,10 @@ const ROUTES: Record<string, Route> = {
   ...(subRoutes as Record<string, Route>),
   '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
     init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
+  '/libraries/fix-rename': () => {
+    mockCategoryYaml = mockCategoryYaml.split("library: '动画'").join("library: '动漫'")
+    return { message: '已把分类规则里的「动画」改成「动漫」', data: mockLibrariesView() }
+  },
   '/scrape/categories': (_q: URLSearchParams, init?: RequestInit) => {
     if (init?.method === 'POST') {
       const body = JSON.parse(String(init.body ?? '{}')) as { yaml: string; confirm_lib_change?: boolean }

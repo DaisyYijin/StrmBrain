@@ -102,3 +102,6 @@ export interface LibInboxConfirm {
 export const getLibraries = () => http.get<LibrariesView>('/libraries')
 export const saveLibraries = (req: LibSaveReq) =>
   http.put<{ message: string; jobs?: number[]; subs_moved: number; data: LibrariesView }>('/libraries', req)
+/** 库在 115 上改了名：把分类规则里写的旧名换成新名（新名由后端认，只传旧名） */
+export const fixRename = (from: string) =>
+  http.post<{ message: string; data: LibrariesView }>('/libraries/fix-rename', { from })

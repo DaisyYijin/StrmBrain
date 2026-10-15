@@ -87,7 +87,9 @@ async function load() {
   }
 }
 onMounted(load)
-defineExpose({ reload: load })
+// 上面「保存媒体库位置」存完会叫这里刷新（默认库换了目录，名字跟着变）。卡片上有没存的改动时不刷：
+// 刷了就把用户刚开的入口、刚加的库悄悄丢掉（2026-10-15 实测踩到）
+defineExpose({ reload: () => (dirty.value ? Promise.resolve() : load()) })
 
 /** 有附加库、或正在加第一个附加库时显示卡片；只有一个库时只留一行入口 */
 const multi = computed(() => drafts.value.length > 1)
@@ -249,6 +251,34 @@ async function fixMapping() {
   }
 }
 
+/** 库在 115 上改了名：规则里写的旧名一键换成新名（新名后端认，设计文档 R4） */
+const fixing = ref('')
+async function fixRename(from: string, to: string) {
+  if (dirty.value) {
+    message.warning('先保存或放弃卡片上的改动')
+    return
+  }
+  const ok = await dialog.confirm({
+    title: `把「${from}」改成「${to}」`,
+    content: `二级分类里写着 library: ${from} 的规则都改成 ${to}，条件和顺序不动。改完这几类会照常整理进「${to}」。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '改', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  fixing.value = from
+  try {
+    const r = await libraryApi.fixRename(from)
+    apply(r.data)
+    message.success(r.message)
+  } catch (e) {
+    toastError(e, '修改失败')
+  } finally {
+    fixing.value = ''
+  }
+}
+
 const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 </script>
 
@@ -360,6 +390,16 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
       </span>
       整理到这几类时会停下。
       <template #actions>
+        <HButton
+          v-for="f in view.rename_fixes"
+          :key="f.from"
+          size="sm"
+          variant="secondary"
+          :loading="fixing === f.from"
+          @click="fixRename(f.from, f.to)"
+        >
+          把「{{ f.from }}」改成「{{ f.to }}」
+        </HButton>
         <RouterLink :to="CATEGORY_LINK" class="cat-link">去二级分类修改 →</RouterLink>
       </template>
     </HAlert>
