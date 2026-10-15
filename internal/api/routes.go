@@ -1575,6 +1575,10 @@ var sensitiveSettingKeys = map[string]bool{
 	"emby":        true, // api_key
 	"emby-notify": true, // webhook token
 	"github":      true, // GitHub Token（github.go）
+	// 下面三个界面走各自的专用接口（/re0/config 等），但通用接口同样读得到，漏了就是明文
+	"re0":      true, // 应用 Secret、Access / Refresh Token、网页登录密码（re0.go）
+	"guanying": true, // 密码与站点会话 Cookie（guanying.go）
+	"mukaku":   true, // VIP Token 与验证码登录密码（mukaku.go）
 }
 
 // sensitiveSettingFields 按配置 key 额外认的密钥字段名：名字太泛、不能塞进 sensitiveFieldRe 的放这里
@@ -1593,7 +1597,8 @@ func isSensitiveField(name string, extra []string) bool {
 	return sensitiveFieldRe.MatchString(name) || slices.Contains(extra, name)
 }
 
-var sensitiveFieldRe = regexp.MustCompile(`(?i)secret|token|api_?key|aes_?key|password`)
+// cookie：观影的站点会话是一整个 map，命中时整份换成掩码（见 maskSensitiveJSON）
+var sensitiveFieldRe = regexp.MustCompile(`(?i)secret|token|api_?key|aes_?key|password|cookie`)
 
 // maskSensitiveJSON 把密钥字段换成掩码；extra 是这个配置 key 额外点名的字段名（sensitiveSettingFields）
 func maskSensitiveJSON(v string, extra ...string) string {
@@ -1611,6 +1616,11 @@ func maskSensitiveJSON(v string, extra ...string) string {
 			for k, val := range t {
 				if isSensitiveField(k, extra) {
 					if sv, ok := val.(string); ok && sv != "" {
+						t[k] = settingMask
+						continue
+					}
+					// 整个对象都是密钥（Cookie 表）：不往里走，里面的键名是站点自己的、认不出
+					if mv, ok := val.(map[string]any); ok && len(mv) > 0 {
 						t[k] = settingMask
 						continue
 					}
