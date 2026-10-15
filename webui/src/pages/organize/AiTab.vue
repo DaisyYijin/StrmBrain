@@ -156,6 +156,7 @@ async function saveChecked() {
     <FieldRow :required="model.enabled" :error="errorOf('key')" label="API 密钥" tip="大模型 API 密钥，推荐使用硅基流动等国内平台。本地模型（Ollama / vLLM）不校验密钥，但这里仍需填一个占位串（如 ollama）。">
       <SecretInput
         v-model="model.key"
+        :reveal="{ key: 'org-gpt', field: 'key' }"
         :status="errorOf('key') ? 'error' : undefined"
         name="ai-api-key"
         placeholder="sk-xxx"

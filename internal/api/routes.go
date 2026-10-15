@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1547,8 +1548,8 @@ func firstDiagName(data []struct {
 func (h *Handler) GetSetting(c *gin.Context) {
 	key := c.Query("key")
 	value := h.settingValueRaw(key)
-	if sensitiveSettingKeys[key] {
-		value = maskSensitiveJSON(value)
+	if isSensitiveSetting(key) {
+		value = maskSensitiveJSON(value, sensitiveSettingFields[key]...)
 	}
 	c.JSON(http.StatusOK, gin.H{"key": key, "value": value})
 }
@@ -1576,9 +1577,26 @@ var sensitiveSettingKeys = map[string]bool{
 	"github":      true, // GitHub Token（github.go）
 }
 
+// sensitiveSettingFields 按配置 key 额外认的密钥字段名：名字太泛、不能塞进 sensitiveFieldRe 的放这里
+// （比如 AI 增强识别的 API 密钥就叫 key，全局按 key 认会把别处无关的字段也掩掉）
+var sensitiveSettingFields = map[string][]string{
+	aiSettingKey: {"key"}, // org-gpt：AI 增强识别的 API 密钥（airecognize.go）
+}
+
+// isSensitiveSetting 这个配置 key 有没有要掩码的字段
+func isSensitiveSetting(key string) bool {
+	return sensitiveSettingKeys[key] || len(sensitiveSettingFields[key]) > 0
+}
+
+// isSensitiveField 字段名是不是密钥：通用规则，或这个配置 key 额外点名的
+func isSensitiveField(name string, extra []string) bool {
+	return sensitiveFieldRe.MatchString(name) || slices.Contains(extra, name)
+}
+
 var sensitiveFieldRe = regexp.MustCompile(`(?i)secret|token|api_?key|aes_?key|password`)
 
-func maskSensitiveJSON(v string) string {
+// maskSensitiveJSON 把密钥字段换成掩码；extra 是这个配置 key 额外点名的字段名（sensitiveSettingFields）
+func maskSensitiveJSON(v string, extra ...string) string {
 	if v == "" {
 		return v
 	}
@@ -1591,7 +1609,7 @@ func maskSensitiveJSON(v string) string {
 		switch t := n.(type) {
 		case map[string]any:
 			for k, val := range t {
-				if sensitiveFieldRe.MatchString(k) {
+				if isSensitiveField(k, extra) {
 					if sv, ok := val.(string); ok && sv != "" {
 						t[k] = settingMask
 						continue
@@ -1662,7 +1680,7 @@ func unmaskSensitiveJSON(newV, oldV string) string {
 func (h *Handler) RevealSecret(c *gin.Context) {
 	key, field := c.Query("key"), c.Query("field")
 	parts := strings.Split(field, ".")
-	if field == "" || !sensitiveFieldRe.MatchString(parts[len(parts)-1]) {
+	if field == "" || !isSensitiveField(parts[len(parts)-1], sensitiveSettingFields[key]) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "不是密钥字段"})
 		return
 	}
@@ -1674,7 +1692,7 @@ func (h *Handler) RevealSecret(c *gin.Context) {
 		value = loadRe0Cfg().ClientSecret
 	case key == "re0" && field == "password":
 		value = loadRe0Cfg().Password
-	case sensitiveSettingKeys[key]:
+	case isSensitiveSetting(key):
 		var root any
 		if raw := h.settingValueRaw(key); raw != "" && json.Unmarshal([]byte(raw), &root) != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "配置解析失败"})
@@ -1714,7 +1732,7 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 		return
 	}
 	// 敏感键：表单回传的掩码字段回填旧值（未改动的密钥不丢）
-	if sensitiveSettingKeys[req.Key] {
+	if isSensitiveSetting(req.Key) {
 		req.Value = unmaskSensitiveJSON(req.Value, h.settingValueRaw(req.Key))
 	}
 	// 待整理已并进转存（stagingdir.go）：老前端整存 org-basic 时带回来的 pending 不落库

@@ -103,6 +103,15 @@ func loadAIRecognizeCfg() *aiRecognizeCfg {
 	return aiCfgCache.val
 }
 
+// savedAIKey 已保存的 API 密钥（不看开关、不走缓存，只给连通性测试回填掩码用）
+func savedAIKey() string {
+	var cfg struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal([]byte(settingValueCompat(aiSettingKey)), &cfg)
+	return cfg.Key
+}
+
 // invalidateAICfgCache 配置保存后调用，免得 5 分钟 TTL 内改了还不生效
 func invalidateAICfgCache() {
 	aiCfgCache.Lock()
@@ -454,6 +463,12 @@ func (h *Handler) TestAIConnection(c *gin.Context) {
 	if aiChatEndpoint(req.URL) == "" {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "error": "API 地址无效：" + req.URL})
 		return
+	}
+	// 页面加载时 GET /config/setting 把密钥脱敏成掩码，用户没改就点测试，
+	// 发来的是掩码本身 —— 换成已保存的密钥（与 TestEmbyConnection 同口径）。
+	// 不走 loadAIRecognizeCfg：开关关着时它返回 nil，可关着也要能测
+	if strings.TrimSpace(req.Key) == settingMask {
+		req.Key = savedAIKey()
 	}
 	cfg := aiRecognizeCfg{URL: req.URL, Key: strings.TrimSpace(req.Key), Model: strings.TrimSpace(req.Model)}
 	start := time.Now()
