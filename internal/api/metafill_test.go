@@ -169,6 +169,8 @@ func TestMetaFillJobEndToEnd(t *testing.T) {
 	emby, _ := json.Marshal(map[string]string{"server_url": srv.URL, "api_key": "k"})
 	model.DB.Save(&model.Setting{Key: "full", Value: string(full)})
 	model.DB.Save(&model.Setting{Key: "emby", Value: string(emby)})
+	// 补刮只补「自动刮新片」的库：库没设过刮削，按老的全局开关换算成自动（libopts.go）
+	model.DB.Save(&model.Setting{Key: "scrape", Value: `{"write_nfo":true,"write_images":true,"auto_after_organize":true}`})
 	model.DB.Create(&model.TmdbConfig{ApiKey: "k"})
 	// 缺背景：上次补刮过、缺的还是背景图 → 冷却期内不再刮
 	model.DB.Create(&model.MetaFillMark{Key: "影视/电影/缺背景 (2021)", Lack: "partial:背景图", TriedAt: time.Now().Add(-time.Hour)})

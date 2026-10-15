@@ -144,8 +144,12 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		if !nextSet[cid] {
 			continue
 		}
+		if !validLibScrape(o.Scrape) {
+			return plan, nil, fmt.Errorf("不认识的刮削方式「%s」", o.Scrape)
+		}
 		switch o.Mode {
 		case "", "organize":
+			opts.Libs[cid] = libOpt{Scrape: o.Scrape}
 			continue
 		case libModeSelf:
 		default:

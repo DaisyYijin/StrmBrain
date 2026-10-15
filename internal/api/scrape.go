@@ -45,6 +45,10 @@ type scrapeCfg struct {
 	WriteImages bool   `json:"write_images"`
 	Force       bool   `json:"force"` // 覆盖已存在的元数据文件
 
+	// AutoAfterOrganize / AutoAfterSync / Provider 是阶段 2（2026-10-15，LIBRARY-ROLES-PLAN.md）之前的全局开关，
+	// 现在每个库在库卡片上各选「自动刮新片 / 只手动刮 / 不刮」（libopts.go）。这三个字段**只读不写**：
+	// 没设过的库按它们换算（legacyLibScrape），保留着也让回退到旧版本时照旧能用。ScrapeSaveConfig 原样保留存着的值。
+
 	// AutoAfterOrganize 整理完成后自动刮削本轮入库的片目（orgSink.flushScrape 入刮削队列）。
 	// 此前挂在增量同步末尾且扫全台账——新增一部片也要全库过一遍
 	AutoAfterOrganize bool `json:"auto_after_organize"`
@@ -63,9 +67,8 @@ type scrapeCfg struct {
 	// Emby 没有集缩略图时用剧的背景图，观感和一墙同样的图差不多，但省下几百次下载。默认开
 	SkipSharedStills bool `json:"skip_shared_stills"`
 
-	// Provider 谁来刮削：空 / station = 本站写 NFO 与图片；emby = Emby 自己刮，本站一样都不写（scrapeprovider.go）。
-	// 只能经 POST /scrape/provider 改：「刮削」「媒体信息」两个页签各自整存整取这份配置，
-	// 让它们带着旧值保存就会把刚切过去的方式改回来，所以 ScrapeSaveConfig 不认这个字段
+	// Provider 谁来刮削：空 / station = 本站写 NFO 与图片；emby = Emby 自己刮，本站一样都不写。
+	// 阶段 2 起只用于没设过刮削的库换算（见上）；原来改它的 POST /scrape/provider 已删
 	Provider string `json:"provider,omitempty"`
 }
 
@@ -484,7 +487,29 @@ func scrapeLaneStatus() (running bool, progress string) {
 func (h *Handler) ScrapeGetConfig(c *gin.Context) {
 	cfg := loadScrapeCfg()
 	running, progress := scrapeLaneStatus()
-	c.JSON(http.StatusOK, gin.H{"cfg": cfg, "status": gin.H{"running": running, "progress": progress}})
+	c.JSON(http.StatusOK, gin.H{"cfg": cfg, "status": gin.H{"running": running, "progress": progress},
+		"libs": libScrapeViews(h.getSettingValue("full"))})
+}
+
+// libScrapeView 一个库刮不刮（影视刮削页顶部的摘要、海报墙等用；改在库卡片上）
+type libScrapeView struct {
+	Cid    string `json:"cid"`
+	Name   string `json:"name"` // 认不出为空
+	Scrape string `json:"scrape"`
+}
+
+// libScrapeViews 各库的刮削方式（零 115 请求）
+func libScrapeViews(fullRaw string) []libScrapeView {
+	opts, legacy := loadLibOpts(), loadLegacyLibScrape()
+	out := []libScrapeView{}
+	for _, s := range libNameSources(fullRaw) {
+		v := libScrapeView{Cid: s.Cid, Name: s.libRootOf().Name, Scrape: opts.of(s.Cid).Scrape}
+		if v.Scrape == "" {
+			v.Scrape = legacy
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // ScrapeSaveConfig POST /scrape/config
@@ -496,7 +521,9 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 	}
 	// 忽略旧客户端提交的独立根目录，统一使用媒体库位置配置。
 	req.LocalRoot = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
-	req.Provider = loadScrapeCfg().Provider // 刮削方式只认 /scrape/provider（见 scrapeCfg.Provider）
+	// 三个老的全局开关只读不写（见 scrapeCfg）：前端已经不显示它们，带着什么来都按存着的算
+	old := loadScrapeCfg()
+	req.Provider, req.AutoAfterOrganize, req.AutoAfterSync = old.Provider, old.AutoAfterOrganize, old.AutoAfterSync
 	if err := saveScrapeCfg(req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

@@ -55,7 +55,8 @@ func TestEmbyProviderBlocksScrapeEntries(t *testing.T) {
 	setScrapeSetting(t, `{"write_nfo":true,"write_images":true,"auto_after_organize":true,"auto_after_sync":true,"provider":"emby"}`)
 	h := &Handler{DB: model.DB, Config: &config.Config{}}
 
-	if h.newOrgSink("").scrapeOn {
+	// 没设过刮削的库按老的全局开关换算（legacyLibScrape）：provider=emby 就是「不刮」
+	if loadLibScrapePolicy().autoScrapes("库/电影/华语/乙") {
 		t.Fatal("Emby 刮削时整理后不该刮")
 	}
 	if enqueueSyncScrape(model.DB, []string{"库/电影/华语/乙.{tmdbid=1}/乙.strm"}, filepath.Join(root, "库")) {
@@ -86,41 +87,33 @@ func TestEmbyProviderBlocksScrapeEntries(t *testing.T) {
 
 	// 切回本站刮削：整理后照常刮
 	setScrapeSetting(t, `{"write_nfo":true,"auto_after_organize":true}`)
-	if !h.newOrgSink("").scrapeOn {
+	if !loadLibScrapePolicy().autoScrapes("库/电影/华语/乙") {
 		t.Fatal("本站刮削时整理后应刮")
 	}
 }
 
-// 刮削配置整存整取，带着旧 provider 保存不能把刚切的方式改回去；切换只认 /scrape/provider
-func TestScrapeProviderSurvivesConfigSave(t *testing.T) {
+// 三个老的全局开关只读不写：前端带着什么来都按存着的算（没设过刮削的库靠它们换算）
+func TestScrapeLegacyFieldsSurviveConfigSave(t *testing.T) {
 	newTestDB(t, "provider_save.db")
 	gin.SetMode(gin.TestMode)
 	defer func() { notifyConfigSource = nil }()
 	cfg := &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
 	notifyConfigSource = cfg
 	h := &Handler{DB: model.DB, Config: cfg}
-
-	post := func(fn gin.HandlerFunc, v any) int {
-		b, _ := json.Marshal(v)
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(b))
-		fn(c)
-		return w.Code
+	if err := saveScrapeCfg(scrapeCfg{WriteNFO: true, Provider: "emby", AutoAfterSync: true}); err != nil {
+		t.Fatal(err)
 	}
-	if code := post(h.SetScrapeProvider, map[string]string{"provider": "nope"}); code != http.StatusBadRequest {
-		t.Fatalf("非法值应 400，实得 %d", code)
+	b, _ := json.Marshal(scrapeCfg{WriteNFO: true, ProbeStreams: true, Provider: "station", AutoAfterOrganize: true})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(b))
+	h.ScrapeSaveConfig(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("保存失败：%d", w.Code)
 	}
-	if code := post(h.SetScrapeProvider, map[string]string{"provider": "emby"}); code != http.StatusOK {
-		t.Fatalf("切换失败：%d", code)
-	}
-	// 「媒体信息」页签拿着旧配置（provider=station）保存轨道探测开关
-	if code := post(h.ScrapeSaveConfig, scrapeCfg{WriteNFO: true, ProbeStreams: true, Provider: "station"}); code != http.StatusOK {
-		t.Fatalf("保存失败：%d", code)
-	}
-	c := loadScrapeCfg()
-	if c.stationScrapes() || !c.ProbeStreams {
-		t.Fatalf("保存刮削配置后方式应仍是 Emby、探测开关照存：%+v", c)
+	got := loadScrapeCfg()
+	if got.stationScrapes() || got.AutoAfterOrganize || !got.AutoAfterSync || !got.ProbeStreams {
+		t.Fatalf("老开关应原样保留、其余照存：%+v", got)
 	}
 }
 
@@ -201,12 +194,12 @@ func TestFilterLocalTitlesEmbyGrade(t *testing.T) {
 		"b": {ItemID: "2", Tmdb: "6", Poster: true, Backdrop: true},
 	}
 
-	list, st := filterLocalTitles(all, localTitleQuery{EmbyGrade: true})
+	list, st := filterLocalTitles(all, localTitleQuery{EmbyGrade: func(string) bool { return true }})
 	if st.All != 2 || st.OK+st.Partial+st.Miss != 0 || list[0].Status != "pending" {
 		t.Fatalf("快照没到时不进三档计数：%+v %+v", st, list)
 	}
 
-	list, st = filterLocalTitles(all, localTitleQuery{EmbyGrade: true, Emby: snap})
+	list, st = filterLocalTitles(all, localTitleQuery{EmbyGrade: func(string) bool { return true }, Emby: snap})
 	if st.OK != 2 || list[0].EmbyPoster != "1" || list[1].EmbyPoster != "2" {
 		t.Fatalf("Emby 刮削：都按 Emby 算已刮削、海报都取 Emby 的：%+v %+v", st, list)
 	}

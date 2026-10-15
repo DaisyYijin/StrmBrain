@@ -238,6 +238,10 @@ func (r *personRunner) syncTitleNFO(t embyTitleItem) {
 	if nfo == "" {
 		return
 	}
+	// 「不刮（交给 Emby）」的库本站一样元数据都不写，NFO 也不改（libopts.go）
+	if rel, err := filepath.Rel(r.root, nfo); err == nil && r.scrapePolicy.of(filepath.ToSlash(rel)) == libScrapeOff {
+		return
+	}
 	raw, err := os.ReadFile(nfo)
 	if err != nil {
 		return // 没有 NFO（Emby 自己刮的、还没刮）就没有可对齐的

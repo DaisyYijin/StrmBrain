@@ -31,15 +31,20 @@ export interface ScrapeConfig {
   probe_streams: boolean
   /** 同一季多集共用的剧照判为占位图，不写集剧照（默认开） */
   skip_shared_stills: boolean
-  /** 谁来刮削（只读：保存刮削配置时后端不认它，切换走 setScrapeProvider） */
-  provider?: ScrapeProvider
+  /** 阶段 2 之前的全局刮削方式（只读：现在每个库在库卡片上选，后端只拿它给没设过的库换算） */
+  provider?: 'station' | 'emby'
 }
 
-/** station = 本站写 NFO 与图片；emby = Emby 自己刮，本站一样都不写（后端 scrapeprovider.go） */
-export type ScrapeProvider = 'station' | 'emby'
+/** 一个库刮不刮：auto 自动刮新片 / manual 只手动刮 / off 不刮（交给 Emby）。后端 libopts.go */
+export type LibScrape = 'auto' | 'manual' | 'off'
 
-export const setScrapeProvider = (provider: ScrapeProvider) =>
-  http.post<{ message?: string; provider: ScrapeProvider }>('/scrape/provider', { provider })
+/** GET /scrape/config 带回的各库刮削方式（改在「账号与媒体库 → 媒体库」） */
+export interface LibScrapeView {
+  cid: string
+  /** 认不出为空 */
+  name: string
+  scrape: LibScrape
+}
 
 /** 本地媒体库对应的一个 Emby 媒体库的元数据设置 */
 export interface EmbyLibCheck {
@@ -54,6 +59,8 @@ export interface EmbyLibCheck {
   emby_issues?: string[]
   /** 用本站刮削时的问题 */
   station_issues?: string[]
+  /** 这个 Emby 媒体库覆盖到的本站库各是什么刮削方式：含 off 的看 emby_issues，含 auto / manual 的看 station_issues */
+  modes: LibScrape[]
 }
 
 export interface EmbyCheck {
@@ -68,7 +75,7 @@ export const embyCheck = () => http.get<EmbyCheck>('/scrape/emby-check')
 
 /** 后端回的是 { cfg, status } 两层结构，不是扁平配置 —— 摊平取会全部读成 undefined */
 export const getScrapeConfig = () =>
-  http.get<{ cfg?: Partial<ScrapeConfig>; status?: { running?: boolean } }>('/scrape/config')
+  http.get<{ cfg?: Partial<ScrapeConfig>; status?: { running?: boolean }; libs?: LibScrapeView[] }>('/scrape/config')
 export const saveScrapeConfig = (cfg: ScrapeConfig) => http.post('/scrape/config', cfg)
 export const scrapeStatus = () =>
   http.get<{ running?: boolean; progress?: string }>('/scrape/status', { timeoutMs: 15_000 })

@@ -1,5 +1,6 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
+import type { LibScrape } from './organize'
 
 /**
  * 移出配置的媒体库的本地残留（后端 libleft.go）：台账第一段既不是配置中的库名、也不是分类目录。
@@ -59,6 +60,8 @@ export interface LibraryView {
   mode: LibMode
   /** 自己整理的库：片目在库下第几层（1–3） */
   depth: number
+  /** 刮不刮：auto 自动刮新片 / manual 只手动刮 / off 不刮（交给 Emby） */
+  scrape: LibScrape
   rules: RuleLibRef[]
   inboxes: LibInbox[]
   emby?: LibEmbyState
@@ -70,6 +73,7 @@ export type LibMode = 'organize' | 'self'
 export interface LibOpt {
   mode: LibMode
   depth?: number
+  scrape?: LibScrape
 }
 
 export interface LibRenameFix {

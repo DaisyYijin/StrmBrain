@@ -99,9 +99,10 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		return
 	}
 	keys := normalizeTitleKeys(req.Keys)
+	off := loadLibScrapePolicy().offLibsOf(keys)
 	switch {
-	case !loadScrapeCfg().stationScrapes():
-		c.JSON(http.StatusConflict, gin.H{"error": errEmbyScrapes})
+	case len(off) > 0:
+		c.JSON(http.StatusConflict, gin.H{"error": "「" + strings.Join(off, "」「") + "」设成了不刮（交给 Emby），本站不往里写 NFO 与图片：要刮先在「账号与媒体库 → 媒体库」改它的刮削"})
 		return
 	case len(keys) == 0:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有选择片目"})
@@ -560,10 +561,21 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	// 什么都没写 Emby 那边就没变化，每轮整理都排一遍只是空转
 	var people []personTarget
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
-	// 切到 Emby 刮削之前排下的、或之后从任务中心点「重试」的：一样都不写。
+	// 库改成「不刮（交给 Emby）」之前排下的、或之后从任务中心点「重试」的：那个库的片目一样都不写（libopts.go）。
 	// 放在上面那个 defer 之后 —— 整理交过来的 Emby 刷新照样要刷
-	if !loadScrapeCfg().stationScrapes() {
-		return jobOutcome{Message: errEmbyScrapes + "，跳过", Idle: isAutoScrapeKey(job.DedupeKey)}, nil
+	policy := loadLibScrapePolicy()
+	if off := policy.offLibsOf(lp.Keys); len(off) > 0 {
+		var keep []string
+		for _, k := range lp.Keys {
+			if policy.stationScrapes(k) {
+				keep = append(keep, k)
+			}
+		}
+		if len(keep) == 0 {
+			return jobOutcome{Message: "「" + strings.Join(off, "」「") + "」设成了不刮（交给 Emby），跳过", Idle: isAutoScrapeKey(job.DedupeKey)}, nil
+		}
+		log.Printf("[影视刮削] ○ 「%s」设成了不刮（交给 Emby），这次跳过其中 %d 个片目", strings.Join(off, "」「"), len(lp.Keys)-len(keep))
+		lp.Keys = keep
 	}
 	o := lp.Scrape
 	localRoot := localMediaRoot()
@@ -952,7 +964,8 @@ func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bo
 		return false
 	}
 	cfg := loadScrapeCfg()
-	if !cfg.stationScrapes() || !cfg.AutoAfterSync || !(cfg.WriteNFO || cfg.WriteImages) {
+	policy := loadLibScrapePolicy()
+	if !policy.any(libScrapeAuto) || !(cfg.WriteNFO || cfg.WriteImages) {
 		return false
 	}
 	if cfg.LocalRoot == "" {
@@ -963,9 +976,16 @@ func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bo
 		log.Printf("[影视刮削] ○ TMDB 未配置，跳过同步后刮削: %v", err)
 		return false
 	}
-	keys, outside := syncScrapeKeys(loadLibCategoryLayout(), rels)
+	all, outside := syncScrapeKeys(loadLibCategoryLayout(), rels)
 	if outside > 0 {
 		log.Printf("[影视刮削] ○ 本轮增量有 %d 个新 STRM 不在当前分类目录下的片目里，不自动刮削", outside)
+	}
+	// 只刮「自动刮新片」的库（libopts.go）
+	var keys []string
+	for _, k := range all {
+		if policy.autoScrapes(k) {
+			keys = append(keys, k)
+		}
 	}
 	if len(keys) == 0 {
 		return false

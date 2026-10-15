@@ -33,6 +33,8 @@ type libraryView struct {
 	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
 	Mode  string `json:"mode"`
 	Depth int    `json:"depth"`
+	// Scrape 刮不刮：auto / manual / off（没设过的按老的全局开关换算出来的值，libopts.go）
+	Scrape string `json:"scrape"`
 	// Rules 落进这个库的分类规则（默认库：没写 library 的那些）
 	Rules   []ruleLibRef     `json:"rules"`
 	Inboxes []stagingLibView `json:"inboxes"`
@@ -318,7 +320,12 @@ func (h *Handler) librariesNow() librariesView {
 		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs)
 	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
 	opts := loadLibOpts()
+	legacy := loadLegacyLibScrape()
 	for i := range v.Libs {
+		v.Libs[i].Scrape = opts.of(v.Libs[i].Cid).Scrape
+		if v.Libs[i].Scrape == "" {
+			v.Libs[i].Scrape = legacy
+		}
 		v.Libs[i].Mode = "organize"
 		if o := opts.of(v.Libs[i].Cid); o.self() {
 			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()

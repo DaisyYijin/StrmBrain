@@ -500,7 +500,7 @@ func (h *Handler) LocalTitleDetail(c *gin.Context) {
 		d.Fanart = h.localFanartQuery(e.Key, d.fanartV)
 	}
 	// Emby 那边的海报 / 背景图与分级：与卡片墙同一份快照、同一套规则（filterLocalTitles）
-	embyGrade := !loadScrapeCfg().stationScrapes()
+	embyGrade := loadLibScrapePolicy().embyGrades(e.Key)
 	stats := localEmbyStats()
 	st, inEmby := stats[e.Key]
 	if inEmby {

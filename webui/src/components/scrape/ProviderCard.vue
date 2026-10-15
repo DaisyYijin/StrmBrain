@@ -1,66 +1,28 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { CircleCheck, Clapperboard, RefreshCw, Server, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, RefreshCw, TriangleAlert } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import { organizeApi } from '@/api'
-import type { EmbyCheck, ScrapeProvider } from '@/api/organize'
+import type { EmbyCheck, LibScrape } from '@/api/organize'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
-import { toastError, useFeedback } from '@/composables/useFeedback'
 
 /**
- * 刮削方式总开关（影视刮削页顶部）：本站刮削，或交给 Emby 自己刮。
- * 选 Emby 时本站一样元数据都不写（后端每个入口都挡，见 scrapeprovider.go），
- * 「刮削」页签整页不生效；轨道探测与演职人员补全走的是 Emby，照常可用。
- * 下面顺带检查 Emby 媒体库的元数据设置合不合当前方式 —— 切到 Emby 却没开下载器，就没人刮了。
+ * 影视刮削页顶部：每个库刮不刮的摘要（只读）+ Emby 媒体库设置检查。
+ * 2026-10-15 起刮不刮按库设、改在「账号与媒体库 → 媒体库」的库卡片上（LIBRARY-ROLES-PLAN.md 阶段 2），
+ * 这一页只管「怎么刮」。这里**不放能改的开关**：两处各存一份会互相覆盖（incr.cron 那个坑）。
+ * 原来的「本站刮削 / Emby 刮削」二选一已删，后端 POST /scrape/provider 也删了。
  */
-const { provider, embyScrapes, load, set } = useScrapeProvider()
-const { dialog, message } = useFeedback()
+const { libs, embyScrapes, load } = useScrapeProvider()
 
-const OPTIONS: { value: ScrapeProvider; title: string; desc: string; icon: typeof Server }[] = [
-  {
-    value: 'station',
-    title: '本站刮削',
-    desc: '本站按 TMDB 写 NFO 与海报到 STRM 目录，Emby 只读本地元数据',
-    icon: Clapperboard,
-  },
-  {
-    value: 'emby',
-    title: 'Emby 刮削',
-    desc: 'Emby 自己从 TMDB 拉元数据，本站不写任何 NFO 与图片',
-    icon: Server,
-  },
-]
-
-const switching = ref(false)
-async function choose(p: ScrapeProvider) {
-  if (p === provider.value || switching.value) return
-  if (p === 'emby') {
-    const ok = await dialog.confirm({
-      title: '改由 Emby 刮削？',
-      content:
-        '切换后本站不再写 NFO 与图片：整理后、同步后的自动刮削，媒体信息补全里的补刮，海报墙的手动刮削都会停用；轨道探测与演职人员补全照常。\n\n' +
-        '本站以前写下的 NFO 与海报不会删除，Emby 读本地 NFO 的优先级比联网刮削高，那些片目仍显示原来的数据。想让 Emby 按自己的重刮，到「海报墙」对它们点「刷新元数据」并选「替换全部」。\n\n' +
-        '请确认 Emby 媒体库已勾选元数据下载器与图像获取器（下方有检查）。',
-      actions: [
-        { label: '取消', value: false, variant: 'tertiary' },
-        { label: '改由 Emby 刮削', value: true, variant: 'primary' },
-      ],
-    })
-    if (!ok) return
-  }
-  switching.value = true
-  try {
-    const r = await set(p)
-    message.success(r.message || '已切换')
-  } catch (e) {
-    toastError(e, '切换失败')
-  } finally {
-    switching.value = false
-  }
+const MODE_TEXT: Record<LibScrape, string> = {
+  auto: '自动刮新片',
+  manual: '只手动刮',
+  off: '不刮（交给 Emby）',
 }
+const LIB_LINK = { name: 'accounts', query: { tab: 'library' } }
 
 // ---- Emby 媒体库设置检查 ----
 
@@ -77,14 +39,21 @@ async function runCheck() {
   }
 }
 
-/** 当前方式下每个库的问题；空 = 没问题 */
-const libs = computed(() =>
-  (check.value?.libraries ?? []).map((l) => ({
-    ...l,
-    issues: (embyScrapes.value ? l.emby_issues : l.station_issues) ?? [],
-  })),
+/** 每个 Emby 媒体库按它覆盖到的本站库的刮削方式报问题：交给 Emby 的看下载器，本站刮的看会不会再刮一遍 */
+const embyLibs = computed(() =>
+  (check.value?.libraries ?? []).map((l) => {
+    const modes = l.modes ?? []
+    const emby = modes.includes('off') || (!modes.length && embyScrapes.value)
+    const station = modes.some((m) => m !== 'off') || (!modes.length && !embyScrapes.value)
+    return {
+      ...l,
+      emby,
+      issues: [...(emby ? (l.emby_issues ?? []) : []), ...(station ? (l.station_issues ?? []) : [])],
+    }
+  }),
 )
-const problemCount = computed(() => libs.value.filter((l) => l.issues.length).length)
+const embyProblem = computed(() => embyLibs.value.some((l) => l.emby && (l.emby_issues ?? []).length))
+const stationProblem = computed(() => embyLibs.value.some((l) => !l.emby && l.issues.length))
 
 onMounted(() => {
   void load(true)
@@ -93,33 +62,19 @@ onMounted(() => {
 </script>
 
 <template>
-  <SectionCard title="刮削方式" hint="谁来给媒体库刮削元数据：二选一">
+  <SectionCard title="各库刮不刮" hint="每个库在「账号与媒体库 → 媒体库」里选；这一页只管怎么刮">
     <div class="layout">
       <div class="choose">
-        <div class="opts" role="radiogroup" aria-label="刮削方式">
-          <button
-            v-for="o in OPTIONS"
-            :key="o.value"
-            type="button"
-            role="radio"
-            class="opt"
-            :class="{ on: provider === o.value }"
-            :aria-checked="provider === o.value"
-            :disabled="switching"
-            @click="choose(o.value)"
-          >
-            <span class="opt-icon"><component :is="o.icon" :size="18" /></span>
-            <span class="opt-body">
-              <span class="opt-title">{{ o.title }}</span>
-              <span class="opt-desc">{{ o.desc }}</span>
-            </span>
-            <span class="opt-dot" aria-hidden="true" />
-          </button>
-        </div>
-
-        <p v-if="embyScrapes" class="effect">
-          「刮削」页签的设置不生效，媒体信息补全只做探测、不补刮，演职人员的「刮削后补全」停用。
-          「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」改看 Emby 的海报与识别结果，可以让 Emby 重新刷新元数据。
+        <ul class="modes">
+          <li v-for="l in libs" :key="l.cid">
+            <span class="lib-label">{{ l.name || `cid ${l.cid}` }}</span>
+            <span class="mode" :class="l.scrape">{{ MODE_TEXT[l.scrape] }}</span>
+          </li>
+        </ul>
+        <RouterLink :to="LIB_LINK" class="link">去媒体库修改 →</RouterLink>
+        <p class="effect">
+          「自动刮新片」的库：整理进来的、同步进来的新片目都刮，定时补全也补它；「只手动刮」只在<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>勾选后刮；
+          「不刮」的库本站不写 NFO 与图片，海报墙改看 Emby 的海报与识别结果。
         </p>
       </div>
 
@@ -142,7 +97,7 @@ onMounted(() => {
           </p>
           <template v-else>
             <div class="libs">
-            <div v-for="l in libs" :key="l.name" class="lib">
+              <div v-for="l in embyLibs" :key="l.name" class="lib">
                 <span class="lib-icon" :class="l.issues.length ? 'warn' : 'ok'">
                   <TriangleAlert v-if="l.issues.length" :size="14" />
                   <CircleCheck v-else :size="14" />
@@ -153,18 +108,16 @@ onMounted(() => {
                     <div v-for="i in l.issues" :key="i">{{ i }}</div>
                   </div>
                   <div v-else class="lib-ok">
-                    {{ embyScrapes ? `元数据：${l.meta_fetchers.join('、') || '—'}；图像：${l.image_fetchers.join('、') || '—'}` : '设置合适' }}
+                    {{ l.emby ? `元数据：${l.meta_fetchers.join('、') || '—'}；图像：${l.image_fetchers.join('、') || '—'}` : '设置合适' }}
                   </div>
                 </div>
               </div>
             </div>
-          <p v-if="problemCount" class="check-foot">
-              <template v-if="embyScrapes">
-                在 Emby「媒体库 → 编辑媒体库」里勾选元数据下载器与图像获取器（TheMovieDb 等），否则 Emby 不会刮削。
-              </template>
-              <template v-else>
-                到「刮削」页签右侧展开「用本站刮削时，Emby 媒体库要这样设」照着改；不改的话 Emby 会自己再刮一遍，结果以 Emby 的为准。
-              </template>
+            <p v-if="embyProblem" class="check-foot">
+              交给 Emby 刮的库：在 Emby「媒体库 → 编辑媒体库」里勾选元数据下载器与图像获取器（TheMovieDb 等），否则没人刮。
+            </p>
+            <p v-if="stationProblem" class="check-foot">
+              本站刮的库：到「刮削」页签右侧展开「用本站刮削时，Emby 媒体库要这样设」照着改；不改的话 Emby 会自己再刮一遍，结果以 Emby 的为准。
             </p>
           </template>
         </template>
@@ -174,7 +127,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* 左边二选一、右边 Emby 设置检查：并排放，页签上方不再压一大块 */
+/* 左边各库摘要、右边 Emby 设置检查：并排放，页签上方不再压一大块 */
 .layout {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -183,84 +136,42 @@ onMounted(() => {
 .choose {
   min-width: 0;
 }
-.opts {
+.modes {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
 }
-.opt {
+.modes li {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: var(--r-lg);
+  gap: 10px;
+  font-size: 13px;
+}
+.lib-label {
+  min-width: 72px;
+  font-weight: 500;
+}
+.mode {
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 12px;
   background: var(--surface-secondary);
-  box-shadow: inset 0 0 0 1px var(--border);
-  color: var(--foreground);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    box-shadow 150ms ease,
-    background-color 150ms ease;
-}
-.opt:hover:not(:disabled) {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 50%, transparent);
-}
-.opt:disabled {
-  cursor: progress;
-}
-.opt:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-.opt.on {
-  background: color-mix(in oklab, var(--accent) 8%, var(--surface-secondary));
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-.opt-icon {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: var(--surface);
   color: var(--muted);
 }
-.opt.on .opt-icon {
+.mode.auto {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.opt-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.opt-title {
-  font-size: 14px;
-  font-weight: 600;
-}
-.opt-desc {
+.link {
   font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--muted);
+  color: var(--accent);
+  text-decoration: none;
 }
-.opt-dot {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 2px var(--border);
-}
-.opt.on .opt-dot {
-  box-shadow: inset 0 0 0 5px var(--accent);
-}
-
 .effect {
-  margin: 12px 0 0;
+  margin: 10px 0 0;
   font-size: 12.5px;
   line-height: 1.7;
   color: var(--muted);
@@ -277,7 +188,7 @@ onMounted(() => {
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
 }
-/* 库多的时候在框里滚，不把左边的选项撑高 */
+/* 库多的时候在框里滚，不把左边撑高 */
 .libs {
   max-height: 168px;
   overflow-y: auto;

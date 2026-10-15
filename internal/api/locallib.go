@@ -64,6 +64,8 @@ type localTitle struct {
 	// EmbyPoster 用 Emby 的海报（片目级条目 id，前端拼 /embyimg）：刮削方式为 Emby 时优先用它，
 	// 本站刮削时只在本地没有海报时补上 —— 不用本站刮削的用户本地一张图都没有
 	EmbyPoster string `json:"emby_poster,omitempty"`
+	// EmbyGraded 片目所在的库「不刮（交给 Emby）」，Status 是按 Emby 分的级（界面文案跟着换：「Emby 未认出」而不是「未刮削」）
+	EmbyGraded bool `json:"emby_graded,omitempty"`
 	// Mismatch 刮削方式为 Emby 时，Emby 认成的 TMDB 编号与台账不一致（填 Emby 那个编号）
 	Mismatch string `json:"mismatch,omitempty"`
 }
@@ -291,8 +293,8 @@ type localTitleQuery struct {
 	Probe string
 	// Emby 片目 key → 媒体信息计数（localemby.go 的快照），挂到返回的卡片上
 	Emby map[string]localEmbyStat
-	// EmbyGrade 刮削方式为 Emby：状态改按 Emby 分级（gradeByEmby）。快照还没拉到时状态记 pending，不进三档计数
-	EmbyGrade bool
+	// EmbyGrade 这个片目所在的库「不刮（交给 Emby）」：状态改按 Emby 分级（gradeByEmby）。快照还没拉到时状态记 pending，不进三档计数。nil = 都按本站分级
+	EmbyGrade func(key string) bool
 }
 
 // filterLocalTitles 纯函数：筛选 + 排序 + 计数。
@@ -316,13 +318,15 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 		if inEmby {
 			t.Emby = &es
 		}
+		embyGrade := q.EmbyGrade != nil && q.EmbyGrade(t.Key)
+		t.EmbyGraded = embyGrade
 		switch {
-		case q.EmbyGrade && q.Emby == nil:
+		case embyGrade && q.Emby == nil:
 			t.Status, t.Lack, t.Soft = "pending", nil, nil
-		case q.EmbyGrade:
+		case embyGrade:
 			gradeByEmby(&t, t.Emby)
 		}
-		if inEmby && es.Poster && (q.EmbyGrade || !t.HasPoster) {
+		if inEmby && es.Poster && (embyGrade || !t.HasPoster) {
 			t.EmbyPoster = es.ItemID
 		}
 		typeOK := q.MediaType == "" || t.MediaType == q.MediaType
@@ -395,7 +399,7 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	all := h.localTitlesSnapshot(c.Query("refresh") == "1")
 	list, st := filterLocalTitles(all, localTitleQuery{
 		Keyword: c.Query("q"), Dir: c.Query("dir"), MediaType: c.Query("type"), Status: c.Query("status"), Sort: c.Query("sort"),
-		Probe: c.Query("probe"), Emby: localEmbyStats(), EmbyGrade: !loadScrapeCfg().stationScrapes(),
+		Probe: c.Query("probe"), Emby: localEmbyStats(), EmbyGrade: loadLibScrapePolicy().embyGrades,
 	})
 	offset, _ := strconv.Atoi(c.Query("offset"))
 	limit, _ := strconv.Atoi(c.Query("limit"))

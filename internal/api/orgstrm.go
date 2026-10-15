@@ -71,7 +71,7 @@ type orgSink struct {
 	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
 	// refreshHandedOff 本轮的 Emby 刷新已经交给整理后刮削任务（flushScrape），flushRefresh 不再刷
 	refreshHandedOff bool
-	records     []*model.OrganizeRecord
+	records          []*model.OrganizeRecord
 	// recog 当前条目的识别信息，写记录时顺手带上（识别记忆的键、AI 判定的标注）。
 	// 整理是逐条串行的：每个条目开始识别时重设
 	recog recogMeta
@@ -93,9 +93,10 @@ func (h *Handler) newOrgSink(libCid string) *orgSink {
 	return &orgSink{
 		h: h, localRoot: localMediaRoot(), libCid: libCid,
 		domain: domain, format: format, keepExt: keepExt, skipExist: skipExist,
-		batchID:   time.Now().Format("20060102150405"),
-		// 刮削方式选了 Emby 时整理不刮：flushScrape 不入队，Emby 刷新由 flushRefresh 当场做，入库确认与自动探测照常
-		scrapeOn:  sc.stationScrapes() && sc.AutoAfterOrganize && (sc.WriteNFO || sc.WriteImages),
+		batchID: time.Now().Format("20060102150405"),
+		// 刮不刮按库（libopts.go）：flushScrape 只把「自动刮新片」的库里的片目入队，
+		// 一个都不剩时 Emby 刷新由 flushRefresh 当场做，入库确认与自动探测照常
+		scrapeOn:  sc.WriteNFO || sc.WriteImages,
 		scrapeCfg: sc,
 		jobs:      map[string]scrapeJob{},
 	}
@@ -255,12 +256,34 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 // flushScrape 本轮整理结束后统一刮削：只刮本轮真的动过的片目。
 // 此前是「增量同步动过媒体库 → 扫全台账刮一遍」，新增一部片也要全库过一遍；
 // 再之后是在这里当场刮，整理任务要等刮完才放 taskMu。现在只入刮削队列就返回（localscrape.go）
-func (s *orgSink) flushScrape() {
-	s.mu.Lock()
+// autoScrapeJobsLocked 本轮要自动刮的片目：只留「自动刮新片」的库里的（调用方持 s.mu）
+func (s *orgSink) autoScrapeJobsLocked() []scrapeJob {
+	if len(s.jobs) == 0 {
+		return nil
+	}
+	policy := loadLibScrapePolicy()
 	jobs := make([]scrapeJob, 0, len(s.jobs))
 	for _, j := range s.jobs {
-		jobs = append(jobs, j)
+		if policy.autoScrapes(j.Key) {
+			jobs = append(jobs, j)
+		}
 	}
+	return jobs
+}
+
+// willScrape 这一轮会不会交出刮削任务（重新整理据此决定要不要登记探测）
+func (s *orgSink) willScrape() bool {
+	if !s.scrapeOn {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.autoScrapeJobsLocked()) > 0
+}
+
+func (s *orgSink) flushScrape() {
+	s.mu.Lock()
+	jobs := s.autoScrapeJobsLocked()
 	s.mu.Unlock()
 	if len(jobs) == 0 || !s.scrapeOn || s.h == nil {
 		return
@@ -580,10 +603,10 @@ func recordFileKind(name string) string {
 
 // recogMeta 一个条目的识别信息
 type recogMeta struct {
-	key    string // recogKey：人工改指定时记进识别记忆
-	via    string // ai_title / ai_pick；规则环节识别的为空
-	score  int
-	note   string
+	key      string // recogKey：人工改指定时记进识别记忆
+	via      string // ai_title / ai_pick；规则环节识别的为空
+	score    int
+	note     string
 	holdAI   bool // 因为 AI 判定停下来等确认
 	holdTwin bool // 因为同名同分、分不出是哪一部停下来等确认
 }

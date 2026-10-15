@@ -19,7 +19,7 @@ import { useQueueStore } from '@/stores/queue'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 const { message } = useFeedback()
-// 刮削方式为 Emby：不会再有刮削任务，「刮削后补全」自然不生效，置灰说明
+// 所有库都「不刮（交给 Emby）」：不会再有刮削任务，「刮削后补全」自然不生效，置灰说明
 const { embyScrapes } = useScrapeProvider()
 const router = useRouter()
 
@@ -203,7 +203,7 @@ function openLastJob() {
         <div class="sub-title">写回与整理</div>
         <FieldRow
           label="同步到本地 NFO"
-          :hint="embyScrapes ? '当前由 Emby 刮削，本站不改 NFO，这一项不生效' : undefined"
+          :hint="embyScrapes ? '所有库都不刮（交给 Emby），本站不改 NFO，这一项不生效' : '设成「不刮（交给 Emby）」的库不改 NFO'"
           tip="Kodi、VidHub 等直接读媒体目录的播放器看的是 NFO，不是 Emby。开启后每补完一部，把它的 NFO 里的演员、导演、编剧名换成中文，演员头像存进片目录下的 .actors（Kodi 约定，优先用 Emby 里那张）。只改人名，NFO 其余内容不动；网盘同步下来的 NFO 不改。"
         >
           <HSwitch v-model="form.nfo_sync" :disabled="embyScrapes" aria-label="同步到本地 NFO" />
@@ -244,7 +244,7 @@ function openLastJob() {
         </template>
         <FieldRow
           label="刮削后补全"
-          :hint="embyScrapes ? '当前由 Emby 刮削，本站不刮削，这一项不生效；用定时运行补全' : undefined"
+          :hint="embyScrapes ? '所有库都不刮（交给 Emby），本站不刮削，这一项不生效；用定时运行补全' : undefined"
           tip="每次刮削（整理后、同步后、海报墙手动刮削）结束时，把这次刮过的片目单独排一个补全任务。任务会先等 Emby 读完新的 NFO（最多十来分钟），Emby 里还查不到的留给定时任务。只看这几部，不影响定时任务的续扫位置。"
         >
           <HSwitch v-model="form.after_scrape" :disabled="embyScrapes" aria-label="刮削后补全" />

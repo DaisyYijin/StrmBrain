@@ -173,3 +173,95 @@ func TestRowActionsSelfLib(t *testing.T) {
 		t.Errorf("本站整理的库片目照旧能整理：%+v", b)
 	}
 }
+
+// 没设过刮削的库按老的全局开关换算，升级后行为不变
+func TestLegacyLibScrape(t *testing.T) {
+	cases := []struct {
+		c    scrapeCfg
+		meta bool
+		want string
+	}{
+		{scrapeCfg{Provider: "emby", AutoAfterOrganize: true}, true, libScrapeOff},
+		{scrapeCfg{AutoAfterOrganize: true}, false, libScrapeAuto},
+		{scrapeCfg{AutoAfterSync: true}, false, libScrapeAuto},
+		{scrapeCfg{}, true, libScrapeAuto}, // 靠定时补全兜底的
+		{scrapeCfg{}, false, libScrapeManual},
+	}
+	for _, c := range cases {
+		if got := legacyLibScrape(c.c, c.meta); got != c.want {
+			t.Errorf("%+v meta=%v → %s，应为 %s", c.c, c.meta, got, c.want)
+		}
+	}
+}
+
+func TestLibScrapePolicy(t *testing.T) {
+	src := []libNameSource{{Cid: "100", Shown: "/影视"}, {Cid: "200", Shown: "/动漫"}, {Cid: "300", Shown: "/老库"}}
+	opts := libOpts{Libs: map[string]libOpt{"200": {Scrape: libScrapeManual}, "300": {Mode: libModeSelf, Depth: 2, Scrape: libScrapeOff}}}
+	p := buildLibScrapePolicy(src, opts, libScrapeAuto)
+	cases := map[string]string{
+		"影视/电影/沙丘 (2021)":    libScrapeAuto, // 没设过：按老开关
+		"动漫/动漫番剧/芙莉莲":        libScrapeManual,
+		"老库/欧美电影/阿凡达 (2009)": libScrapeOff,
+		"电影/沙丘 (2021)":       libScrapeAuto, // 老台账不带库名：按首个库
+	}
+	for k, want := range cases {
+		if got := p.of(k); got != want {
+			t.Errorf("%s → %s，应为 %s", k, got, want)
+		}
+	}
+	if !p.stationScrapes("动漫/x") || p.autoScrapes("动漫/x") || p.stationScrapes("老库/x") || !p.embyGrades("老库/x") {
+		t.Error("手动的库能手动刮、不自动刮；不刮的库都不能刮、按 Emby 分级")
+	}
+	if !p.any(libScrapeOff) || !p.any(libScrapeAuto) {
+		t.Error("any")
+	}
+	if off := p.offLibsOf([]string{"影视/a", "老库/b", "老库/c"}); len(off) != 1 || off[0] != "老库" {
+		t.Errorf("offLibsOf：%v", off)
+	}
+	// 零值策略（测试与没加载的地方）：都按自动
+	var zero libScrapePolicy
+	if !zero.autoScrapes("任何/东西") {
+		t.Error("零值策略应按自动")
+	}
+}
+
+func TestPlanLibrariesSaveScrape(t *testing.T) {
+	deps, _ := fakeDeps(t)
+	plan, _, err := planLibrariesSave(planInput(), libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{
+		"100": {Scrape: libScrapeAuto}, "200": {Scrape: libScrapeOff}, "300": {Mode: "organize", Scrape: libScrapeManual},
+	}}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := parseLibOpts(plan.OptsJSON)
+	if o.of("100").Scrape != libScrapeAuto || o.of("200").Scrape != libScrapeOff || o.of("300").Scrape != libScrapeManual || o.of("300").self() {
+		t.Errorf("每个库的刮削都要存下：%s", plan.OptsJSON)
+	}
+	if len(plan.ToSelf) != 0 || plan.YAMLChanged {
+		t.Error("只改刮削不碰分类")
+	}
+	if _, _, err := planLibrariesSave(planInput(), libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{"200": {Scrape: "sometimes"}}}, deps); err == nil {
+		t.Error("不认识的刮削方式应拒绝")
+	}
+}
+
+func TestEmbyFolderScrapeModes(t *testing.T) {
+	p := libScrapePolicy{byName: map[string]string{"影视": libScrapeAuto, "老库": libScrapeOff}, primary: libScrapeAuto}
+	got := func(locs ...string) string { return strings.Join(embyFolderScrapeModes("", locs, "/media", p), ",") }
+	if s := got("/media/老库"); s != "off" {
+		t.Errorf("只覆盖老库：%s", s)
+	}
+	if s := got("/media/影视/电影", "/media/老库/欧美电影"); s != "auto,off" {
+		t.Errorf("两个库各一部分：%s", s)
+	}
+	if s := got("/media"); s != "auto,off" {
+		t.Errorf("本地根 = 全部库：%s", s)
+	}
+	if s := got("/elsewhere"); s != "" {
+		t.Errorf("不在本地根下：%s", s)
+	}
+	// 路径映射：Emby 看到的是 /mnt/emby
+	if s := strings.Join(embyFolderScrapeModes("/media#/mnt/emby", []string{"/mnt/emby/老库"}, "/media", p), ","); s != "off" {
+		t.Errorf("按路径映射换回本地：%s", s)
+	}
+}

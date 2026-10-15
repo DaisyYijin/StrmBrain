@@ -21,7 +21,8 @@ const cfg = ref({ ...SCRAPE_DEFAULTS })
 const metaFill = ref<MetaFillInfo | null>(null)
 const personFill = ref<PersonFillInfo | null>(null)
 const loading = ref(true)
-const { embyScrapes, load: loadProvider } = useScrapeProvider()
+const { embyScrapes, libs, load: loadProvider } = useScrapeProvider()
+const MODE_TEXT = { auto: '自动刮新片', manual: '只手动刮', off: '不刮（交给 Emby）' } as const
 
 onMounted(async () => {
   // 三份配置互不依赖，哪份读失败就按默认值显示，别让一份拖住整页
@@ -57,24 +58,16 @@ const groups = computed<Group[]>(() => {
   const c = cfg.value
   const mf = metaFill.value
   const pf = personFill.value
-  // 刮削方式为 Emby：本站一样都不刮，刮削那两组只写一句「不生效」，别让人以为整理后还会刮
+  // 每个库刮不刮（在「账号与媒体库 → 媒体库」里选）；全都不刮时刮削内容那组不列，别让人以为整理后还会刮
+  const libGroup: Group = {
+    title: '各库刮不刮',
+    tab: 'scrape',
+    items: libs.value.map((l) => ({ label: l.name || `cid ${l.cid}`, on: l.scrape === 'auto', text: MODE_TEXT[l.scrape] })),
+  }
   const scrapeGroups: Group[] = embyScrapes.value
-    ? [
-        {
-          title: '刮削方式',
-          tab: 'scrape',
-          items: [{ label: 'Emby 刮削', on: true, text: '由 Emby 刮削', hint: '本站不写 NFO 与图片，刮削设置不生效' }],
-        },
-      ]
+    ? [libGroup]
     : [
-        {
-          title: '自动触发',
-          tab: 'scrape',
-          items: [
-            { label: '整理后自动刮削', ...onOff(c.auto_after_organize), hint: '只刮本轮新入库的片目' },
-            { label: '同步后自动刮削', ...onOff(c.auto_after_sync), hint: '增量同步新增的片目' },
-          ],
-        },
+        libGroup,
         {
           title: '刮削内容',
           tab: 'scrape',

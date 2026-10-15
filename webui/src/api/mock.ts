@@ -394,7 +394,11 @@ const mockLibs: MockLib[] = [
   { cid: '400', name: '老库', path: '/老库' },
 ]
 /** 每个库的整理方式（后端 lib_opts）：老库是用户自己整理的 */
-let mockOpts: Record<string, { mode: 'self'; depth: number }> = { '400': { mode: 'self', depth: 2 } }
+let mockOpts: Record<string, { mode: 'self' | 'organize'; depth?: number; scrape?: 'auto' | 'manual' | 'off' }> = {
+  '200': { mode: 'organize', scrape: 'manual' },
+  '400': { mode: 'self', depth: 2, scrape: 'off' },
+}
+const mockScrapeOf = (cid: string) => mockOpts[cid]?.scrape ?? 'auto'
 /** 老库的台账（演示片目层级预览：纪录片多一层子分类、美剧有季目录） */
 const MOCK_SELF_FILES = [
   '欧美电影/阿凡达 (2009)/阿凡达.strm',
@@ -459,7 +463,8 @@ function mockLibrariesView() {
       path: l.path,
       local: `/media/${l.name}`,
       default: i === 0,
-      mode: mockOpts[l.cid] ? 'self' : 'organize',
+      mode: mockOpts[l.cid]?.mode === 'self' ? 'self' : 'organize',
+      scrape: mockScrapeOf(l.cid),
       depth: mockOpts[l.cid]?.depth ?? 0,
       rules: rules.filter((r) => libOf(r.library)?.cid === l.cid).map(({ media_type, name }) => ({ media_type, name })),
       inboxes: mockInboxes.filter((b) => b.lib === l.cid).map((b) => ({ ...b, lib_name: l.name })),
@@ -482,7 +487,7 @@ function mockSaveLibraries(init?: RequestInit) {
   const req = JSON.parse(String(init?.body ?? '{}')) as {
     extra_libs: { cid: string; path: string }[]
     inboxes: { cid?: string; name: string; lib: string; confirm?: boolean }[]
-    opts?: Record<string, { mode: 'self'; depth: number }>
+    opts?: Record<string, { mode: 'self' | 'organize'; depth?: number; scrape?: 'auto' | 'manual' | 'off' }>
   }
   const need = req.inboxes
     .filter((b) => !b.cid && mockStagingDirs[b.name] && !b.confirm)
@@ -704,6 +709,8 @@ const ROUTES: Record<string, Route> = {
         title, year, tmdb_id: i % 5 === 4 ? 0 : 1000 + i, media_type: tv ? 'tv' : 'movie', category: cat,
         videos: tv ? 8 + i : 1, has_nfo: status !== 'miss', has_poster: status === 'ok', status,
         last_at: new Date(Date.now() - i * 3_600_000).toISOString(),
+        // 老库设成了「不刮（交给 Emby）」：状态按 Emby 分级
+        emby_graded: i % 3 === 2 && mockScrapeOf('400') === 'off',
       }
     })
     const type = q.get('type') ?? ''
@@ -728,7 +735,10 @@ const ROUTES: Record<string, Route> = {
       },
     }
   },
-  '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true, auto_after_sync: false } },
+  '/scrape/config': () => ({
+    cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true, auto_after_sync: false },
+    libs: mockLibs.map((l) => ({ cid: l.cid, name: l.name, scrape: mockScrapeOf(l.cid) })),
+  }),
   '/storage': {
     data: [{ id: 1, name: '115主号', type: '115', cookie_path: '/config/115-cookies.txt', device: 'web', interval: 3, openapi_enabled: false, app_id: '' }],
   },

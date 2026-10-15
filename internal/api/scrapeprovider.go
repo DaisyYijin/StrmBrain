@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -36,8 +35,8 @@ const (
 	scrapeProviderEmby    = "emby"
 )
 
-// errEmbyScrapes 被开关挡下时的统一说法
-const errEmbyScrapes = "刮削方式为「Emby 刮削」，本站不写 NFO 与图片"
+// errNoAutoScrapeLib 没有哪个库是「自动刮新片」时，自动补刮的统一说法
+const errNoAutoScrapeLib = "没有设成「自动刮新片」的媒体库"
 
 // provider 归一：只认 emby，其余（含老配置的空值）都是本站刮削
 func (c scrapeCfg) provider() string {
@@ -49,36 +48,6 @@ func (c scrapeCfg) provider() string {
 
 // stationScrapes 本站负责刮削（默认）
 func (c scrapeCfg) stationScrapes() bool { return c.provider() == scrapeProviderStation }
-
-// SetScrapeProvider POST /scrape/provider {provider: station|emby}
-func (h *Handler) SetScrapeProvider(c *gin.Context) {
-	var req struct {
-		Provider string `json:"provider"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || (req.Provider != scrapeProviderStation && req.Provider != scrapeProviderEmby) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：provider 只能是 station 或 emby"})
-		return
-	}
-	cfg := loadScrapeCfg()
-	prev := cfg.provider()
-	cfg.Provider = req.Provider
-	if err := saveScrapeCfg(cfg); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if prev != req.Provider {
-		log.Printf("[影视刮削] ✓ 刮削方式：%s → %s", providerLabel(prev), providerLabel(req.Provider))
-		forgetLocalTitles() // 卡片状态的口径跟着变
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "已切换为" + providerLabel(req.Provider), "provider": req.Provider})
-}
-
-func providerLabel(p string) string {
-	if p == scrapeProviderEmby {
-		return "「Emby 刮削」"
-	}
-	return "「本站刮削」"
-}
 
 // ---- Emby 媒体库设置检查 ----
 //
@@ -113,6 +82,39 @@ type embyLibCheck struct {
 	// EmbyIssues 用 Emby 刮削时的问题；StationIssues 用本站刮削时的问题。两种都给，界面切换前就能看到
 	EmbyIssues    []string `json:"emby_issues,omitempty"`
 	StationIssues []string `json:"station_issues,omitempty"`
+	// Modes 这个 Emby 媒体库覆盖到的本站库各是什么刮削方式（auto / manual / off，去重）。
+	// 界面据此只报用得上的那种问题：全是「不刮」的只看 EmbyIssues，全是本站刮的只看 StationIssues
+	Modes []string `json:"modes"`
+}
+
+// embyFolderScrapeModes 一个 Emby 媒体库的各个目录落在本站哪些库里、那些库是什么刮削方式。
+// 目录是本地根本身（或它的上层）= 覆盖全部库；换不回本地的目录不算
+func embyFolderScrapeModes(pathMapping string, locations []string, root string, policy libScrapePolicy) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(m string) {
+		if !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	for _, loc := range locations {
+		local := strings.TrimRight(filepath.ToSlash(embyPathToLocal(pathMapping, loc)), "/")
+		switch {
+		case local == "" || root == "":
+		case local == root || strings.HasPrefix(root, local+"/"):
+			for _, m := range policy.byName {
+				add(m)
+			}
+			if len(policy.byName) == 0 {
+				add(policy.of(""))
+			}
+		case strings.HasPrefix(local, root+"/"):
+			add(policy.of(local[len(root)+1:]))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkEmbyLib 纯函数：按媒体库选项判断两种刮削方式下各有什么问题。
@@ -207,6 +209,7 @@ func (h *Handler) ScrapeEmbyCheck(c *gin.Context) {
 		return
 	}
 	out := []embyLibCheck{}
+	policy := loadLibScrapePolicy()
 	for _, lib := range libs {
 		hit := root == "" // 没配本地根：全列出来，总比什么都不说强
 		for _, loc := range lib.Locations {
@@ -215,7 +218,9 @@ func (h *Handler) ScrapeEmbyCheck(c *gin.Context) {
 			}
 		}
 		if hit {
-			out = append(out, checkEmbyLib(lib))
+			chk := checkEmbyLib(lib)
+			chk.Modes = embyFolderScrapeModes(cfg.PathMapping, lib.Locations, root, policy)
+			out = append(out, chk)
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"configured": true, "libraries": out, "unmatched": len(out) == 0 && len(libs) > 0})

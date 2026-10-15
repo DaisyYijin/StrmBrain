@@ -167,14 +167,16 @@ type metaFillResult struct {
 
 func execMetaFillJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	cfg := h.loadMetaFillCfg()
-	// 刮削方式选了 Emby：补刮这一步不做（往目录里写 NFO 会盖掉 Emby 自己刮好的元数据），探测照常
-	embyScrapes := cfg.Scrape && !loadScrapeCfg().stationScrapes()
-	if embyScrapes {
+	// 补刮只补「自动刮新片」的库（libopts.go）：「不刮」的库往目录里写 NFO 会盖掉 Emby 自己刮好的元数据，
+	// 「只手动刮」的库用户说了只在海报墙刮。一个这样的库都没有就整步不做，探测照常
+	policy := loadLibScrapePolicy()
+	noAuto := cfg.Scrape && !policy.any(libScrapeAuto)
+	if noAuto {
 		cfg.Scrape = false
 	}
 	if !cfg.Scrape && !cfg.Probe {
-		if embyScrapes {
-			return jobOutcome{}, errors.New(errEmbyScrapes + "，补刮不做；探测又没开，没有可做的")
+		if noAuto {
+			return jobOutcome{}, errors.New(errNoAutoScrapeLib + "，补刮不做；探测又没开，没有可做的")
 		}
 		return jobOutcome{}, errors.New("补刮与探测都没开，没有可做的")
 	}
@@ -193,9 +195,15 @@ func execMetaFillJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	res.Titles = len(titles)
 
 	if cfg.Scrape {
-		msgs = append(msgs, h.metaFillScrape(job, cfg, titles, now, &res))
-	} else if embyScrapes {
-		msgs = append(msgs, errEmbyScrapes+"，跳过补刮")
+		var auto []localTitle
+		for _, t := range titles {
+			if policy.autoScrapes(t.Key) {
+				auto = append(auto, t)
+			}
+		}
+		msgs = append(msgs, h.metaFillScrape(job, cfg, auto, now, &res))
+	} else if noAuto {
+		msgs = append(msgs, errNoAutoScrapeLib+"，跳过补刮")
 	}
 	if cfg.Probe {
 		scrapeLane.set("读取 Emby 媒体信息", 0, 0, "")

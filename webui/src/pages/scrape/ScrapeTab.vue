@@ -23,10 +23,6 @@ const { cfg, saving, dirty, load, save } = useScrapeConfig()
 // 刮削方式为 Emby：整页置灰（inert：点不了、Tab 也进不去），后端同样不认这些设置
 const { embyScrapes } = useScrapeProvider()
 
-const ON_OFF = [
-  { label: '开启', value: true },
-  { label: '关闭', value: false },
-]
 const MAKE_SKIP = [
   { label: '生成', value: true },
   { label: '跳过', value: false },
@@ -38,24 +34,17 @@ onMounted(load)
 <template>
   <div class="stack">
     <HAlert v-if="embyScrapes" status="accent">
-      当前由 Emby 刮削，以下设置不生效：本站不写 NFO 与图片，整理、同步后也不会自动刮削。要改回来，在页面顶部选「本站刮削」。
+      所有媒体库都设成了「不刮（交给 Emby）」，以下设置不生效：本站不写 NFO 与图片。要改，到「账号与媒体库 → 媒体库」给库选刮削。
     </HAlert>
     <div class="grid" :class="{ off: embyScrapes }" :inert="embyScrapes">
       <!-- ==== 左：刮什么 ==== -->
       <SectionCard title="刮削内容" hint="按 TMDB 生成标准 NFO 与海报，写进本地媒体库的片目目录">
+        <!-- 「整理后 / 同步后自动刮削」两个开关 2026-10-15 起改成每个库在库卡片上选（LIBRARY-ROLES-PLAN.md 阶段 2），这里只说去哪改 -->
         <FieldRow
-          label="整理后自动刮削"
-          tip="整理完成后只刮本轮新入库的片目（不扫全库）。刮削在单独的「刮削队列」里执行，不占任务锁：几百集的剧刮半小时，整理与同步照常进行。"
+          label="什么时候刮"
+          tip="每个库各选「自动刮新片 / 只手动刮 / 不刮（交给 Emby）」。自动刮新片：整理进来的、增量同步进来的新片目都刮（刮削在单独的刮削队列里执行，不占任务锁）；同步来的目录名里没有 TMDB 编号时只认标题或原名完全相等的条目，认不准就跳过。全量同步不触发，存量用「媒体信息」页签里的媒体信息补全。"
         >
-          <HSegmented v-model="cfg.auto_after_organize" :options="ON_OFF" />
-        </FieldRow>
-
-        <FieldRow
-          label="同步后自动刮削"
-          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用本页「媒体信息」页签里的媒体信息补全。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「海报墙」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
-          hint="增量同步新增的片目；没有 TMDB 编号时只认片名完全相等"
-        >
-          <HSegmented v-model="cfg.auto_after_sync" :options="ON_OFF" />
+          <RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }" class="lib-link">在「账号与媒体库 → 媒体库」里按库选 →</RouterLink>
         </FieldRow>
 
         <FieldRow
@@ -234,6 +223,11 @@ onMounted(load)
 }
 .fact-link:hover {
   color: var(--accent);
+}
+.lib-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
 }
 
 .note {

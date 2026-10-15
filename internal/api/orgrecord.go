@@ -483,7 +483,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	setJobProgress("刮削与刷新媒体库", 5, redoSteps, rootRel)
 	// 带刮削且开着探测：这是用户这一次明确的动作，Emby 入库后按手动规则探测（embyprobejob.go）。
 	// 登记要在刷新之前，否则入库确认可能先到、按自动规则排掉了
-	if sink.scrapeOn && embyExtractEnabled() {
+	if embyExtractEnabled() && sink.willScrape() {
 		_, landed := sink.refreshTarget()
 		if len(opt.episodes) > 0 {
 			// 指定季集只探这几集：登记整个片目的话，上千集的番剧会把没探过的集全排进去

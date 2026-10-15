@@ -30,6 +30,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import { configApi, libraryApi, storageApi } from '@/api'
 import { ApiError } from '@/api/client'
 import type { LibInboxConfirm, LibInboxReq, LibMode, LibOpt, LibPreview, LibrariesView, LibraryView } from '@/api/library'
+import type { LibScrape } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
 import { useQueueStore } from '@/stores/queue'
@@ -58,6 +59,8 @@ interface DraftLib {
   mode: LibMode | ''
   /** 自己整理的库：片目在第几层 */
   depth: number
+  /** 刮不刮（阶段 2）；新加的库默认自动刮新片 */
+  scrape: LibScrape
   /** 按 depth 认出来的片目（不参与「有没有改动」的比较） */
   preview?: LibPreview | null
   previewing?: boolean
@@ -78,13 +81,14 @@ function draftsFrom(v: LibrariesView): DraftLib[] {
     inboxes: l.inboxes.map((b) => ({ cid: b.cid, name: b.name, problem: b.problem })),
     mode: l.mode === 'self' ? 'self' : 'organize',
     depth: l.depth || 2,
+    scrape: l.scrape || 'auto',
   }))
 }
 const serialize = (d: DraftLib[]) =>
   JSON.stringify(
     d.map((x) => ({
       cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null,
-      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0,
+      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape,
     })),
   )
 const dirty = computed(() => serialize(drafts.value) !== snapshot)
@@ -111,7 +115,7 @@ onMounted(load)
 // 刷了就把用户刚开的入口、刚加的库悄悄丢掉（2026-10-15 实测踩到）
 defineExpose({ reload: () => (dirty.value ? Promise.resolve() : load()) })
 
-/** 有附加库、或正在加第一个附加库时显示卡片；只有一个库时只留一行入口 */
+/** 有附加库、或正在加第一个附加库：显示「默认放这里」、转存入口这些只在多库时有意义的东西 */
 const multi = computed(() => drafts.value.length > 1)
 const defaultName = computed(() => view.value?.libs[0]?.name || '默认库')
 const stagingRoot = computed(() => view.value?.staging_root ?? '')
@@ -124,10 +128,27 @@ function libLabel(d: DraftLib) {
 // ---- 添加 ----
 
 function addLib() {
-  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2 })
+  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2, scrape: 'auto' })
 }
 function dropNew(i: number) {
   drafts.value.splice(i, 1)
+}
+
+// ---- 刮不刮 ----
+
+const SCRAPE_OPTS: { label: string; value: LibScrape }[] = [
+  { label: '自动刮新片', value: 'auto' },
+  { label: '只手动刮', value: 'manual' },
+  { label: '不刮（交给 Emby）', value: 'off' },
+]
+
+function scrapeHint(d: DraftLib) {
+  if (d.scrape === 'auto')
+    return d.mode === 'self'
+      ? '同步进来的新片目会刮；目录名对不上 TMDB 的不刮（不猜），定时补全也补它'
+      : '整理进来的、同步进来的新片目都会刮，定时补全也补它'
+  if (d.scrape === 'manual') return '只在海报墙勾选后刮，自动刮削和定时补全都不碰它'
+  return '本站不写 NFO 和图片，交给 Emby 自己刮；海报墙按 Emby 的数据看刮没刮全'
 }
 
 // ---- 谁来整理 ----
@@ -268,7 +289,7 @@ function buildReq(list: DraftLib[], confirmed: Set<string>) {
     if (name && !d.inboxes.length) inboxes.push({ name, lib: d.cid, confirm: confirmed.has(name) })
   }
   const opts: Record<string, LibOpt> = {}
-  for (const d of list) if (d.mode === 'self') opts[d.cid] = { mode: 'self', depth: d.depth }
+  for (const d of list) opts[d.cid] = d.mode === 'self' ? { mode: 'self', depth: d.depth, scrape: d.scrape } : { mode: 'organize', scrape: d.scrape }
   return { extra_libs, inboxes, opts }
 }
 
@@ -394,13 +415,12 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 </script>
 
 <template>
-  <!-- 只有一个库：一行入口 -->
-  <div v-if="!loading && !multi" class="add-hint">
-    <span>想把动漫、4K 之类分开放进另一个 115 目录？</span>
-    <HButton size="sm" variant="secondary" @click="addLib"><Plus :size="14" />添加媒体库</HButton>
-  </div>
-
-  <SectionCard v-else-if="!loading && view" title="媒体库" hint="每个库在哪、由谁整理；怎么分类在二级分类里定">
+  <!-- 只有一个库也显示卡片：「整理」「刮削」两行对单库同样有用（LIBRARY-ROLES-PLAN.md §8-2） -->
+  <SectionCard
+    v-if="!loading && view"
+    title="媒体库"
+    :hint="multi ? '每个库在哪、由谁整理、刮不刮；怎么分类、怎么刮在各自的页面里' : '这个库由谁整理、刮不刮；怎么分类、怎么刮在各自的页面里'"
+  >
     <HAlert v-if="anyUnmapped" status="warning" title="Emby 路径映射只对得上一部分库" class="mb">
       路径映射的本地一侧只填了某一个库的目录，其他库在 Emby 里的路径换不回本地（入库刷新、删除联动都会对不上）。
       <template #actions>
@@ -414,7 +434,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
       <article v-for="(d, i) in drafts" :key="d.cid || `new-${i}`" class="lib">
         <header class="lib-head">
           <h3>{{ libLabel(d) }}</h3>
-          <span v-if="d.view?.default" class="tag-rest">默认放这里</span>
+          <span v-if="multi && d.view?.default" class="tag-rest">默认放这里</span>
           <span v-if="d.isNew" class="tag-new">新加，保存后生效</span>
           <span class="grow" />
           <HButton v-if="d.isNew" size="sm" variant="ghost" @click="dropNew(i)"><X :size="14" />不加了</HButton>
@@ -504,7 +524,8 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           <div class="row-label">分类</div>
           <div class="row-body">
             <p class="cat-line">
-              <template v-if="d.view?.default">没指定库的规则都落在这里（{{ d.view.rules.length }} 条）</template>
+              <template v-if="d.view?.default && !multi">按二级分类的 {{ d.view.rules.length }} 条规则整理进来</template>
+              <template v-else-if="d.view?.default">没指定库的规则都落在这里（{{ d.view.rules.length }} 条）</template>
               <template v-else-if="d.view?.rules.length">
                 <template v-for="(r, k) in d.view.rules" :key="`${r.media_type}:${r.name}`">
                   <span v-if="k" class="sep">·</span><MediaTypeChip :type="r.media_type" /> {{ r.name }}
@@ -519,8 +540,8 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           </div>
         </div>
 
-        <!-- 转存入口：只有本站整理的库有 -->
-        <div v-if="d.mode === 'organize'" class="row">
+        <!-- 转存入口：只有本站整理的库有；只有一个库时什么都进它，入口没意义（已有的照样列出来能解绑） -->
+        <div v-if="d.mode === 'organize' && (multi || d.inboxes.length)" class="row">
           <div class="row-label">转存入口</div>
           <div class="row-body">
             <div class="inbox-line">
@@ -545,6 +566,21 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
               <HInput v-model="d.inboxDraft" class="inbox-name" :input-attrs="{ 'aria-label': '转存入口子目录名' }" />
               <span class="muted small">保存时建立</span>
             </div>
+          </div>
+        </div>
+
+        <!-- 刮不刮（阶段 2）：取代原来全局的「刮削方式」与「整理后 / 同步后自动刮削」 -->
+        <div class="row">
+          <div class="row-label">刮削</div>
+          <div class="row-body">
+            <HSegmented
+              :model-value="d.scrape"
+              :options="SCRAPE_OPTS"
+              size="sm"
+              :aria-label="`${libLabel(d)} 的刮削`"
+              @update:model-value="(v) => (d.scrape = v as LibScrape)"
+            />
+            <p class="muted small">{{ scrapeHint(d) }}</p>
           </div>
         </div>
 
@@ -583,6 +619,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 
     <div class="add-row">
       <HButton size="sm" variant="secondary" @click="addLib"><Plus :size="14" />添加媒体库</HButton>
+      <span v-if="!multi" class="muted small">想把动漫、4K，或者自己整理好的老库分开放进另一个 115 目录？</span>
     </div>
 
     <FormActions>

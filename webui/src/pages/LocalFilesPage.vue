@@ -48,7 +48,8 @@ const route = useRoute()
 const router = useRouter()
 const queue = useQueueStore()
 const { message, dialog } = useFeedback()
-const { embyScrapes, load: loadProvider } = useScrapeProvider()
+// 刮不刮按库（libopts.go）：单张卡片按哪种口径看由后端标在 t.emby_graded 上，这里只要整体情况
+const { embyScrapes, anyEmby, libs: scrapeLibs, load: loadProvider } = useScrapeProvider()
 
 const PAGE = 60
 
@@ -186,8 +187,16 @@ const statusOptions = computed(() => [
   { label: `${statusText('miss', embyScrapes.value)} ${stats.value.miss}`, value: 'miss' as const },
 ])
 /** Emby 刮削时状态来自 Emby 快照：没读到之前三档都是 0，筛选没意义，先不显示 */
-const showStatus = computed(() => !embyScrapes.value || !!emby.value?.ready)
+const showStatus = computed(() => !anyEmby.value || !!emby.value?.ready)
 // 别处切了刮削方式（另开着影视刮削页）：口径变了，重读
+watch(
+  () => scrapeLibs.value.map((l) => `${l.cid}:${l.scrape}`).join(','),
+  (_now, before) => {
+    if (!before) return // 第一次读到：列表本来就是按它算的
+    status.value = ''
+    void load(true)
+  },
+)
 watch(embyScrapes, () => {
   status.value = ''
   void load(true)
@@ -302,6 +311,8 @@ function metaLine(t: LocalTitle) {
 // ---- 勾选 ----
 
 const selectedList = computed(() => [...selected.value.values()])
+/** 勾选的都在「不刮（交给 Emby）」的库里：批量操作是让 Emby 刷新；混着的按本站刮（不刮的库后端会拦下并说明） */
+const selEmby = computed(() => selectedList.value.length > 0 && selectedList.value.every((t) => t.emby_graded))
 const selecting = computed(() => selected.value.size > 0)
 
 function toggle(t: LocalTitle) {
@@ -384,6 +395,15 @@ function onPoster(t: LocalTitle) {
 // ---- 详情（地址带 ?title=，返回键即关闭）----
 
 const detailKey = computed(() => (typeof route.query.title === 'string' ? route.query.title : null))
+/** 详情抽屉按哪种口径看：列表里有这张卡就用它的标记，否则（从地址直接打开）看 key 第一段是哪个库 */
+const detailEmby = computed(() => {
+  const k = detailKey.value
+  if (!k) return embyScrapes.value
+  const hit = items.value.find((t) => t.key === k)
+  if (hit) return !!hit.emby_graded
+  const lib = scrapeLibs.value.find((l) => l.name && k.startsWith(`${l.name}/`))
+  return lib ? lib.scrape === 'off' : embyScrapes.value
+})
 const showDetail = computed({
   get: () => !!detailKey.value,
   set: (v) => {
@@ -422,8 +442,9 @@ function openScrape(list: LocalTitle[], preset: 'auto' | 'pick' = 'auto') {
   showScrape.value = true
 }
 
-const CARD_MENU = computed(() =>
-  embyScrapes.value
+/** 卡片菜单：所在库「不刮（交给 Emby）」的让 Emby 刷新，其余本站刮 */
+const cardMenu = (t: LocalTitle) =>
+  t.emby_graded
     ? [
         { key: 'detail', label: '查看详情', icon: Info },
         { key: 'refresh', label: '刷新元数据', icon: RefreshCw },
@@ -433,8 +454,7 @@ const CARD_MENU = computed(() =>
         { key: 'detail', label: '查看详情', icon: Info },
         { key: 'auto', label: '刮削', icon: Images },
         { key: 'pick', label: '改指定 TMDB 条目', icon: Search },
-      ],
-)
+      ]
 
 function onCardAction(t: LocalTitle, key: string) {
   if (key === 'detail') openDetail(t)
@@ -665,9 +685,9 @@ onBeforeUnmount(() => {
                     v-if="t.status !== 'ok' && t.status !== 'pending'"
                     class="badge"
                     :class="`tone-${STATUS_TONE[t.status]}`"
-                    :title="statusTitle(t, embyScrapes)"
+                    :title="statusTitle(t, !!t.emby_graded)"
                   >
-                    <span class="badge-dot" />{{ statusLabel(t, embyScrapes) }}
+                    <span class="badge-dot" />{{ statusLabel(t, !!t.emby_graded) }}
                   </span>
                   <HChip v-if="probeLabel(t)" color="accent" variant="primary" size="sm" class="probe-badge" :title="probeTitle(t)">
                     {{ probeLabel(t) }}
@@ -692,7 +712,7 @@ onBeforeUnmount(() => {
                     <span
                       v-if="!t.tmdb_id"
                       class="no-id"
-                      :title="embyScrapes ? '目录名里没有 TMDB 编号：Emby 按片名识别' : '目录名里没有 TMDB 编号：刮削时按片名识别'"
+                      :title="t.emby_graded ? '目录名里没有 TMDB 编号：Emby 按片名识别' : '目录名里没有 TMDB 编号：刮削时按片名识别'"
                     >
                       <Sparkles :size="11" />无编号
                     </span>
@@ -708,11 +728,11 @@ onBeforeUnmount(() => {
                   :color="STATUS_TONE[t.status]"
                   size="sm"
                   class="list-only row-status"
-                  :title="statusTitle(t, embyScrapes)"
+                  :title="statusTitle(t, !!t.emby_graded)"
                 >
-                  {{ statusLabel(t, embyScrapes) }}
+                  {{ statusLabel(t, !!t.emby_graded) }}
                 </HChip>
-                <HDropdown :options="CARD_MENU" align="end" @select="(k) => onCardAction(t, k)">
+                <HDropdown :options="cardMenu(t)" align="end" @select="(k) => onCardAction(t, k)">
                   <HButton variant="ghost" size="sm" icon-only :aria-label="`${t.title} 的操作`"><Ellipsis :size="16" /></HButton>
                 </HDropdown>
               </div>
@@ -749,7 +769,7 @@ onBeforeUnmount(() => {
           </span>
           <div v-if="selecting" class="batch-btns">
             <HButton variant="ghost" size="sm" @click="clearSelection">清空</HButton>
-            <template v-if="embyScrapes">
+            <template v-if="selEmby">
               <HButton variant="secondary" size="sm" :disabled="embyRefreshing" @click="embyRefresh(selectedList, true)">
                 <Replace :size="14" />替换全部
               </HButton>
@@ -770,7 +790,7 @@ onBeforeUnmount(() => {
       <div v-if="selecting" class="float-bar">
         <span>已选 <b>{{ selected.size }}</b> 部</span>
         <HButton variant="ghost" size="sm" icon-only aria-label="清除勾选" @click="clearSelection"><X :size="16" /></HButton>
-        <HButton v-if="embyScrapes" variant="primary" size="sm" :loading="embyRefreshing" @click="embyRefresh(selectedList, false)">
+        <HButton v-if="selEmby" variant="primary" size="sm" :loading="embyRefreshing" @click="embyRefresh(selectedList, false)">
           <RefreshCw :size="14" />刷新元数据
         </HButton>
         <HButton v-else variant="primary" size="sm" @click="openScrape(selectedList)"><Images :size="14" />批量刮削</HButton>
@@ -780,7 +800,7 @@ onBeforeUnmount(() => {
     <TitleDetail
       v-model:show="showDetail"
       :title-key="detailKey"
-      :emby-mode="embyScrapes"
+      :emby-mode="detailEmby"
       :snapshot-at="emby?.ready ? emby.at : undefined"
       @scrape="(t, p) => openScrape([t], p)"
       @emby-refresh="(t, replace) => embyRefresh([t], replace)"

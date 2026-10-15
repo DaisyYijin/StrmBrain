@@ -662,13 +662,15 @@ type personRunner struct {
 	lastTMDB time.Time
 
 	// 同步本地 NFO（embypeoplenfo.go）。nfoSync 为假时整段不做
-	nfoSync    bool
-	root       string              // 本地媒体库根
-	mapPath    func(string) string // Emby 路径 → 本地路径
-	nfoStat    personNFOStat
-	nfoImgLeft int
-	imaged     map[string]bool // 本轮补上头像的人物 id：t.People 是补之前读的，看不出它现在有头像了
-	remote     map[string]string // 头像还是远程链接的人物 id → 链接里的 TMDB 图片路径（可能为空），见 embyRemotePrimary
+	nfoSync bool
+	// scrapePolicy 哪个库刮不刮：「不刮（交给 Emby）」的库不改 NFO。零值 = 都改
+	scrapePolicy libScrapePolicy
+	root         string              // 本地媒体库根
+	mapPath      func(string) string // Emby 路径 → 本地路径
+	nfoStat      personNFOStat
+	nfoImgLeft   int
+	imaged       map[string]bool   // 本轮补上头像的人物 id：t.People 是补之前读的，看不出它现在有头像了
+	remote       map[string]string // 头像还是远程链接的人物 id → 链接里的 TMDB 图片路径（可能为空），见 embyRemotePrimary
 }
 
 // tmdbPace TMDB 请求间隔：官方限速约每秒 40 次，这里慢慢来，别跟整理抢配额
@@ -948,9 +950,10 @@ func newPersonRunner(h *Handler) (*personRunner, error) {
 	r := &personRunner{
 		cfg: cfg, tc: tc, base: base, key: key,
 		skip: map[string]bool{}, done: map[string]bool{}, credits: map[string]*titleCredits{}, imaged: map[string]bool{},
-		// 刮削方式为 Emby 时本站一样元数据都不写，NFO 也不改
-		nfoSync: cfg.NFOSync && (cfg.ZhName || cfg.Image) && loadScrapeCfg().stationScrapes(),
-		root:    localMediaRoot(), mapPath: h.mapFromEmbyPath, nfoImgLeft: personNFOImageBudget,
+		// 「不刮（交给 Emby）」的库本站一样元数据都不写，NFO 也不改：按库挡在 syncTitleNFO 里
+		nfoSync:      cfg.NFOSync && (cfg.ZhName || cfg.Image),
+		scrapePolicy: loadLibScrapePolicy(),
+		root:         localMediaRoot(), mapPath: h.mapFromEmbyPath, nfoImgLeft: personNFOImageBudget,
 	}
 	var marks []model.EmbyPersonMark
 	model.DB.Select("person_id").Where("next_at > ?", time.Now()).Find(&marks)

@@ -38,6 +38,8 @@ export interface LocalTitle {
   emby_poster?: string
   /** Emby 刮削时：Emby 认成的 TMDB 编号与台账不一致 */
   mismatch?: string
+  /** 所在库「不刮（交给 Emby）」：status 是按 Emby 分的级，文案与操作跟着换（后端 libopts.go） */
+  emby_graded?: boolean
 }
 
 export interface LocalTitleStats {
