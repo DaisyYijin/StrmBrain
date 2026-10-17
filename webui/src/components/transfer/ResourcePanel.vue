@@ -260,6 +260,7 @@ async function act(it: ResourceItem) {
       ref: it.ref,
       title: it.title,
       confirm: it.action === 'unlock',
+      points: it.points ?? undefined,
       subdir: subdir.value || undefined,
     })
     if (r.open_url) window.open(r.open_url, '_blank', 'noopener')

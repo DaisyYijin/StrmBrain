@@ -96,6 +96,8 @@ export interface SubmitBody {
   title?: string
   /** RE0 解锁花积分：确认过才带 true */
   confirm?: boolean
+  /** 列表上标的解锁积分，只用于后端日志写清楚花没花积分 */
+  points?: number
   /** 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身 */
   subdir?: string
 }

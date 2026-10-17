@@ -891,6 +891,9 @@ type resSubmitReq struct {
 	Ref     string `json:"ref"`
 	Title   string `json:"title"`
 	Confirm bool   `json:"confirm"` // RE0 解锁花积分：界面二次确认后才带 true
+	// Points 列表上标的解锁积分（nil = 不知道）。只用来在日志里写清楚花没花积分：
+	// 网页通道里免费资源同样要点「确认解锁」，光看点没点按钮分不出来
+	Points *int `json:"points,omitempty"`
 	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身（stagingsub.go）
 	Subdir string `json:"subdir"`
 }
@@ -1063,7 +1066,7 @@ func (h *Handler) resolveResourceLink(req resSubmitReq) (resLink, error) {
 			}
 			return resLink{Action: "open", URL: strings.Join(u.Links, "\n"), Unlocked: true}, nil
 		}
-		unlocked, ucode, err := re0UnlockSlug(h, req.Ref)
+		unlocked, ucode, err := re0UnlockSlug(h, req.Ref, req.Points)
 		if err != nil {
 			return resLink{}, fmt.Errorf("解锁失败: %w", err)
 		}
@@ -1343,7 +1346,7 @@ func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string), paid
 	}
 	// 免费 / 解锁过的、或用户在确认屏点了确认的，才带 confirm（resolveResourceLink 只认带 confirm 的解锁请求）
 	r, err := h.submitResource(resSubmitReq{Source: it.Source, Action: it.Action, URL: it.URL, Code: it.Code, Ref: it.Ref, Title: it.Title,
-		Confirm: it.Action == "unlock" && (re0BotFree(it) || paid)}, "机器人")
+		Confirm: it.Action == "unlock" && (re0BotFree(it) || paid), Points: it.Points}, "机器人")
 	if err != nil {
 		if it.Action == "transfer" {
 			reply("✗ 转存失败（部分内容可能已转存，请先看一眼网盘转存目录再决定是否重试）：" + err.Error())

@@ -860,7 +860,7 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 
 	// RE0 / 癫影解锁（免费 / 解锁过的也要调一次换出链接）：上限与预算在挑选时已核过
 	rl, err := r.h.resolveResourceLink(resSubmitReq{Source: c.Item.Source, Action: c.Item.Action, URL: c.Item.URL,
-		Code: c.Item.Code, Ref: c.Item.Ref, Title: c.Item.Title, Confirm: c.Item.Action == "unlock"})
+		Code: c.Item.Code, Ref: c.Item.Ref, Title: c.Item.Title, Confirm: c.Item.Action == "unlock", Points: c.Item.Points})
 	if err != nil {
 		if c.Item.Action == "unlock" && c.Paid > 0 && re0StopUnlocking(err) {
 			if r.stopPaid == nil {

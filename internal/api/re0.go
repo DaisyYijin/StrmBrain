@@ -859,10 +859,11 @@ func re0ListResources(h *Handler, mediaType string, tmdbID int) ([]re0Resource, 
 }
 
 // re0UnlockSlug 解锁一条资源，拿到分享链接与访问码。已解锁过的再调一次不扣积分（already_owned）
-func re0UnlockSlug(h *Handler, slug string) (link, code string, err error) {
+// points 是列表上标的解锁积分（nil = 不知道），只用于日志
+func re0UnlockSlug(h *Handler, slug string, points *int) (link, code string, err error) {
 	cfg := loadRe0Cfg()
 	if re0Channel(cfg) == "web" {
-		return re0WebUnlock(slug)
+		return re0WebUnlock(slug, points)
 	}
 	var data struct {
 		URL          string `json:"url"`
@@ -878,7 +879,7 @@ func re0UnlockSlug(h *Handler, slug string) (link, code string, err error) {
 	if link == "" {
 		link = data.URL
 	}
-	log.Printf("[RE0] ✦ 解锁: %s → %s（已拥有 %v）", truncateStr(slug, 16), truncateStr(link, 60), data.AlreadyOwned)
+	log.Printf("[RE0] ✦ 解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), re0SpendNote(!data.AlreadyOwned, points))
 	return link, data.AccessCode, nil
 }
 

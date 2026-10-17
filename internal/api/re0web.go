@@ -1386,7 +1386,7 @@ var re0ConfirmRe = regexp.MustCompile(`^\s*(确认解锁|确定解锁|Confirm un
 
 // re0WebUnlock 网页解锁一条资源。已解锁过的页面直接显示链接，不会再点按钮（不扣积分）。
 // 只能从 resolveResourceLink 的 confirm 分支进来
-func re0WebUnlock(slug string) (link, code string, err error) {
+func re0WebUnlock(slug string, points *int) (link, code string, err error) {
 	if !re0SlugRe.MatchString(slug) {
 		return "", "", fmt.Errorf("RE0 资源编号无效")
 	}
@@ -1420,7 +1420,7 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 							if err := re0Click(btn); err == nil {
 								submitted = true
 								deadline = time.Now().Add(30 * time.Second)
-								log.Printf("[RE0网页]   已点「确认解锁」（花积分），等分享链接")
+								log.Printf("[RE0网页]   已点「确认解锁」（%s），等分享链接", re0SpendNote(true, points))
 								re0Step("已确认解锁，等分享链接")
 							}
 						}
@@ -1445,6 +1445,20 @@ func re0WebUnlock(slug string) (link, code string, err error) {
 	} else if u, perr := url.Parse(link); perr == nil {
 		code = firstNonEmpty(u.Query().Get("password"), u.Query().Get("pwd"))
 	}
-	log.Printf("[RE0] ✦ 网页解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), map[bool]string{true: "这次花了积分", false: "之前已解锁"}[submitted])
+	log.Printf("[RE0] ✦ 网页解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), re0SpendNote(submitted, points))
 	return link, code, nil
+}
+
+// re0SpendNote 解锁日志里的积分说明。网页通道里免费资源也要点「确认解锁」，
+// 所以「点了按钮」不等于花了积分，得看列表上标的积分
+func re0SpendNote(submitted bool, points *int) string {
+	switch {
+	case !submitted:
+		return "之前已解锁，不扣积分"
+	case points == nil:
+		return "积分数不明，以站内记录为准"
+	case *points <= 0:
+		return "免费资源，没花积分"
+	}
+	return fmt.Sprintf("花了 %d 积分", *points)
 }
