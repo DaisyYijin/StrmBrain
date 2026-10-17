@@ -32,12 +32,27 @@ const GROUPS = [
 ]
 
 const rulesVisible = ref(false)
+
+/**
+ * 「读取媒体信息」卡片排在两组模板下面，要滚一屏多才看得到；
+ * 标题旁放个入口写明开没开，点了滚过去
+ */
+const probeOn = ref(false)
+const probeEl = ref<{ $el: HTMLElement } | null>(null)
+function gotoProbe() {
+  probeEl.value?.$el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 </script>
 
 <template>
   <SectionCard title="重命名策略" hint="入库后的目录与文件命名模板">
     <template #extra>
-      <HButton variant="ghost" size="sm" @click="rulesVisible = true">规则说明</HButton>
+      <div class="head-extra">
+        <HButton variant="ghost" size="sm" @click="gotoProbe">
+          读取媒体信息：<span :class="probeOn ? 'on' : 'off'">{{ probeOn ? '已开' : '未开' }}</span>
+        </HButton>
+        <HButton variant="ghost" size="sm" @click="rulesVisible = true">规则说明</HButton>
+      </div>
     </template>
 
     <div v-for="g in GROUPS" :key="g.type" class="group">
@@ -77,7 +92,9 @@ const rulesVisible = ref(false)
 
   <!-- 模板一个画质变量都没用到时卡片里提示一句：开着也不会读 -->
   <MediaProbeCard
+    ref="probeEl"
     class="probe-card"
+    @enabled="probeOn = $event"
     :templates="[model.movie_folder, model.movie_file, model.tv_folder, model.tv_file]"
   />
 
@@ -109,6 +126,18 @@ const rulesVisible = ref(false)
 }
 .probe-card {
   margin-top: 16px;
+  scroll-margin-top: 80px;
+}
+.head-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.on {
+  color: var(--success);
+}
+.off {
+  color: var(--muted);
 }
 .path code {
   font-family: var(--font-mono);

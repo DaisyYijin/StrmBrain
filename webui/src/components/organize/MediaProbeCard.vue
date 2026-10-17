@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import HSelect from '@/components/hero/HSelect.vue'
@@ -25,7 +25,13 @@ const DEFAULTS: MediaProbeCfg = { enabled: false, overwrite: false, each_episode
 /** 当前的四条命名模板：一个能补的变量都没用到时提示一句，开了也不会读 */
 const props = defineProps<{ templates: string[] }>()
 
-const { model, saving, save, dirty } = useSetting('media-probe', DEFAULTS)
+const emit = defineEmits<{
+  /** 已保存的开关状态：重命名卡片标题旁的入口按它显示开没开 */
+  (e: 'enabled', v: boolean): void
+}>()
+
+const { model, saving, save, dirty, saved } = useSetting('media-probe', DEFAULTS)
+watch(() => saved.value.enabled, (v) => emit('enabled', v), { immediate: true })
 
 const VARS = ['{resource_pix', '{resource_effect', '{video_encode', '{audio_encode', '{fps', '{resource_type']
 const usesVars = computed(() => props.templates.some((t) => VARS.some((v) => (t || '').includes(v))))
