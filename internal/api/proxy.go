@@ -162,7 +162,9 @@ func servePickcodeDirect(c *gin.Context, db *gorm.DB, cfg *config.Config, pickco
 	start := time.Now()
 	u, err := playbackLinks.resolve(c.Request.Context(), db, cfg, pickcode, c.Request.UserAgent())
 	if err != nil {
-		log.Printf("[播放] ✗ 取链失败，未启用中转（%s）", time.Since(start).Round(time.Millisecond))
+		// 原因必须写进日志：Cookie 通道的失败只在这里冒出来（OpenAPI 那条自己打了），
+		// 不写的话用户只看到「取链失败」，无从判断是 115 拒绝、直链校验没过还是台账没命中
+		log.Printf("[播放] ✗ 取链失败，未启用中转（%s）：%v", time.Since(start).Round(time.Millisecond), err)
 		c.String(http.StatusBadGateway, "无法获取可直接播放的地址，请检查账号、播放器 UA 与直链通道")
 		return
 	}
