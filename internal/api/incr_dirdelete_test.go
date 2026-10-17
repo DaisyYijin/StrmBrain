@@ -224,3 +224,28 @@ func TestRecycledParentOf(t *testing.T) {
 		t.Fatalf("文件条目不该认，实得 %q", got)
 	}
 }
+
+// 2026-10-17 现场：用户清掉「已存在」里的旧标题目录，名字与库里那部一模一样；
+// 事件父目录不可用、缓存与回收站都没认出 → 库里的片目不能跟着删
+func TestIncrDirDeleteUnknownSameNameAsLibraryTitleKept(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "incr_dirdel_samename.db")
+	title := "我不是大师.2026.{tmdbid=289078}"
+	mkTree(t, p.LocalPath, "媒体库/剧集/"+title+"/Season 1/E01.strm")
+	d.pages = [][]lifeEvent{{
+		{ID: "e-1", Type: evDelete, FileID: "ws-dir", Cid: "0", FileName: title, FileCat: "0", Time: "100"},
+	}}
+
+	sum, err := h.executeIncrementalSyncWith(d, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Deleted != 0 {
+		t.Fatalf("认不出位置的目录删除不该动媒体库，实得 Deleted=%d", sum.Deleted)
+	}
+	if _, err := os.Stat(filepath.Join(p.LocalPath, "媒体库", "剧集", title, "Season 1", "E01.strm")); err != nil {
+		t.Fatalf("库里的片目被误删: %v", err)
+	}
+	if len(ledgerPaths(t)) != 1 || len(d.panDeleted) != 0 {
+		t.Fatalf("台账与删除通知都不该动，台账 %v 通知 %v", ledgerPaths(t), d.panDeleted)
+	}
+}

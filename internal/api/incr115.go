@@ -1406,41 +1406,29 @@ func (h *Handler) removeSyncedItemIn(d incrDeps, ev model.SyncEvent, libs incrLi
 		// 影视/动漫番剧，把用户整个番剧库的 STRM 树删了。
 		//
 		// 推得出父目录（dirOK）时，候选只认 dirRel/FileName 这一条；
-		// 推不出时（父目录被连带删除）退回按名匹配，但只接受唯一候选 ——
-		// 同名目录在库里有两处及以上就放弃，漏删交给失效 STRM 检测
-		var segs []model.SyncedFile
-		h.DB.Where("rel_path LIKE ? OR rel_path LIKE ?", "%/"+ev.FileName+"/%", "%/"+ev.FileName).Limit(200).Find(&segs)
-		want := ""
+		// **推不出就不删**，漏删交给失效 STRM 检测。
+		//
+		// 原来推不出时还会「按名匹配、台账里只有一处就删」。2026-10-17 现场：用户在
+		// 已存在 / 冗余里清掉「我不是大师.2026.{tmdbid=289078}」等目录（洗版 / 重新整理
+		// 搬过去的旧标题目录，名字与库里那部一模一样），删除事件没带可用的父目录，
+		// 缓存与回收站也没认出来，台账里同名的只有媒体库那一处 —— 本地片目连同 Emby 条目
+		// 一起被删了三部。台账只记媒体库，工作区里的同名目录它根本看不见，
+		// 「台账里唯一」证明不了被删的就是库里那个，别把这条兜底加回来
 		if dirOK {
-			want = path.Join(dirRel, ev.FileName)
-		}
-		prefixes := map[string]bool{}
-		for _, sf := range segs {
-			parts := strings.Split(sf.RelPath, "/")
-			for i, part := range parts {
-				if part == ev.FileName {
-					prefix := strings.Join(parts[:i+1], "/")
-					if want == "" || prefix == want {
-						prefixes[prefix] = true
-					}
-					break
+			want := path.Join(dirRel, ev.FileName)
+			// 不用 LIKE：片名里的 _ / % 是通配符，会连带别的目录。
+			// 按字节区间取 want/ 下的行（'/' 后面紧跟的字节是 '0'）
+			under := "rel_path = ? OR (rel_path >= ? AND rel_path < ?)"
+			args := []any{want, want + "/", want + "0"}
+			var n int64
+			h.DB.Model(&model.SyncedFile{}).Where(under, args...).Count(&n)
+			if n > 0 {
+				full := filepath.Join(localRoot, filepath.FromSlash(want))
+				if err := os.RemoveAll(full); err == nil {
+					h.DB.Where(under, args...).Delete(&model.SyncedFile{})
+					log.Printf("[同步] ✓ 本地目录已清理: %s", want)
+					return full
 				}
-			}
-		}
-		bestPrefix := ""
-		if len(prefixes) == 1 {
-			for p := range prefixes {
-				bestPrefix = p
-			}
-		} else if len(prefixes) > 1 && !quiet {
-			log.Printf("[同步] ○ 台账里有 %d 处同名目录 %q，无法确定删哪一处，跳过", len(prefixes), ev.FileName)
-		}
-		if bestPrefix != "" {
-			full := filepath.Join(localRoot, filepath.FromSlash(bestPrefix))
-			if err := os.RemoveAll(full); err == nil {
-				h.DB.Where("rel_path = ? OR rel_path LIKE ?", bestPrefix, bestPrefix+"/%").Delete(&model.SyncedFile{})
-				log.Printf("[同步] ✓ 本地目录已清理: %s", bestPrefix)
-				return full
 			}
 		}
 	}

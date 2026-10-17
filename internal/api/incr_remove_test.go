@@ -180,21 +180,48 @@ func TestRemoveSyncedItemLevel3AmbiguousNameGivesUp(t *testing.T) {
 	}
 }
 
-// 唯一同名目录 + 推不出父目录：按名兜底照常整树删除（这条分支不能被上面两条改死）
-func TestRemoveSyncedItemLevel3UniqueNameStillDeletes(t *testing.T) {
+// 唯一同名目录 + 推不出父目录：也不删。
+// 2026-10-17 现场：用户清掉「已存在」里的旧标题目录，名字和库里那部一模一样，
+// 事件父目录认不出，台账里同名的只有库里那一处 —— 原来按「唯一候选」整树删掉了库里的片目。
+// 台账看不见工作区，唯一证明不了什么
+func TestRemoveSyncedItemLevel3UnknownParentNeverDeletesByName(t *testing.T) {
 	h, d, p := newIncrTestEnv(t, "remove_level3_unique.db")
 
-	rel := "媒体库/动漫番剧/某番/E01.mkv.strm"
+	rel := "媒体库/剧集/我不是大师.2026.{tmdbid=289078}/Season 1/E01.strm"
 	abs := filepath.Join(p.LocalPath, filepath.FromSlash(rel))
 	os.MkdirAll(filepath.Dir(abs), 0o755)
 	os.WriteFile(abs, []byte("x"), 0o644)
 	newTestDBRows(t, rel)
 
-	ev := model.SyncEvent{Type: evDelete, FileID: "dir-anime", Cid: "未知目录", FileName: "动漫番剧", FileCat: "0"}
-	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) == "" {
-		t.Fatal("唯一同名目录应能按名兜底删除")
+	for _, cid := range []string{"未知目录", "0", ""} {
+		ev := model.SyncEvent{Type: evDelete, FileID: "dir-x", Cid: cid, FileName: "我不是大师.2026.{tmdbid=289078}", FileCat: "0"}
+		if got := h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false); got != "" {
+			t.Fatalf("cid=%q：推不出父目录不该按名删，实际删了 %q", cid, got)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(p.LocalPath, "媒体库", "动漫番剧")); !os.IsNotExist(err) {
-		t.Fatal("目录应已整棵删除")
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("库里的片目被误删: %v", err)
+	}
+	if len(ledgerPaths(t)) != 1 {
+		t.Fatal("台账不该被清")
+	}
+}
+
+// 片名带 _ 时按前缀删不能连带别的目录（LIKE 的 _ 是通配符）
+func TestRemoveSyncedItemDirPrefixNoWildcard(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "remove_dir_wildcard.db")
+	d.abs["c1"] = "/影视/剧集"
+	d.rel["c1"] = "剧集"
+	rels := []string{"媒体库/剧集/A_B/E01.strm", "媒体库/剧集/A_B2/E01.strm"}
+	for _, rel := range rels {
+		os.MkdirAll(filepath.Dir(filepath.Join(p.LocalPath, filepath.FromSlash(rel))), 0o755)
+	}
+	newTestDBRows(t, rels...)
+	// 本地没有 A_B 目录（第 2 级落空），走台账那一级
+	ev := model.SyncEvent{Type: evDelete, FileID: "dir-ab", Cid: "c1", FileName: "A_B", FileCat: "0"}
+	h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false)
+	got := ledgerPaths(t)
+	if len(got) != 1 || got[0] != "媒体库/剧集/A_B2/E01.strm" {
+		t.Fatalf("只该清 A_B 下的行，实得 %v", got)
 	}
 }

@@ -8,9 +8,10 @@ import (
 	"115-station/internal/model"
 )
 
-// 覆盖台账精确删除、目录推导与父目录未知时的台账兜底，通知必须采用实际删掉的位置。
+// 覆盖台账精确删除与目录推导，通知必须采用实际删掉的位置。
+// 父目录未知时不再按名兜底删（2026-10-17 误删现场），见 TestIncrDirDeleteUnknownSameNameAsLibraryTitleKept
 func TestIncrDeletionNotifiesActualPaths(t *testing.T) {
-	for _, mode := range []string{"file", "directory", "unknown-parent"} {
+	for _, mode := range []string{"file", "directory"} {
 		t.Run(mode, func(t *testing.T) {
 			h, d, p := newIncrTestEnv(t, "incr_notify_"+mode+".db")
 			d.names["lib"] = "影视"
@@ -32,14 +33,10 @@ func TestIncrDeletionNotifiesActualPaths(t *testing.T) {
 			if mode == "file" {
 				ev.FileID, ev.FileName, ev.FileCat = "movie-file", "movie.mkv", "1"
 				want = full
-			} else if mode == "unknown-parent" {
-				ev.Cid = "0"
 			}
 			// 同轮在另一个库新增文件，删除通知不能被新增刷新的目录覆盖。
 			d.pages = [][]lifeEvent{{ev}}
-			if mode != "unknown-parent" {
-				d.pages[0] = append(d.pages[0], lifeEvent{ID: "upload-event", Type: evUpload, FileID: "new-file", Cid: "d1", FileName: "new.mkv", PickCode: "pc-new", Time: "101"})
-			}
+			d.pages[0] = append(d.pages[0], lifeEvent{ID: "upload-event", Type: evUpload, FileID: "new-file", Cid: "d1", FileName: "new.mkv", PickCode: "pc-new", Time: "101"})
 			sum, err := h.executeIncrementalSyncWith(d, p)
 			if err != nil {
 				t.Fatal(err)
