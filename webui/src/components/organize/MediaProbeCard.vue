@@ -69,6 +69,10 @@ const epMode = computed({
         <HSwitch v-model="model.enabled" />
         <span class="switch-hint">{{ model.enabled ? '文件名没写的画质信息读文件补上' : '只按文件名（默认）' }}</span>
       </div>
+      <!-- 取直链走 115 接口，量大了会触发风控：开着时就说清哪两种设置请求最多 -->
+      <p v-if="model.enabled" class="risk">
+        风控提示：每读一个文件都要向 115 取一次直链。剧集选「每集都读」或写入方式选「以读到的为准」时请求最多，大批整理前请留意。
+      </p>
     </FieldRow>
 
     <template v-if="model.enabled">
@@ -111,6 +115,12 @@ const epMode = computed({
 .switch-hint {
   font-size: 12.5px;
   color: var(--muted);
+}
+.risk {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--warning);
 }
 .note {
   margin: 8px 0;
