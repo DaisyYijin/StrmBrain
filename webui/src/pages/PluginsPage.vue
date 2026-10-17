@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ref, type Component } from 'vue'
-import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { ArrowRight, CalendarCheck, Clapperboard, Images, Play, Settings2 } from '@lucide/vue'
+import { CalendarCheck, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
@@ -15,7 +14,6 @@ import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
-const router = useRouter()
 
 /** 每张插件卡的「立即运行」结果，展示在卡片内 */
 const results = ref<Record<string, BannerState | null>>({})
@@ -90,8 +88,6 @@ interface Plugin {
   runLabel?: string
   onConfig?: () => void
   onRun?: () => void
-  /** 已搬到别的页面：卡片只留一个跳转按钮 */
-  movedTo?: string
 }
 
 const plugins: Plugin[] = [
@@ -115,19 +111,9 @@ const plugins: Plugin[] = [
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
   },
-  // 演职人员补全、媒体信息补全 2026-10-04 搬到「影视刮削」页。留一张卡指过去，
-  // 老用户在这里找不到时知道去哪；过一两个版本可以删掉
-  {
-    key: 'moved-scrape',
-    name: '演职人员 / 媒体信息补全',
-    icon: Clapperboard,
-    desc: '已移到「影视刮削」页的「媒体信息」「演职人员」页签，配置与定时计划都保留原样。',
-    available: true,
-    movedTo: 'scrape',
-  },
 ]
 
-const availableCount = plugins.filter((p) => !p.movedTo).length
+const availableCount = plugins.filter((p) => p.available).length
 </script>
 
 <template>
@@ -137,8 +123,8 @@ const availableCount = plugins.filter((p) => !p.movedTo).length
         <div class="head">
           <div class="ico"><component :is="p.icon" :size="17" :stroke-width="1.8" /></div>
           <div class="name">{{ p.name }}</div>
-          <HChip :color="heroTone(p.movedTo ? 'info' : p.available ? 'success' : 'default')">
-            {{ p.movedTo ? '已迁移' : p.available ? '可用' : '规划中' }}
+          <HChip :color="heroTone(p.available ? 'success' : 'default')">
+            {{ p.available ? '可用' : '规划中' }}
           </HChip>
         </div>
 
@@ -146,13 +132,7 @@ const availableCount = plugins.filter((p) => !p.movedTo).length
 
         <TestBanner :state="results[p.key]" />
 
-        <div v-if="p.movedTo" class="foot">
-          <HButton variant="secondary" size="sm" @click="router.push({ name: p.movedTo })">
-            <template #icon><ArrowRight :size="14" /></template>
-            去影视刮削
-          </HButton>
-        </div>
-        <div v-else class="foot">
+        <div class="foot">
           <HButton variant="tertiary" size="sm" :disabled="!p.available" @click="p.onConfig?.()">
             <template #icon><Settings2 :size="14" /></template>
             配置规则
