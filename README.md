@@ -6,13 +6,19 @@
 
 从找资源、转存、识别整理，到刮削入库、302 直链秒播，一个后台全自动跑完。
 
+115 网盘 STRM 生成 · 302 直链播放 · Emby / Jellyfin 自动入库 · TMDB 识别刮削 · 洗版 · 资源订阅 · TG / 企业微信机器人
+
+*115 cloud drive → STRM for Emby & Jellyfin, with 302 direct-link playback, auto organize, TMDB scraping and subscriptions.*
+
 [![Docker](https://img.shields.io/badge/ghcr.io-115--station-2496ED?logo=docker&logoColor=white)](https://github.com/pancras-loe/115-station/pkgs/container/115-station)
 ![Platform](https://img.shields.io/badge/platform-amd64%20%7C%20arm64-555)
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 [![Telegram](https://img.shields.io/badge/Telegram-交流群-26A5E4?logo=telegram&logoColor=white)](https://t.me/+7b_HYMltYMozZTk1)
 
-[快速部署](#-三分钟部署) · [亮点功能](#-亮点功能) · [使用文档](USAGE.md) · [完整 Wiki](wiki/index.html) · [交流群](#-交流群)
+[快速部署](#-三分钟部署) · [亮点功能](#-亮点功能) · [使用文档](USAGE.md) · [完整 Wiki](wiki/index.html) · [交流群](#-交流群) · [English](#english)
+
+<img src="assets/screenshot-dashboard.jpg" alt="115-Station 总览面板" width="900">
 
 </div>
 
@@ -259,6 +265,21 @@ go build ./... && go vet ./... && go test ./... -count=1
 </td>
 </tr>
 </table>
+
+---
+
+## English
+
+**115-Station** is a self-hosted media hub for the **115 cloud drive (115网盘)**. It mirrors your 115 library as local **STRM** files for **Emby / Jellyfin**, and plays them through a **302 redirect** so the player streams straight from 115's CDN — your server forwards no video traffic.
+
+- **STRM sync** — full and incremental (115 life events), with dead-STRM detection
+- **Auto organize** — TMDB recognition, category rules, rename templates, quality upgrade ("wash") and dedupe
+- **Scraping** — NFO, posters, Chinese cast names and avatars, Emby pre-probing of media info
+- **Resource search & subscriptions** — search multiple sites by TMDB title, save 115 shares or offline-download only the missing episodes
+- **Bots & notifications** — Telegram / WeCom (企业微信) bots, Feishu, OneBot
+- **Deploy** — single Go binary + Vue 3 web UI, Docker image for amd64 / arm64
+
+The UI and docs are in Chinese. See [三分钟部署](#-三分钟部署) for the `docker compose` setup.
 
 ---
 
