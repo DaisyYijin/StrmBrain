@@ -64,6 +64,9 @@ func buildRenameContext(media *TmdbMedia, parsed *ParsedName, originalName strin
 		Parsed:       parsed,
 		Resource:     ParseResourceInfo(originalName),
 	}
+	if parsed != nil && parsed.Media != nil {
+		ctx.Resource = parsed.Media.apply(ctx.Resource) // 文件名没写的画质信息由整理时读到的补上
+	}
 	return ctx
 }
 

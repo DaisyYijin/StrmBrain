@@ -305,7 +305,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	}
 	newLib := sinkLibCid(cfg, newLibCid)
 	sink.useLib(newLib) // 之后的落点、台账、刷新都在新库
-	po := redoPlanOpts{strict: opt.strictDup}
+	po := redoPlanOpts{strict: opt.strictDup, probe: redoProbeHook(ops, media.MediaType)}
 	if rec.HoldDup {
 		po.choice = parseDupChoice(rec.DupChoice) // 撞名停下、用户在记录上选过的
 	}
@@ -709,6 +709,9 @@ type redoPlanOpts struct {
 	// strict 早就同名并排的两份也要问（库内同集多份体检发起的，见 orgdupscan.go）；
 	// 默认放行它们：不需要改名，拦下来只会让整部剧都没法重新整理（维护者定的）
 	strict bool
+	// probe 读取媒体信息（mediaprobe.go）：资源变量按原始文件名算，上次读到补进名字的画质也得再叠加一次，
+	// 否则重新整理会把它们从名字里去掉。缓存按 sha1，读过的不再发请求；为 nil 不读
+	probe func(f orgRecordFile, orig string) *mediaOverlay
 }
 
 // redoDupError 重新整理撞名、还没选过：任务停下，记录上出现「选择保留」
@@ -778,6 +781,9 @@ func planRedoLayoutOpt(media *TmdbMedia, category string, files []orgRecordFile,
 		// 要拿**原始**文件名算：画质/编码只存在于原名里，上一次重命名没能
 		// 认出来的（粘连写法、模板没带这些字段）就永远回不来了
 		parsed := parses[f.Fid]
+		if po.probe != nil && parsed != nil {
+			parsed.Media = po.probe(f, origOf[f.Fid])
+		}
 		newPath := buildNewNameWithTemplate(media, parsed, origOf[f.Fid])
 		if newPath == "" {
 			continue

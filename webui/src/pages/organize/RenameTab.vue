@@ -8,6 +8,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import { useSetting } from '@/composables/useSetting'
 import VariablesTab from './VariablesTab.vue'
+import MediaProbeCard from '@/components/organize/MediaProbeCard.vue'
 import RenameRuleField from './RenameRuleField.vue'
 import { DEFAULT_RENAME, renderRenameExample } from '@/utils/rename'
 
@@ -74,6 +75,12 @@ const rulesVisible = ref(false)
     </FormActions>
   </SectionCard>
 
+  <!-- 模板一个画质变量都没用到时卡片里提示一句：开着也不会读 -->
+  <MediaProbeCard
+    class="probe-card"
+    :templates="[model.movie_folder, model.movie_file, model.tv_folder, model.tv_file]"
+  />
+
   <HModal v-model:show="rulesVisible" title="重命名规则说明" width="920px">
     <VariablesTab />
   </HModal>
@@ -99,6 +106,9 @@ const rulesVisible = ref(false)
   font-size: 11.5px;
   color: var(--c-text-4);
   word-break: break-all;
+}
+.probe-card {
+  margin-top: 16px;
 }
 .path code {
   font-family: var(--font-mono);

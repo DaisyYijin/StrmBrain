@@ -40,14 +40,15 @@ var (
 	reVersion = regexp.MustCompile(`(?i)\b(IMAX|HQ|3D|CC|DC|EXTENDED|EXT|UNRATED|REMASTERED|THEATRICAL|DIRECTOR.?S.?CUT|COMPLETE|HYBRID|ITUNES)\b`)
 	reSource  = regexp.MustCompile(`(?i)\b(NF|NETFLIX|DSNP|DISNEY|AMZN|AMAZON|ATVP|APPLE.?TV|MAX|HBO|HULU|PMTP|PARAMOUNT|PCOK|PEACOCK|BGLOBAL|B.?GLOBAL|CR|CRUNCHYROLL|IQ|IQIYI|YOUKU|TENCENT|MGTV|BILI|UHD|WEB)\b`)
 	reType    = regexp.MustCompile(`(?i)\b(BLURAY|BLU.?RAY|BLU.?R|WEB.?DL|WEB.?RIP|HDTV|DVDRIP|DVDSCR|CAM|TS|TC|R5|REMUX|PROPER|REPACK)\b`)
-	reEffect  = regexp.MustCompile(`(?i)\b(DV|DOLBY.?VISION|DOVI|HDR10\+?|HDR\+?|HDR|SDR|SL.?HDR|DOLBY)(?:[.\s_+-]|$)`)
+	reEffect  = regexp.MustCompile(`(?i)\b(DV|DOLBY.?VISION|DOVI|HDR10\+?|HDR\+?|HDR|SDR|HLG|SL.?HDR|DOLBY)(?:[.\s_+-]|$)`)
 	// VC-1 / MPEG-2 是老蓝光 REMUX 的常见编码，漏了的话改名后整段编码消失（2026-09-28 史酷比）
-	reVideo   = regexp.MustCompile(`(?i)\b(H\.?26[45]|X26[45]|HEVC|AVC|XVID|DIVX|AV1|VP9|VC-?1|MPEG-?2)\b`)
-	reBit     = regexp.MustCompile(`(?i)\b(10bit|8bit|12bit)\b`)
-	reAudio   = regexp.MustCompile(`(?i)\b(AAC[\d.]*|AC3|EAC3|DD[P+]?[\d.]*|DD[\d.]*|DTS.?HD.?MA[\d.]*|DTS.?HD[\d.]*|DTS.?X[\d.]*|DTS[\d.]*|TRUEHD[\d.]*|ATMOS|FLAC|PCM|LPCM|LPCM[\d.]*|[\d]\.[\d])\b`)
-	reFPS     = regexp.MustCompile(`(?i)\b([\d.]+)\s*FPS\b`)
-	reDisc    = regexp.MustCompile(`(?i)\b(DISC[\d]+|D[\d])\b`)
-	reTeam    = regexp.MustCompile(`-([A-Za-z0-9@]+)$`)
+	reVideo = regexp.MustCompile(`(?i)\b(H\.?26[45]|X26[45]|HEVC|AVC|XVID|DIVX|AV1|VP9|VC-?1|MPEG-?2)\b`)
+	reBit   = regexp.MustCompile(`(?i)\b(10bit|8bit|12bit)\b`)
+	reAudio = regexp.MustCompile(`(?i)\b(AAC[\d.]*|AC3|EAC3|DD[P+]?[\d.]*|DD[\d.]*|DTS.?HD.?MA[\d.]*|DTS.?HD[\d.]*|DTS.?X[\d.]*|DTS[\d.]*|TRUEHD[\d.]*|ATMOS|FLAC|PCM|LPCM|LPCM[\d.]*|[\d]\.[\d])\b`)
+	// 帧率只认两三位整数带可选小数：[\d.]+ 会把前面的声道一起吃进来（「TrueHD.7.1.24FPS」读成 7.1.24FPS）
+	reFPS  = regexp.MustCompile(`(?i)\b(\d{2,3}(?:\.\d{1,3})?)\s*FPS\b`)
+	reDisc = regexp.MustCompile(`(?i)\b(DISC[\d]+|D[\d])\b`)
+	reTeam = regexp.MustCompile(`-([A-Za-z0-9@]+)$`)
 )
 
 var (
@@ -131,7 +132,7 @@ func ParseResourceInfo(filename string) ResourceInfo {
 		e := strings.ToUpper(m[1])
 		e = strings.ReplaceAll(strings.ReplaceAll(e, "DOLBY VISION", "DV"), "DOLBY", "DV")
 		e = strings.ReplaceAll(e, " ", "")
-		if e == "HDR" || e == "DV" || e == "SDR" || strings.HasPrefix(e, "HDR") || strings.HasPrefix(e, "DV") {
+		if e == "HDR" || e == "DV" || e == "SDR" || e == "HLG" || strings.HasPrefix(e, "HDR") || strings.HasPrefix(e, "DV") {
 			if !containsStr(effects, e) {
 				effects = append(effects, e)
 			}
@@ -343,11 +344,13 @@ func normalizeAudioEncode(s string) string {
 	switch {
 	case strings.HasPrefix(upper, "TRUEHD"):
 		return "TrueHD" + extractNumSuffix(s, "TrueHD")
-	case strings.HasPrefix(upper, "DTS-HD-MA"), strings.HasPrefix(upper, "DTSHDMA"):
-		return "DTS-HD.MA" + extractNumSuffix(s, "MA")
-	case strings.HasPrefix(upper, "DTS-HD"), strings.HasPrefix(upper, "DTSHD"):
-		return "DTS-HD" + extractNumSuffix(s, "HD")
-	case strings.HasPrefix(upper, "DTS-X"):
+	// DTS 家族的分隔符五花八门（DTS-HD.MA.7.1 / DTS-HD-MA / DTSHDMA / DTS.X）。
+	// 此前只认 DTS-HD-MA 与 DTS-X 两种：最常见的 DTS-HD.MA.7.1 被改名成「DTS-HD」，MA 与声道一起丢了
+	case reDTSMA.MatchString(upper):
+		return "DTS-HD.MA" + channelSuffix(reDTSMA.ReplaceAllString(upper, ""))
+	case reDTSHD.MatchString(upper):
+		return "DTS-HD" + channelSuffix(reDTSHD.ReplaceAllString(upper, ""))
+	case reDTSX.MatchString(upper):
 		return "DTS.X"
 	case strings.HasPrefix(upper, "DTS"):
 		return "DTS" + extractNumSuffix(s, "DTS")
@@ -379,13 +382,26 @@ func normalizeAudioEncode(s string) string {
 
 // extractNumSuffix 提取编码名后面的数字后缀（如 TrueHD.7.1 → .7.1）
 func extractNumSuffix(s, prefix string) string {
-	rest := strings.TrimPrefix(strings.ToUpper(s), strings.ToUpper(prefix))
-	rest = strings.TrimPrefix(rest, ".")
-	if isAudioChannel(rest) {
-		return "." + rest
+	return channelSuffix(strings.TrimPrefix(strings.ToUpper(s), strings.ToUpper(prefix)))
+}
+
+// channelSuffix 编码名之后剩下的部分以声道数开头（.7.1 / 7.1）时返回「.7.1」。
+// 只取开头那一段：reAudio 的 [\d.]* 会把紧跟着的帧率一起吞进来（DTS.5.1.23.976FPS）
+func channelSuffix(rest string) string {
+	rest = strings.TrimLeft(rest, ".-_ ")
+	if m := reLeadChannel.FindStringSubmatch(rest); m != nil {
+		return "." + m[1]
 	}
 	return ""
 }
+
+var reLeadChannel = regexp.MustCompile(`^(\d\.\d)(?:\.|$)`)
+
+var (
+	reDTSMA = regexp.MustCompile(`^DTS[-. _]?HD[-. _]?MA`)
+	reDTSHD = regexp.MustCompile(`^DTS[-. _]?HD`)
+	reDTSX  = regexp.MustCompile(`^DTS[-. _:]?X`)
+)
 
 // isAudioChannel 判断是否为声道数（如 5.1、7.1、2.0）
 func isAudioChannel(s string) bool {

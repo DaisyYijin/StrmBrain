@@ -192,9 +192,10 @@ func planEpisodePicks(media *TmdbMedia, category string, t libFileTitle, files [
 		}
 	}
 	// 与执行时 redoOrganizeWith 同样的入参（记录的 Source、替换规则），预览出来的名字才和真改的一致
-	layout, err := planRedoLayoutWith(media, category, files, t.source(), rules, func(eps map[string]*ParsedName) {
+	// 读取媒体信息只查缓存：这里是纯判定（预览每改一次季集就算一次），不能发请求
+	layout, err := planRedoLayoutOpt(media, category, files, t.source(), rules, func(eps map[string]*ParsedName) {
 		applyEpisodePicks(eps, picks)
-	})
+	}, redoPlanOpts{probe: cachedProbeHook(media.MediaType)})
 	if err != nil {
 		return nil, err
 	}

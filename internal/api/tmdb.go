@@ -414,6 +414,8 @@ type ParsedName struct {
 	// 解析器截错、丢掉的信息，模型能从原文里自己读出来
 	Source  string
 	Context []string
+	// Media 整理时读到的画质信息（mediaprobe.go），改名时叠加到按文件名解析出的资源变量上；没读为 nil
+	Media *mediaOverlay
 }
 
 var (

@@ -104,6 +104,19 @@ type orgCtx struct {
 
 	// absOf 各媒体库的网盘绝对路径（enterLib 按需取，首个是构造时给的主库 libAbs）
 	absOf map[string]string
+
+	// probes 读取媒体信息的会话（mediaprobe.go）：同一部的散文件兄弟集共用，同版本只读一集
+	probes    *probeSession
+	probesFor string
+}
+
+// probeSessionFor 这一部影视的读取会话（没开读取媒体信息时为 nil，nil 会话什么都不做）
+func (c *orgCtx) probeSessionFor(media *TmdbMedia) *probeSession {
+	key := fmt.Sprintf("%s:%d", media.MediaType, media.TmdbID)
+	if c.probes == nil || c.probesFor != key {
+		c.probes, c.probesFor = newProbeSession(c.ops, media.MediaType, c.onLog), key
+	}
+	return c.probes
 }
 
 // classify 分类，并选定这个条目落进哪个媒体库：先看来源（扫描根是绑定了库的转存子目录，stagingsub.go），
@@ -2124,6 +2137,12 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	}
 	libAbs = ctx.libAbs
 
+	// 文件名没写的画质信息按直链读一点文件头补上（mediaprobe.go，默认关）。
+	// 放在识别与人工确认之后：停下等确认的条目不读，读也是一次 115 请求。
+	// 目录名模板也可能用到画质变量，所以主视频要在算目录名之前读
+	probes := ctx.probeSessionFor(media)
+	parsed.Media = probes.overlayFor(mainVideo, mainVideo.Name)
+
 	// 直接查网盘去重（不依赖本地缓存表，不会过期）
 	// 检查网盘目标目录里是否有相同 SHA1 的文件
 	if len(videoFiles) == 1 && checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
@@ -2155,6 +2174,20 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	if media.MediaType == "tv" {
 		remapAbsEpisodesTmdb(tc, media, eps, onLog)
 		matchSpecialsTmdb(tc, media, eps, videoNames(videoFiles), onLog)
+	}
+	judgeName := map[string]string{} // 原名 → 洗版 / 同集多份排名看的名字（带上读到的画质）
+	for _, vf := range videoFiles {
+		if p := eps[vf.Fid]; p != nil {
+			p.Media = probes.overlayFor(vf, vf.Name)
+			judgeName[vf.Name] = probeJudgeName(vf.Name, p.Media)
+		}
+	}
+	probes.done()
+	judgeOf := func(name string) string {
+		if j, ok := judgeName[name]; ok {
+			return j
+		}
+		return name
 	}
 	// 标题目录与兜底落点。模板对季号 0 不插季目录，newPath 只有「标题/文件」两段，
 	// 此前照样把 parts[1]（文件名）当季目录名建了出来，所以剧集要三段以上才取季目录
@@ -2196,7 +2229,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		// 看到「未配置洗版策略」（现场：武林外传 80 集，每集两行、互相矛盾）
 		var plan washPlan
 		if st != nil {
-			plan = decideWash(media, vf.Name, vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), capture)
+			plan = decideWash(media, judgeOf(vf.Name), vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), capture)
 		} else {
 			plan = washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), capture)
 		}
@@ -2251,7 +2284,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			ep = fmt.Sprintf("S%02d%s", p.Season, p.episodeTag())
 		}
 		return targets[vf.Fid], ep
-	}, func(name string) int { return washRankIn(st, name) }, ctx.dupChoice, libClash...)
+	}, func(name string) int { return washRankIn(st, judgeOf(name)) }, ctx.dupChoice, libClash...)
 	holdLeft := len(dup.held) > 0 // 源目录里还有等着选的文件：收尾不收拾源目录
 	if dup.changed() {
 		accepted = dup.keep
@@ -2884,6 +2917,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	category := mainResult.Category
+	parsed.Media = ctx.probeSessionFor(media).overlayFor(f, f.Name)                  // 与主文件同一个读取会话：同版本的兄弟集沿用
 	newPath, targetDir, rootRel := singleFileTarget(media, category, parsed, f.Name) // 明写 S00Exx 的兄弟同样进特别篇目录
 	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
 	if holdingDir == "" {
@@ -2891,7 +2925,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -3148,6 +3182,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		return fail("failed", "move", lerr.Error())
 	}
 	libAbs = ctx.libAbs
+	parsed.Media = ctx.probeSessionFor(media).overlayFor(f, f.Name) // 文件名没写的画质信息（mediaprobe.go）
 	newPath, targetDir, rootRel := singleFileTarget(media, category, parsed, f.Name)
 	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
 	if holdingDir == "" {
@@ -3178,7 +3213,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)
@@ -3228,7 +3263,12 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 					return t, ""
 				}
 				return target, ep
-			}, func(n string) int { return washRankIn(st, n) }, ctx.dupChoice, libClash...)
+			}, func(n string) int {
+				if n == f.Name {
+					n = probeJudgeName(n, parsed.Media)
+				}
+				return washRankIn(st, n)
+			}, ctx.dupChoice, libClash...)
 			if len(dup.held) > 0 {
 				groupsJSON, _ := json.Marshal(dup.held)
 				msg := dupHoldMessage(dup.held)

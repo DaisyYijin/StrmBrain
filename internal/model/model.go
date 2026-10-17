@@ -245,6 +245,19 @@ type EmbyExtractMark struct {
 	IgnoredAt *time.Time `json:"ignored_at,omitempty"`
 }
 
+// MediaProbe 整理时读到的视频流信息（api/mediaprobe.go，补全命名里的画质变量用）。
+// 按内容身份 sha1 记（没有 sha1 的按 pickcode），改名、搬移、重新整理都还认得：
+// 读一次要取一次 115 直链，重新整理时同一份文件不能再读。成功的一直留着，失败的过一段时间才再试
+type MediaProbe struct {
+	Key      string    `json:"key" gorm:"primaryKey;size:64"` // sha1，或「pc:」+ pickcode
+	Name     string    `json:"name" gorm:"size:512"`          // 读的时候叫什么（排查用）
+	Info     string    `json:"info" gorm:"type:text"`         // mediaprobe.Info 的 JSON；失败时为空
+	Err      string    `json:"err" gorm:"size:255"`
+	Blocks   int       `json:"blocks"` // 发了几次 Range 请求
+	Bytes    int64     `json:"bytes"`
+	ProbedAt time.Time `json:"probed_at" gorm:"index"`
+}
+
 // PersonMeta TMDB 人物的中文名 / 头像 / 中文简介缓存（按 TMDB 人物 id，见 api/embypeople.go）。
 // 演职人员补全任务查过一次就落这里：下次任务、以及刮削写 NFO 的演员名都读它，
 // 同一个人不必再问 TMDB。ZhName 为空 = 查过但 TMDB 没有中文名
@@ -552,6 +565,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&RecognizeMemory{},
 		&TaskJob{},
 		&EmbyExtractMark{},
+		&MediaProbe{},
 		&PersonMeta{},
 		&EmbyPersonMark{},
 		&MetaFillMark{},
