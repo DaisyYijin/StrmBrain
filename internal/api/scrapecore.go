@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha1"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -581,6 +582,7 @@ func (r *titleRun) tvNFO(body []byte) {
 		}
 		name := e.v.Name + ".nfo"
 		r.s.rep.sub("集 NFO", i, len(r.eps), name)
+		r.dropPlaceholderEpNFO(e.v.Dir, name)
 		if r.skip(e.v.Dir, name) {
 			continue
 		}
@@ -613,6 +615,45 @@ func (r *titleRun) tvNFO(body []byte) {
 			r.put(e.v.Dir, name, b, how)
 		}
 	}
+}
+
+// dropPlaceholderEpNFO 「只补缺失」时，本地那份集 NFO 是 Emby 替认不出的集写的空壳就删掉、照常重写。
+// 整理落盘到刮削之间隔着几十秒（同一轮还在整理别的条目），这期间 Emby 扫库扫到新 STRM、
+// 又开着 NFO 保存器，会按文件名先写一份：没有 uniqueid、没有简介，集名是文件名里 SxxExx 之后那段
+// （2026-10-17 凡人修仙传 E195，Emby 里集名成了「.WEB-DL.HDR.H265.AAC」）。
+// 只认「既没有 uniqueid 也没有简介」：本站写的集 NFO 一定带 uniqueid，Emby 自己刮到的也带，
+// 都不会被当成空壳
+func (r *titleRun) dropPlaceholderEpNFO(d metaDest, name string) {
+	if r.s.opts.Force || d.Local == "" {
+		return
+	}
+	p := filepath.Join(d.Local, name)
+	b, err := os.ReadFile(p)
+	if err != nil || !placeholderEpisodeNFO(b) {
+		return
+	}
+	if os.Remove(p) == nil {
+		r.logv("○ %s 是 Emby 按文件名写的空壳（没有 TMDB 信息），重写", name)
+	}
+}
+
+// placeholderEpisodeNFO 集 NFO 里既没有 uniqueid 也没有简介
+func placeholderEpisodeNFO(b []byte) bool {
+	var d struct {
+		XMLName   xml.Name
+		Plot      string   `xml:"plot"`
+		UniqueIDs []string `xml:"uniqueid"`
+		TmdbID    string   `xml:"tmdbid"`
+	}
+	if xml.Unmarshal(b, &d) != nil || d.XMLName.Local != "episodedetails" {
+		return false // 读不懂的不动：可能是用户自己写的
+	}
+	for _, u := range d.UniqueIDs {
+		if strings.TrimSpace(u) != "" {
+			return false
+		}
+	}
+	return strings.TrimSpace(d.Plot) == "" && strings.TrimSpace(d.TmdbID) == ""
 }
 
 // ---- 图片 ----
