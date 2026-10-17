@@ -5,6 +5,7 @@ import ProxyTab from './settings/ProxyTab.vue'
 import EmbyTab from './settings/EmbyTab.vue'
 import UpdateTab from './settings/UpdateTab.vue'
 import SecurityTab from './settings/SecurityTab.vue'
+import BackupTab from './settings/BackupTab.vue'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('tmdb')
@@ -14,6 +15,7 @@ const TABS = [
   { value: 'proxy', label: '代理配置' },
   { value: 'emby', label: 'EMBY 管理' },
   { value: 'security', label: '登录安全' },
+  { value: 'backup', label: '备份恢复' },
   { value: 'update', label: '版本更新' },
 ]
 </script>
@@ -25,6 +27,7 @@ const TABS = [
     <ProxyTab v-else-if="tab === 'proxy'" />
     <EmbyTab v-else-if="tab === 'emby'" />
     <SecurityTab v-else-if="tab === 'security'" />
+    <BackupTab v-else-if="tab === 'backup'" />
     <UpdateTab v-else-if="tab === 'update'" />
   </div>
 </template>

@@ -3,14 +3,12 @@ package api
 import (
 	"115-station/internal/config"
 	"115-station/internal/model"
-	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -506,6 +504,15 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 			c.JSON(http.StatusOK, gin.H{"message": "日志已清空"})
 		})
 		protected.GET("/system/backup", h.SystemBackup)
+		// 备份与恢复（backup.go）：恢复只暂存，重启时换进去
+		protected.GET("/system/backups", h.ListBackups)
+		protected.POST("/system/backups", h.CreateBackup)
+		protected.GET("/system/backups/:name", h.DownloadBackup)
+		protected.DELETE("/system/backups/:name", h.DeleteBackup)
+		protected.POST("/system/backups/:name/restore", h.RestoreBackup)
+		protected.POST("/system/restore", h.UploadRestore)
+		protected.DELETE("/system/restore", h.CancelRestore)
+		protected.POST("/system/restart", h.RestartSelf)
 		protected.GET("/system/guide", h.SystemGuide)
 		protected.GET("/storage/115/diagnose", h.Diagnose115)
 	}
@@ -1036,56 +1043,6 @@ func (h *Handler) RunSyncTask(c *gin.Context) {
 
 func (h *Handler) GetSyncLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": []gin.H{}})
-}
-
-// SystemBackup 导出配置+数据库备份（zip 下载）。
-// 内容：setting.yaml（全部配置）、115-station.db（VACUUM INTO 一致性快照）、
-// auth.yaml（管理员账号，含密码哈希）。换机迁移 = 下载后放到新机器对应目录
-// GET /system/backup
-func (h *Handler) SystemBackup(c *gin.Context) {
-	tmp, err := os.CreateTemp("", "115-station-backup-*.zip")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败"})
-		return
-	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-	zw := zip.NewWriter(tmp)
-
-	addFile := func(src, name string) {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return // 不存在的文件跳过（如尚未注册过账号）
-		}
-		w, err := zw.Create(name)
-		if err != nil {
-			return
-		}
-		_, _ = w.Write(data)
-	}
-	addFile(filepath.Join(h.Config.ConfigDir, "setting.yaml"), "config/setting.yaml")
-	addFile(filepath.Join(h.Config.ConfigDir, "auth.yaml"), "config/auth.yaml")
-	addFile(filepath.Join(h.Config.ConfigDir, "jwt.key"), "config/jwt.key")
-	addFile(filepath.Join(h.Config.ConfigDir, "115-cookie.txt"), "config/115-cookie.txt")
-
-	// sqlite 一致性快照（VACUUM INTO 不锁库）
-	dbSnap := filepath.Join(os.TempDir(), fmt.Sprintf("115-station-db-%d.db", time.Now().UnixNano()))
-	defer os.Remove(dbSnap)
-	if err := h.DB.Exec("VACUUM INTO ?", dbSnap).Error; err == nil {
-		addFile(dbSnap, "data/115-station.db")
-	} else {
-		log.Printf("[备份] ○ 数据库快照失败（只导出配置）: %v", err)
-	}
-	_ = zw.Close()
-
-	info, _ := tmp.Stat()
-	c.Header("Content-Disposition", "attachment; filename=115-station-backup-"+time.Now().Format("20060102-150405")+".zip")
-	c.Header("Content-Type", "application/zip")
-	c.Data(http.StatusOK, "application/zip", func() []byte {
-		data, _ := os.ReadFile(tmp.Name())
-		return data
-	}())
-	_ = info
 }
 
 // SystemGuide 首启引导检查：逐项返回配置完成度（前端渲染"下一步"清单）

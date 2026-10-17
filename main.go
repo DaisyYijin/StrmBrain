@@ -89,6 +89,12 @@ func main() {
 		log.Fatalf("创建配置目录失败: %v", err)
 	}
 
+	// 网页上暂存的备份恢复在这里换进去：必须在读账号、打开数据库之前（api/backup.go）。
+	// 换过之后配置目录里的 jwt.key 可能变了，重新读一遍配置
+	if api.ApplyPendingRestore(cfg) {
+		cfg = config.Load()
+	}
+
 	// 管理员账号：环境变量 AUTH_USER/AUTH_PASSWORD 优先（未配置且无历史账号
 	// 时自动生成随机密码并打印日志）。网页注册功能已移除
 	if err := cfg.EnsureAdmin(); err != nil {
@@ -206,17 +212,26 @@ func main() {
 	// 优雅退出：docker stop 发 SIGTERM——直接杀进程会把
 	// 「115 已搬移、台账未写」的中间态留在云端（下次去重/洗版判定失据），
 	// 防抖队列里的入库通知也全部丢失。停 worker → 冲刷通知 → 留收尾窗口
+	var exitOnce sync.Once
+	gracefulExit := func(reason string, code int) {
+		exitOnce.Do(func() {
+			log.Printf("%s，优雅退出中（停止后台任务、冲刷待发通知）…", reason)
+			api.StopTelegramBot()
+			api.ShutdownWorkers()
+			time.Sleep(3 * time.Second) // 在途 115 请求收尾窗口（compose stop_grace_period 应≥此值）
+			log.Printf("✓ 退出完成")
+			os.Exit(code)
+		})
+	}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		sig := <-sigCh
-		log.Printf("收到信号 %v，优雅退出中（停止后台任务、冲刷待发通知）…", sig)
-		api.StopTelegramBot()
-		api.ShutdownWorkers()
-		time.Sleep(3 * time.Second) // 在途 115 请求收尾窗口（compose stop_grace_period 应≥此值）
-		log.Printf("✓ 退出完成")
-		os.Exit(0)
+		gracefulExit(fmt.Sprintf("收到信号 %v", sig), 0)
 	}()
+	// 网页「重启」（恢复备份后用）：同一套收尾，退出码非 0，
+	// 让 compose 的重启策略（unless-stopped / always / on-failure）把容器拉起来
+	api.SetRestartHook(func() { gracefulExit("网页请求重启", 1) })
 
 	// 可选 HTTPS（TLS_ENABLE=1）：自签名证书自动生成并持久化，浏览器首次
 	// 访问需一次"高级→继续前往"；Go 的 RunTLS 自动启用 HTTP/2——所有请求

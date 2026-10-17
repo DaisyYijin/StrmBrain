@@ -213,6 +213,7 @@ func StartSyncScheduler(h *Handler) {
 			h.pruneSyncEvents()
 			h.dupAutoTick() // 同集多份等过了期限还没人选的（orgdupbot.go，默认不超时）
 			now := time.Now()
+			h.backupTick(now) // 定时备份（backup.go），后台跑，不占这一分钟
 
 			if cron := h.loadFullCron(); cron != "" && CronMatch(cron, now) {
 				h.runScheduledFullSync()
