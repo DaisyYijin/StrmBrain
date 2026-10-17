@@ -92,10 +92,10 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 			dirs = append(dirs, name)
 			return fmt.Sprintf("W%d", len(dirs)), nil
 		},
-		offline: func(link, target string) (int, string, uint) {
+		offline: func(link, target string) (int, string, uint, string) {
 			offlines = append(offlines, link+"@"+target)
 			nextLink++
-			return 200, "ok", nextLink
+			return 200, "ok", nextLink, ""
 		},
 		rmdir: func(cid string) error {
 			t.Errorf("提交都成功了，不该删包装目录 %s", cid)
@@ -205,7 +205,7 @@ func TestSubRunnerDropsWrapperOnFailure(t *testing.T) {
 		h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), target: "T", re0Left: -1, now: time.Now,
 		mkdir:   func(parent, name string) (string, error) { return "W1", nil },
 		rmdir:   func(cid string) error { removed = append(removed, cid); return nil },
-		offline: func(link, target string) (int, string, uint) { return 502, "115 说不行", 0 },
+		offline: func(link, target string) (int, string, uint, string) { return 502, "115 说不行", 0, "" },
 	}
 	sub := &model.Subscription{ID: 1, MediaType: "movie", Title: "片"}
 	c := subCand{Item: ResourceItem{Source: "tg", Kind: "magnet", Action: "offline", Title: "片 2024", URL: "magnet:?xt=urn:btih:5555555555555555555555555555555555555555"}, Hash: "5555", Covers: 1}
@@ -244,9 +244,9 @@ func TestSubOfflineGates(t *testing.T) {
 			now:    func() time.Time { return now },
 			search: func(*model.Subscription) ([]ResourceItem, string) { return append([]ResourceItem(nil), items...), "" },
 			mkdir:  func(parent, name string) (string, error) { return "W", nil },
-			offline: func(link, target string) (int, string, uint) {
+			offline: func(link, target string) (int, string, uint, string) {
 				out.offlines = append(out.offlines, link)
-				return 200, "ok", uint(len(out.offlines))
+				return 200, "ok", uint(len(out.offlines)), ""
 			},
 			quota: func() (int, int, error) { return quotaLeft, 100, nil },
 		}
@@ -321,7 +321,7 @@ func TestSubRunnerTriesUpToLimit(t *testing.T) {
 		search:  func(*model.Subscription) ([]ResourceItem, string) { return items, "" },
 		mkdir:   func(parent, name string) (string, error) { return "W", nil },
 		rmdir:   func(cid string) error { return nil },
-		offline: func(link, target string) (int, string, uint) { tries++; return 502, "115 说不行", 0 },
+		offline: func(link, target string) (int, string, uint, string) { tries++; return 502, "115 说不行", 0, "" },
 		sleep:   func(time.Duration) bool { naps++; return true },
 	}
 	sub := &model.Subscription{ID: 1, TmdbID: 1, MediaType: "movie", Title: "片"}

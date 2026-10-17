@@ -37,18 +37,24 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 
 // offlineSubmitLinked 同 offlineSubmitCore，另返回登记的来源链接 id（订阅结算要按它找整理记录）
 func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bool) (status int, msg string, linkID uint) {
+	status, msg, linkID, _ = h.offlineSubmitTask(rawURL, target, source, organize)
+	return
+}
+
+// offlineSubmitTask 同 offlineSubmitLinked，另返回 115 的 info_hash（订阅等不到秒传时删任务用；没给就是空）
+func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool) (status int, msg string, linkID uint, hash string) {
 	// 验证链接类型
 	linkType := classifyLink(rawURL)
 	if linkType == "" {
-		return http.StatusBadRequest, "不支持的链接类型（仅支持磁力/ed2k/HTTP/FTP）", 0
+		return http.StatusBadRequest, "不支持的链接类型（仅支持磁力/ed2k/HTTP/FTP）", 0, ""
 	}
 	if linkType == "share" {
-		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「影视转存」页的输入框里提交（或把链接发给机器人自动转存）", 0
+		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「影视转存」页的输入框里提交（或把链接发给机器人自动转存）", 0, ""
 	}
 
 	cookie, err := h.get115Cookie()
 	if err != nil {
-		return http.StatusBadRequest, err.Error(), 0
+		return http.StatusBadRequest, err.Error(), 0, ""
 	}
 
 	// 目标目录：参数优先，否则用分享同步配置的接收文件夹
@@ -67,7 +73,7 @@ func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bo
 	}
 	body, err := post115Form("https://115.com/web/lixian/?ac=add_task_url", form, cookie, ua115Unified(), 20*time.Second)
 	if err != nil {
-		return http.StatusBadGateway, "离线下载请求失败: " + err.Error(), 0
+		return http.StatusBadGateway, "离线下载请求失败: " + err.Error(), 0, ""
 	}
 	vlog("[上传] 离线下载响应: %s", truncateStr(string(body), 150))
 
@@ -80,10 +86,11 @@ func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bo
 		ErrCode  int             `json:"errcode"`
 		ErrMsg   string          `json:"errMsg"`
 		Message  string          `json:"message"`
+		InfoHash string          `json:"info_hash"`
 		Data     json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return http.StatusBadGateway, "解析响应失败: " + truncateStr(string(body), 300), 0
+		return http.StatusBadGateway, "解析响应失败: " + truncateStr(string(body), 300), 0, ""
 	}
 	if !resp.State {
 		// 按优先级取错误信息：error_msg > error > errMsg > message > 错误码
@@ -106,7 +113,7 @@ func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bo
 		if errMsg == "" {
 			errMsg = "未知原因（响应: " + truncateStr(string(body), 100) + "）"
 		}
-		return http.StatusBadGateway, errMsg, 0
+		return http.StatusBadGateway, errMsg, 0, ""
 	}
 
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
@@ -135,7 +142,24 @@ func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bo
 			h.triggerOrganizeAndSync()
 		}()
 	}
-	return http.StatusOK, "离线下载任务已提交，下载完成后自动生成 STRM", linkID
+	return http.StatusOK, "离线下载任务已提交，下载完成后自动生成 STRM", linkID, resp.InfoHash
+}
+
+// offlineDeleteTask 删一个离线任务（web 接口 ac=task_del，p115client clouddownload_task_del 的 web 形态；
+// flag=0 不删已下载的文件，调用方自己收拾目录）
+func offlineDeleteTask(cookie, hash string) error {
+	body, err := post115Form("https://115.com/web/lixian/?ac=task_del", url.Values{"hash[0]": {hash}, "flag": {"0"}}, cookie, ua115Unified(), 15*time.Second)
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		State bool   `json:"state"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &resp) != nil || !resp.State {
+		return fmt.Errorf("115 拒绝: %s", firstNonEmpty(resp.Error, truncateStr(string(body), 120)))
+	}
+	return nil
 }
 
 // offlineAddTask 添加离线下载任务（磁力/ed2k/HTTP/FTP）
@@ -789,7 +813,7 @@ func countUnheld(entries []map[string]interface{}) int {
 		if fmt.Sprint(d["f"]) == "0" && id == "" {
 			id = nilSprint(d["cid"])
 		}
-		if !held[id] {
+		if !held[id] && !subWrapperHeld(id) { // 订阅这一轮压着的包装目录也不算：任务结束自己入队整理
 			n++
 		}
 	}

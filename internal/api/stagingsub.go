@@ -141,6 +141,9 @@ func stagingWork(ctx *orgCtx, entries []stagingEntry) ([]dirEntry, []*orgCtx) {
 		if len(c.dropHeld([]dirEntry{se.dirEntry})) == 0 {
 			continue
 		}
+		if se.IsDir && (subWrapperHeld(se.Fid) || subWrapperHeld(se.Cid)) {
+			continue // 订阅这一轮还在往里转存，任务结束统一整理（subhold.go）
+		}
 		es = append(es, se.dirEntry)
 		cs = append(cs, c)
 	}

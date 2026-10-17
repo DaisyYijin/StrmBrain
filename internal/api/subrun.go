@@ -195,11 +195,18 @@ type subRunner struct {
 	offlineStop            string
 	offlineLeft, quotaLeft int
 	now                    func() time.Time
+	// holdWrap 这一轮建的包装目录先压着不让整理（subhold.go），held 记着建了哪些，任务结束一起放行
+	holdWrap bool
+	held     []string
 	// 下面三个是对外的动作，做成字段是为了测试能换成假的
 	search  func(sub *model.Subscription) ([]ResourceItem, string)
 	mkdir   func(parent, name string) (string, error)
 	rmdir   func(cid string) error
-	offline func(link, target string) (status int, msg string, linkID uint)
+	offline func(link, target string) (status int, msg string, linkID uint, hash string)
+	// landed 包装目录里有没有东西了（离线秒传到了没有）；nil = 不等，当作到了（测试）
+	landed func(cid string) bool
+	// dropTask 删掉等不到秒传的离线任务；nil = 不删（测试）
+	dropTask func(hash string) error
 	quota   func() (left, total int, err error) // 115 离线剩余配额
 	// re0Files RE0 文件预览（付费解锁前核对缺集）；nil = 不预览，按标题判
 	re0Files func(slug string) (*re0Preview, error)
@@ -222,6 +229,8 @@ func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, err
 	}
 	defer subLane.set("", progressKeep, progressKeep, "")
+	// 这一轮转存进来的先不整理，提交完了（含停止 / 出错返回）一次放行、整理一次
+	defer r.releaseHeld()
 
 	res := subJobResult{}
 	submitted, failed := 0, 0
@@ -245,10 +254,6 @@ func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		res.Items = append(res.Items, item)
 	}
 	res.Subs, res.Submitted = len(res.Items), submitted
-	if submitted > 0 {
-		// 守望者每分钟也会看转存目录，这里只是让它别等
-		go h.triggerOrganizeAndSync()
-	}
 	msg := fmt.Sprintf("检查 %d 个订阅，提交 %d 条资源", len(res.Items), submitted)
 	if failed > 0 {
 		msg += fmt.Sprintf("，%d 个出错", failed)
@@ -266,7 +271,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		return nil, err
 	}
 	cfg := loadSubscribeCfg()
-	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, dianLeft: -1, sleep: subSleep}
+	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, dianLeft: -1, sleep: subSleep, holdWrap: true}
 	if r.target == "" {
 		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
@@ -287,9 +292,15 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	r.search = r.searchAll
 	r.mkdir = ops.mkdir
 	r.rmdir = func(cid string) error { return ops.deleteFiles([]string{cid}) }
-	r.offline = func(link, target string) (int, string, uint) {
-		return h.offlineSubmitLinked(link, target, "订阅", true)
+	r.offline = func(link, target string) (int, string, uint, string) {
+		// 不做秒传试探：tryOffline 自己等 30 秒，没秒传就弃用；到了的跟这一轮一起整理
+		return h.offlineSubmitTask(link, target, "订阅", false)
 	}
+	r.landed = func(cid string) bool {
+		entries, _, err := ops.listEntries(cid, 0)
+		return err == nil && len(entries) > 0
+	}
+	r.dropTask = func(hash string) error { return offlineDeleteTask(r.cookie, hash) }
 	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
 	r.identity = func(sub *model.Subscription) (subIdentity, error) { return subIdentityOf(r.tc, sub) }
 	r.re0Files = func(slug string) (*re0Preview, error) { return re0PreviewFiles(h, slug) }
@@ -1066,7 +1077,7 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 	if err != nil {
 		return fail("建包装目录失败："+err.Error(), true)
 	}
-	status, msg, linkID := r.offline(rl.URL, cid)
+	status, msg, linkID, hash := r.offline(rl.URL, cid)
 	if status != 200 {
 		r.dropWrapper(cid, wrapper)
 		if strings.Contains(msg, "配额") || strings.Contains(msg, "次数") {
@@ -1074,7 +1085,20 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 		}
 		return fail(msg, true)
 	}
-	att.Status, att.LinkID, att.Wrapper = subAttemptInflight, linkID, wrapper
+	att.LinkID = linkID // 配额已经扣了：弃用的也算这一轮的那一个离线、也计入每月上限
+	if !r.waitOfflineLanded(cid) {
+		why := fmt.Sprintf("%d 秒内没秒传，弃用", int(subOfflineWait/time.Second))
+		if r.dropTask != nil && hash != "" {
+			if err := r.dropTask(hash); err != nil {
+				log.Printf("[订阅] ✗ 《%s》删离线任务失败，请到 115 离线列表手动删除: %v", sub.Title, err)
+			} else {
+				why += "（已删掉离线任务）"
+			}
+		}
+		r.dropWrapper(cid, wrapper)
+		return fail(why, false)
+	}
+	att.Status, att.Wrapper = subAttemptInflight, wrapper
 	att.Reason = "整包离线下载"
 	if sub.MediaType == "tv" {
 		att.Episodes = marshalEpKeys(covered)
@@ -1082,6 +1106,32 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 	db.Create(att)
 	log.Printf("[订阅] ✓ 《%s》提交离线「%s」（%s）→ %s", sub.Title, truncateStr(c.Item.Title, 50), subEpisodesText(sub, covered), wrapper)
 	return *att, covered
+}
+
+// subOfflineWait 订阅提交的离线等多久秒传。离线一般都是秒传，等不到的多半要真下载几个小时，
+// 不值得让它拖着这一轮、也不让它下完单独再整理一轮（维护者定的：等 30 秒，不到就弃用）
+const subOfflineWait = 30 * time.Second
+
+// waitOfflineLanded 每 5 秒看一次包装目录，东西到了返回 true。
+// 中途被叫停的按到了算：不替用户删任务，下完照旧由离线监视器触发整理
+func (r *subRunner) waitOfflineLanded(cid string) bool {
+	if r.landed == nil {
+		return true
+	}
+	subLane.setSub("等离线秒传", 0, 0, fmt.Sprintf("最多 %d 秒", int(subOfflineWait/time.Second)))
+	for waited := time.Duration(0); ; {
+		step := 5 * time.Second
+		if r.sleep != nil && !r.sleep(step) {
+			return true
+		}
+		waited += step
+		if r.landed(cid) {
+			return true
+		}
+		if waited >= subOfflineWait {
+			return false
+		}
+	}
 }
 
 // makeWrapper 在转存目录下建包装目录：给 01.mkv 这种文件补上片名与季的上下文，
@@ -1093,7 +1143,21 @@ func (r *subRunner) makeWrapper(sub *model.Subscription, covered []epKey) (name,
 	r.h.DB.Model(&model.SubAttempt{}).Where("sub_id = ?", sub.ID).Count(&n)
 	name = subWrapperName(sub, covered, int(n)+1)
 	cid, err = r.mkdir(r.targetOf(sub), name)
+	if err == nil && r.holdWrap {
+		holdSubWrapper(cid)
+		r.held = append(r.held, cid)
+	}
 	return name, cid, err
+}
+
+// releaseHeld 这一轮提交完了：包装目录一起放行，有的话入队一次整理
+func (r *subRunner) releaseHeld() {
+	if len(r.held) == 0 {
+		return
+	}
+	releaseSubWrappers(r.held...)
+	r.held = nil
+	go r.h.triggerOrganizeAndSync()
 }
 
 // targetOf 这个订阅的包装目录建在哪：订阅自己选的子目录 > 订阅设置的默认 > 转存目录本身。
@@ -1116,6 +1180,7 @@ func (r *subRunner) targetOf(sub *model.Subscription) string {
 // dropWrapper 提交失败时收掉刚建的空包装目录：留在转存目录里，守望者会把它当成待整理的活，
 // 整理不掉还会连续计数直到熔断、卡住所有转存。删除进 115 回收站
 func (r *subRunner) dropWrapper(cid, name string) {
+	releaseSubWrappers(cid)
 	if r.rmdir == nil || cid == "" {
 		return
 	}

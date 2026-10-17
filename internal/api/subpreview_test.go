@@ -91,7 +91,7 @@ func TestSubPreviewShares(t *testing.T) {
 			dirs = append(dirs, name)
 			return fmt.Sprintf("W%d", len(dirs)), nil
 		},
-		offline: func(string, string) (int, string, uint) { t.Error("不该离线"); return 500, "", 0 },
+		offline: func(string, string) (int, string, uint, string) { t.Error("不该离线"); return 500, "", 0, "" },
 		rmdir:   func(string) error { return nil },
 	}
 
