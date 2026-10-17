@@ -66,6 +66,12 @@ const storagePct = computed(() => {
   return s.total && s.total > 0 ? Math.min(100, ((s.used ?? 0) / s.total) * 100) : 0
 })
 const storageEnabled = computed(() => storage.value.enabled !== false && !!storage.value.total)
+// 用户名读到了说明 Cookie 有效，只是容量接口这次没读出来（风控 / 一时出错），别说成 Cookie 失效
+const storageEmptyText = computed(() =>
+  storage.value.enabled !== false && storage.value.username
+    ? '暂时读不到容量信息，稍后会自动重试'
+    : '115 账号未配置或 Cookie 已失效',
+)
 
 const sys = computed(() => data.value?.sys ?? {})
 const media = computed(() => data.value?.media)
@@ -346,7 +352,7 @@ const strmSub = computed(() => {
             {{ storage.total_h || bytes(storage.total) }}
           </div>
         </template>
-        <EmptyState v-else text="115 账号未配置或 Cookie 已失效" />
+        <EmptyState v-else :text="storageEmptyText" />
       </SectionCard>
 
       <SectionCard title="系统负载">

@@ -823,24 +823,8 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 	var usedSize, totalSize int64
 	const infoAPI = "https://webapi.115.com/files/index_info"
 	if infoBody, err := httpGet115UA(infoAPI, nil, cookie, ua115Unified(), 15*time.Second); err == nil {
-		var info struct {
-			State bool `json:"state"`
-			Data  struct {
-				SpaceInfo struct {
-					AllTotal struct {
-						Size int64  `json:"size"`
-						Fmt  string `json:"size_format"`
-					} `json:"all_total"`
-					AllUse struct {
-						Size int64  `json:"size"`
-						Fmt  string `json:"size_format"`
-					} `json:"all_use"`
-				} `json:"space_info"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(infoBody, &info) == nil && info.State && info.Data.SpaceInfo.AllTotal.Size > 0 {
-			usedSize = info.Data.SpaceInfo.AllUse.Size
-			totalSize = info.Data.SpaceInfo.AllTotal.Size
+		if u, t, ok := spaceInfo115(infoBody); ok {
+			usedSize, totalSize = u, t
 			capacity = fmt.Sprintf("%s / %s", formatBytes(usedSize), formatBytes(totalSize))
 		}
 		// 登录设备列表（排查风控/异常登录用）
@@ -938,20 +922,15 @@ func (h *Handler) pan115CapacityCached() gin.H {
 		cap2.Username = d.UserName
 	}
 	if infoBody, err := httpGet115UA("https://webapi.115.com/files/index_info", nil, cookie, ua115Unified(), 10*time.Second); err == nil {
-		var info struct {
-			State bool `json:"state"`
-			Data  struct {
-				SpaceInfo struct {
-					AllTotal struct{ Size int64 } `json:"all_total"`
-					AllUse   struct{ Size int64 } `json:"all_use"`
-				} `json:"space_info"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(infoBody, &info) == nil && info.State {
-			cap2.Used, cap2.Total = info.Data.SpaceInfo.AllUse.Size, info.Data.SpaceInfo.AllTotal.Size
+		if u, t, ok := spaceInfo115(infoBody); ok {
+			cap2.Used, cap2.Total = u, t
 		}
 	}
 	cap2.FetchedAt = time.Now().Unix()
+	if cap2.Total == 0 {
+		// 没读到容量（多半是 115 风控或接口一时出错）只缓存 1 分钟，别让一次失败挂 5 分钟
+		cap2.FetchedAt -= int64((4 * time.Minute).Seconds())
+	}
 	pan115CapMu.Lock()
 	pan115CapCache = cap2
 	pan115CapMu.Unlock()
