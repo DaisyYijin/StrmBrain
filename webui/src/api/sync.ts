@@ -64,6 +64,48 @@ export interface DeepDeleteConfig {
 /** 全量同步 → 入任务队列立即返回；结果（新增 STRM、失效 STRM 数、是否降级）在任务结束时由队列带回 */
 export const runFull = (body: SyncExtConfig) => http.post<QueuedReply>('/sync/full', body)
 
+/** 接管已有 STRM：预演报告的一个桶（后端 adopt.go 的 adoptBucket） */
+export type AdoptBucketKey =
+  | 'adopt'
+  | 'rename'
+  | 'already'
+  | 'moved'
+  | 'dup'
+  | 'missing'
+  | 'share'
+  | 'unknown'
+  | 'notlocal'
+
+export interface AdoptSample {
+  /** 本地 STRM（相对本地媒体库目录；不在它下面时是绝对路径） */
+  local?: string
+  /** 本站会写成的位置（相对本地媒体库目录） */
+  expect?: string
+  /** 网盘文件（库内相对路径） */
+  remote?: string
+  note?: string
+}
+
+export interface AdoptReport {
+  local_root: string
+  scan_dir: string
+  local_strm: number
+  remote_videos: number
+  libs: { cid: string; name: string; videos: number; mode?: string; error?: string }[]
+  /** 各项目写法各几个 */
+  formats: Record<string, number>
+  buckets: { key: AdoptBucketKey; count: number; samples: AdoptSample[] }[]
+  /** 「位置不同」的前缀换算：本地 from 下面的东西，本站会写在 to 下面 */
+  shifts: { from: string; to: string; count: number }[]
+  /** 「网盘上没有」里不是这个 115 账号的个数 */
+  other_account: number
+  /** ok 可以接管；move 多数位置对不上；empty 一个都没对上 */
+  verdict: 'ok' | 'move' | 'empty'
+}
+
+/** 入队一次只读预演，结果在任务详情的 result 里 */
+export const adoptPreview = (body: { scan_dir?: string }) => http.post<QueuedReply>('/sync/adopt/preview', body)
+
 export interface IncrSummary {
   /** 轮次号，与日志里的 [同步#N] 对应 */
   round: number

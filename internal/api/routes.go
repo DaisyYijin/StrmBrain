@@ -221,6 +221,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
 		protected.GET("/sync/orphans", h.ListOrphans)
 		protected.POST("/sync/orphans/clean", h.CleanOrphans)
+		protected.POST("/sync/adopt/preview", h.AdoptPreview) // 接管已有 STRM：只读预演（adopt.go）
 		// 深度删除（本地已删、网盘还在）：上一条的镜像，删的是网盘源文件。
 		protected.GET("/sync/deep-delete/records", h.ListDeepDeleteRecords)
 

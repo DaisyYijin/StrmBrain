@@ -90,6 +90,8 @@ type jobParams struct {
 	Person *personJobParams `json:"person,omitempty"`
 	// LibName 清理移出配置的媒体库的本地残留（libleft.go）
 	LibName string `json:"lib_name,omitempty"`
+	// Adopt 接管已有 STRM 的预演参数（adopt.go）
+	Adopt *adoptJobParams `json:"adopt,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowRight, BookOpen, FolderTree, HardDrive, Play } from '@lucide/vue'
+import { ArrowRight, BookOpen, FolderInput, FolderTree, HardDrive, Play } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
@@ -13,6 +13,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import FullHelp from './FullHelp.vue'
+import AdoptDialog from '@/components/strm/AdoptDialog.vue'
 import { syncApi } from '@/api'
 import type { FullSyncMode, OrphanReport } from '@/api/sync'
 import { defaultFull, type FullSetting } from './fullSetting'
@@ -98,6 +99,7 @@ const extraLibs = computed(() => (cfg.value.extra_libs ?? []).filter((e) => e.ci
 const extraLibCount = computed(() => extraLibs.value.length)
 const extraLibTitle = computed(() => extraLibs.value.map((e) => e.path || `cid ${e.cid}`).join('\n'))
 const helpVisible = ref(false)
+const adoptVisible = ref(false)
 
 const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
   { label: '标准模式（默认）', value: 'normal' },
@@ -124,6 +126,10 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
       <RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }" class="loc-edit">在「账号与媒体库」修改</RouterLink>
       <button type="button" class="loc-help" @click="helpVisible = true">
         <BookOpen :size="14" />功能介绍
+      </button>
+      <!-- 从别的 STRM 项目换过来时用：认下本地已有的 STRM，Emby 条目不动（ADOPT-STRM-PLAN.md） -->
+      <button type="button" class="loc-help" @click="adoptVisible = true">
+        <FolderInput :size="14" />接管已有 STRM
       </button>
     </div>
 
@@ -263,6 +269,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
     <HModal v-model:show="helpVisible" title="全量同步是怎么回事" width="860px">
       <FullHelp />
     </HModal>
+    <AdoptDialog v-model:show="adoptVisible" :local-path="cfg.local_path" />
   </div>
 </template>
 
