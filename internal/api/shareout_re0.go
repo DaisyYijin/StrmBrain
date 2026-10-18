@@ -153,13 +153,54 @@ func re0ShareErr(err error) error {
 
 var re0StationIDRe = regexp.MustCompile(`/(movie|tv)/([A-Za-z0-9_-]{6,})(?:[/?#]|$)`)
 
-// re0WebShareJS 在页面里调站点自己的发布接口。X-CSRF-TOKEN 照站点请求客户端的拦截器取 Cookie `csrf_access_token`
+// re0WebShareJS 在页面里调站点自己的发布接口，**必须走站点的 signedFetch**（2026-10-18 现场：普通 fetch 带着 Cookie 与
+// X-CSRF-TOKEN 照样 401）。站点的请求客户端（axios + 自定义 adapter，app layout chunk）只对一小串白名单路径直接 fetch，
+// 其余 /api/ 一律 signedFetch：会话握手、请求签名、过期重握手都在里面，Go 这边重写不了，只能借它。
+// 它在 webpack 模块里（导出名 signedFetch），运行时没暴露模块缓存，只有工厂表 .m：按源码里的「signedFetch:()=>」找到模块 id 再
+// require——已经加载过的模块 require 直接返回同一份导出、不会重新执行；站点重新部署后 id 变了也照样找得到。
+// 401 且没有错误码时照站点的做法先 /api/public/auth/refresh 刷新登录态再重试一次（访问令牌过期就是这种）。
+// X-CSRF-TOKEN 照站点请求拦截器取 Cookie `csrf_access_token`
 const re0WebShareJS = `async (path, body) => {
-  const m = document.cookie.match(/(?:^|;\s*)csrf_access_token=([^;]+)/)
-  const h = { 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*' }
-  if (m) h['X-CSRF-TOKEN'] = decodeURIComponent(m[1])
-  const r = await fetch(path, { method: 'POST', credentials: 'include', headers: h, body: JSON.stringify(body) })
-  return { status: r.status, text: await r.text() }
+  let req
+  try {
+    const chunks = self.webpackChunk_N_E
+    if (!chunks) return { status: 0, text: '页面里没有 webpack 运行时（站点可能改版）' }
+    chunks.push([[Symbol('s115')], {}, (r) => { req = r }])
+  } catch (e) { return { status: 0, text: '拿不到 webpack 运行时：' + e } }
+  let sf
+  for (const id of Object.keys((req && req.m) || {})) {
+    let src = ''
+    try { src = String(req.m[id]) } catch {}
+    if (!src.includes('signedFetch:()=>')) continue
+    try { const ex = req(id); if (ex && typeof ex.signedFetch === 'function') { sf = ex.signedFetch; break } } catch {}
+  }
+  if (!sf) return { status: 0, text: '页面里找不到站点的 signedFetch（站点可能改版）' }
+  const headers = () => {
+    const h = new Headers({ 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*' })
+    const m = document.cookie.match(/(?:^|;\s*)csrf_access_token=([^;]+)/)
+    if (m) h.set('X-CSRF-TOKEN', decodeURIComponent(m[1]))
+    return h
+  }
+  const send = () => sf(path, { method: 'POST', credentials: 'include', headers: headers(), body: JSON.stringify(body) })
+  try {
+    let r = await send()
+    if (r.status === 401) {
+      let code = ''
+      // 同站点拦截器：只有字符串错误码才算「别刷新」，{"code":401,"message":"请先登录"} 这种数字 code 照样刷新
+      try {
+        const j = await r.clone().json()
+        code = typeof j.code === 'string' ? j.code : typeof j.error_code === 'string' ? j.error_code : ''
+      } catch {}
+      if (!code) {
+        const rr = await sf('/api/public/auth/refresh', { method: 'POST', credentials: 'include', cache: 'no-store',
+          headers: { 'Content-Type': 'application/json', 'x-skip-auth-refresh': 'true' } })
+        if (rr.ok) r = await send()
+      }
+    }
+    return { status: r.status, text: await r.text() }
+  } catch (e) {
+    return { status: 0, text: '站点签名请求出错：' + ((e && e.message) || e) }
+  }
 }`
 
 // re0WebPublishShare 网页通道：打开 /tmdb/{类型}/{编号}，等它跳到站内详情页拿站内 id，再在页面里调发布接口
@@ -214,7 +255,10 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 		msg := firstNonEmpty(out.Message, out.Msg, out.ErrCode, out.Code)
 		switch {
 		case status == http.StatusUnauthorized:
-			return fmt.Errorf("RE0 登录态失效（HTTP 401）")
+			// 刷新过一次还是 401：把站点给的错误码带上（session_user_mismatch / 签名问题 / 真过期，排查时分得开）
+			return fmt.Errorf("RE0 登录态失效（HTTP 401）：%s", firstNonEmpty(msg, truncateStr(text, 80)))
+		case status == 0:
+			return fmt.Errorf("RE0 发布失败：%s", truncateStr(text, 120))
 		case status >= 400 && status < 500 && status != http.StatusTooManyRequests:
 			return shareOutRefusal("RE0", firstNonEmpty(msg, fmt.Sprintf("HTTP %d", status)))
 		case status < 200 || status >= 300:
