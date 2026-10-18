@@ -229,6 +229,7 @@ func recordLinks(db *gorm.DB, recs []model.OrganizeRecord) map[uint]*model.Downl
 	for i := range rows {
 		out[rows[i].ID] = &rows[i]
 	}
+	attachShareOuts(db, out) // 转存后分享到 RE0 / 癫影的结果（shareout.go）
 	return out
 }
 

@@ -225,7 +225,35 @@ type DownloadLink struct {
 	ResultFids  string `json:"result_fids" gorm:"type:text"`
 	ResultNames string `json:"result_names" gorm:"type:text"`
 
+	// ShareOut 整理完后要把这条分享发去哪些站（re0 / dian，逗号分隔，见 api/shareout.go）。
+	// 提交时按当时的开关写下，之后改开关不影响已经提交的；空 = 不分享。
+	// Code 是分享的访问码：URL 不带访问码，发布要用，只在打了分享标记的行上存
+	ShareOut string `json:"share_out,omitempty" gorm:"index;size:32"`
+	Code     string `json:"-" gorm:"size:16"`
+	// ShareOuts 发布结果，列表接口按需填（不是表字段）
+	ShareOuts []ShareOut `json:"share_outs,omitempty" gorm:"-"`
+
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ShareOut 一条来源链接发到一个站点的记账（api/shareout.go）：一站一行，也用来查重——
+// 同一站、同一分享码发成过一次就不再发
+type ShareOut struct {
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	LinkID    uint   `json:"link_id" gorm:"index"`
+	Site      string `json:"site" gorm:"index;size:8"` // re0 / dian
+	ShareCode string `json:"share_code" gorm:"index;size:64"`
+	TmdbID    int    `json:"tmdb_id"`
+	MediaType string `json:"media_type" gorm:"size:8"`
+	// Status done = 发成了 / skipped = 不发（原因在 Message）/ failed = 失败，到期还会重试（Attempts 用完为止）
+	Status    string    `json:"status" gorm:"index;size:16"`
+	Message   string    `json:"message" gorm:"size:255"`
+	Ref       string    `json:"ref" gorm:"size:64"` // 站点那边的编号（RE0 的 slug / 资源 id，癫影的 resource_id）
+	Points    int       `json:"points"`             // 发布奖励的积分（癫影首次发布）
+	Attempts  int       `json:"attempts"`
+	RetryAt   time.Time `json:"-"`
+	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -572,6 +600,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&ScrapeArtGap{},
 		&Subscription{},
 		&SubAttempt{},
+		&ShareOut{},
 	); err != nil {
 		return nil, err
 	}

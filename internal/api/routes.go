@@ -413,6 +413,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/dian/config", h.DianGetConfig)                // 癫影（dian.go / dianweb.go，浏览器与 RE0 共用）
 		protected.POST("/dian/config", h.DianSaveConfig)
 		protected.GET("/dian/check", h.DianCheck)
+		protected.GET("/shareout/config", h.ShareOutGetConfig)
+		protected.POST("/shareout/config", h.ShareOutSaveConfig)
 		protected.GET("/dian/checkin", h.DianCheckinGet)
 		protected.POST("/dian/checkin", h.DianCheckinSave)
 		protected.POST("/dian/checkin/run", h.DianCheckinRun)

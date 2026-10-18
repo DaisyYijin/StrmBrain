@@ -34,7 +34,7 @@ import DupChoiceDialog from '@/components/organize/DupChoiceDialog.vue'
 import DupScanDialog from '@/components/organize/DupScanDialog.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import { organizeApi, resourcesApi } from '@/api'
-import type { DupAction, OrganizeRecord } from '@/api/organize'
+import type { DupAction, OrganizeRecord, OrganizeRecordLink, ShareOutResult } from '@/api/organize'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
@@ -463,6 +463,29 @@ async function clearAll() {
     toastError(e, '清空失败')
   }
 }
+
+// 贴链接转存的分享发到 RE0 / 癫影的结果；还没处理的站显示「待分享」
+type ShareOutView = Omit<ShareOutResult, 'status'> & { status: ShareOutResult['status'] | 'pending' }
+function shareOutsOf(link?: OrganizeRecordLink): ShareOutView[] {
+  if (!link?.share_out) return []
+  const done = new Map((link.share_outs ?? []).map((o) => [o.site, o]))
+  return link.share_out
+    .split(',')
+    .filter((s): s is ShareOutResult['site'] => s === 're0' || s === 'dian')
+    .map((site) => done.get(site) ?? { site, status: 'pending', message: '整理完、认出是哪一部之后分享', points: 0, attempts: 0 })
+}
+function shareOutText(o: ShareOutView): string {
+  const name = o.site === 'dian' ? '癫影' : 'RE0'
+  switch (o.status) {
+    case 'done':
+      return `已分享到${name}${o.points > 0 ? `（+${o.points} 积分）` : ''}`
+    case 'skipped':
+      return `未分享到${name}`
+    case 'failed':
+      return `分享到${name}失败`
+  }
+  return `待分享到${name}`
+}
 </script>
 
 <template>
@@ -683,6 +706,14 @@ async function clearAll() {
                 <span v-if="r.total_size">{{ humanSize(r.total_size) }}</span>
                 <span v-if="r.redo_count">重做 {{ r.redo_count }} 次</span>
                 <span v-if="r.link?.source">经 {{ r.link.source }} 提交</span>
+                <span
+                  v-for="o in shareOutsOf(r.link)"
+                  :key="o.site"
+                  class="share-out"
+                  :class="o.status"
+                  :title="o.message || undefined"
+                  >{{ shareOutText(o) }}</span
+                >
                 <button
                   v-if="r.job_id"
                   type="button"
@@ -983,6 +1014,15 @@ async function clearAll() {
 .dim {
   font-size: 12px;
   color: var(--muted);
+}
+.share-out {
+  color: var(--muted);
+}
+.share-out.done {
+  color: var(--success);
+}
+.share-out.failed {
+  color: var(--danger);
 }
 .link {
   text-decoration: none;

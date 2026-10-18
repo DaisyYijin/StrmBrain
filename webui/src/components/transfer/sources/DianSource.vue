@@ -5,6 +5,7 @@ import HInput from '@/components/hero/HInput.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
+import ShareOutRow from './ShareOutRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import { resourcesApi } from '@/api'
 import type { Re0BrowserState, Re0Checkin, Re0OpState } from '@/api/resources'
@@ -17,6 +18,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
  */
 const emit = defineEmits<{ changed: [] }>()
 const { message } = useFeedback()
+const shareOutRow = ref<InstanceType<typeof ShareOutRow> | null>(null)
 
 const form = ref({ email: '', password: '' })
 let savedForm = ''
@@ -115,6 +117,7 @@ async function save() {
     message.success(d?.message || '保存成功')
     emit('changed')
     await load()
+    shareOutRow.value?.reload() // 能不能发取决于刚存的账号配置
   } catch (e) {
     toastError(e, '保存失败')
   } finally {
@@ -229,6 +232,8 @@ onBeforeUnmount(stopOpPoll)
     <div v-if="checkinRunning" class="op">⏳ {{ opText }}</div>
     <div v-if="checkin?.last_result" class="hint last">上次（{{ checkin.last_result_at }}）：{{ checkin.last_result }}</div>
   </FieldRow>
+
+  <ShareOutRow ref="shareOutRow" site="dian" />
 
   <FormActions>
     <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>

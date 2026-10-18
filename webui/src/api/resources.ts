@@ -154,3 +154,24 @@ export const dianCheck = () =>
 export const dianCheckin = () => http.get<Re0Checkin>('/dian/checkin')
 export const dianSaveCheckin = (enabled: boolean) => http.post('/dian/checkin', { enabled })
 export const dianRunCheckin = () => http.post<{ message: string }>('/dian/checkin/run', {}, { timeoutMs: 260_000 })
+
+// ============ 转存后分享到 RE0 / 癫影（后端 shareout.go）：只管贴链接转存的分享，整理认出是哪一部之后才发 ============
+export type ShareOutSite = 're0' | 'dian'
+export interface ShareOutSiteCfg {
+  enabled: boolean
+  /** 分享出去的解锁积分；0 = 不设（RE0 免费，癫影用站点默认价） */
+  unlock_points: number
+  /** 匿名分享（只有 RE0 支持） */
+  anonymous?: boolean
+}
+export interface ShareOutConfig {
+  re0: ShareOutSiteCfg
+  dian: ShareOutSiteCfg
+  re0_channel: '' | 'openapi' | 'web'
+  /** RE0 发不了的原因（没配置 / 授权缺 write），空 = 能发 */
+  re0_ready: string
+  dian_configured: boolean
+}
+export const shareOutConfig = () => http.get<ShareOutConfig>('/shareout/config')
+export const shareOutSave = (site: ShareOutSite, cfg: ShareOutSiteCfg) =>
+  http.post<{ message: string }>('/shareout/config', { site, ...cfg })

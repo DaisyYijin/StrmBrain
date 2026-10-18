@@ -173,7 +173,7 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 	}
 	// 提取码允许为空：无密码分享可直接转存（与机器人通道一致），
 	// 码错误时 115 会返回明确报错
-	msg, success, fail, err := h.shareReceiveCore(req.URL, req.Code, req.Target, "web", req.Organize)
+	msg, success, fail, err := h.shareReceiveManual(req.URL, req.Code, req.Target, "web", req.Organize)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -190,6 +190,16 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 // 解析分享码 → shareList 列根目录 → shareReceive 转存全部顶层条目；organize=true 时转存后触发整理+增量。
 // source 是提交来源（web / 机器人 / 影巢…），只用于链接台账留痕
 func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
+	return h.shareReceiveOpt(shareURL, code, target, source, organize, false)
+}
+
+// shareReceiveManual 用户自己贴的链接（链接转存页、机器人里贴链接）：转存成功后按开关打上「整理完分享到 RE0 / 癫影」的标记。
+// 从资源站选的不走这里：发回原站没意义，把一个站付费解锁的链接搬到另一个站多半违反站规（shareout.go）
+func (h *Handler) shareReceiveManual(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
+	return h.shareReceiveOpt(shareURL, code, target, source, organize, true)
+}
+
+func (h *Handler) shareReceiveOpt(shareURL, code, target, source string, organize, manual bool) (msg string, success, fail int, err error) {
 	shareCode := extractShareCode(shareURL)
 	if shareCode == "" {
 		return "", 0, 0, fmt.Errorf("无法从链接解析分享码")
@@ -249,7 +259,10 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 			names = append(names, it.Name)
 		}
 	}
-	dlLinkRecord(h, shareURL, "share", shareTitle, source, names)
+	linkID := dlLinkRecord(h, shareURL, "share", shareTitle, source, names)
+	if manual {
+		h.shareOutMark(linkID, code)
+	}
 
 	// 转存成功且开启自动整理 → 触发「整理+增量」
 	if success > 0 && req.Organize {

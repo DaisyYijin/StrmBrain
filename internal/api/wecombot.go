@@ -368,7 +368,7 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 		organize := true // 机器人触发的转存默认走「整理+增量」闭环
 		reply("⏳ 开始转存 115 分享…", truncateStr(shareURL, 70))
 		go func() {
-			msg, ok, fail, err := h.shareReceiveCore(shareURL, code, "", "机器人", organize)
+			msg, ok, fail, err := h.shareReceiveManual(shareURL, code, "", "机器人", organize)
 			if err != nil {
 				reply("✗ 转存失败: " + err.Error())
 				return

@@ -6,6 +6,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
+import ShareOutRow from './ShareOutRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
 import { resourcesApi } from '@/api'
@@ -16,6 +17,7 @@ import { copyText } from '@/utils/clipboard'
 
 const emit = defineEmits<{ changed: [] }>()
 const { message, dialog } = useFeedback()
+const shareOutRow = ref<InstanceType<typeof ShareOutRow> | null>(null)
 
 const form = ref({
   base_url: 'https://re0.me',
@@ -217,6 +219,7 @@ async function save() {
     message.success(d?.message || '保存成功')
     emit('changed')
     await load()
+    shareOutRow.value?.reload() // 能不能发取决于刚存的账号配置
   } catch (e) {
     toastError(e, '保存失败')
   } finally {
@@ -388,6 +391,8 @@ onBeforeUnmount(() => {
       上次（{{ checkin.last_result_at }}）：{{ checkin.last_result }}
     </div>
   </FieldRow>
+
+  <ShareOutRow ref="shareOutRow" site="re0" />
 
   <div class="openapi-toggle">
     <HButton variant="ghost" size="sm" @click="showOpenapi = !showOpenapi">

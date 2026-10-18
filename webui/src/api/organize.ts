@@ -137,6 +137,20 @@ export interface OrganizeRecordLink {
   /** 提交来源：web / 机器人 / 观影 / 影巢（老数据里还有已删除的 TG订阅） */
   source: string
   created_at: string
+  /** 整理完要分享到哪些站（re0,dian），空 = 不分享 */
+  share_out?: string
+  /** 分享出去的结果，一站一条；还没处理的站没有 */
+  share_outs?: ShareOutResult[]
+}
+
+/** 贴链接转存的分享发到 RE0 / 癫影的结果（后端 shareout.go） */
+export interface ShareOutResult {
+  site: 're0' | 'dian'
+  /** done = 发成了 / skipped = 不发（原因在 message）/ failed = 失败，到时间会重试 */
+  status: 'done' | 'skipped' | 'failed'
+  message: string
+  points: number
+  attempts: number
 }
 
 /** awaiting = 开了「人工确认」后识别完停下来的条目，文件还在待整理里原地没动 */
