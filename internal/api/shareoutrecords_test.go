@@ -69,7 +69,7 @@ func TestShareOutRecordsAndRetry(t *testing.T) {
 		if d.Title != "搏击俱乐部" || d.Year != "1999" || d.ShareName != "Fight.Club.1999.1080p" || d.Source != "web" {
 			t.Errorf("片名 / 来源没带上: %+v", d)
 		}
-		if (d.Site == "re0") != (d.SiteURL != "") || d.CanRetry != (d.Status == "failed") {
+		if (d.Site == "re0") != (d.SiteURL != "") || d.CanRetry != (d.Status != "done") {
 			t.Errorf("站上地址 / 能否重试不对: %+v", d)
 		}
 		if d.Status == "failed" && d.NextRetry != nil {

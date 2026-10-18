@@ -453,3 +453,22 @@ func TestShareOutFromSite(t *testing.T) {
 		}
 	}
 }
+
+// 发布接口要的是站内数字编号，取自详情页分享按钮的属性（2026-10-18 现场传了地址里的 uuid，回「参数错误」）
+func TestRe0StationNumOf(t *testing.T) {
+	movie := `["$","$L4b",null,{"movieId":273,"tvId":"","title":"盗梦空间 (2010)","size":"small","submitLocked":false}]`
+	tv := `x{"movieId":"","tvId":1024,"title":"绝命毒师 (2008)"}`
+	cases := []struct{ rsc, kind, want string }{
+		{movie, "movie", "273"},
+		{movie, "tv", ""},
+		{tv, "tv", "1024"},
+		{tv, "movie", ""},
+		{`{"related":{"movieId":9}}`, "movie", "9"}, // 属性改版了：退回宽松匹配
+		{`没有`, "movie", ""},
+	}
+	for _, c := range cases {
+		if got := re0StationNumOf(c.rsc, c.kind); got != c.want {
+			t.Errorf("%s / %s: 得到 %q，应为 %q", c.rsc, c.kind, got, c.want)
+		}
+	}
+}

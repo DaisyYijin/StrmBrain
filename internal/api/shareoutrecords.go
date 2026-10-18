@@ -123,7 +123,7 @@ func (h *Handler) shareOutDTOs(rows []model.ShareOut, now time.Time) []shareOutR
 	for _, r := range rows {
 		l := links[r.LinkID]
 		d := shareOutRecordDTO{ShareOut: r, ShareName: l.Name, LinkURL: l.URL, Source: l.Source,
-			SiteURL: shareOutSiteURL(r, re0Base), CanRetry: r.Status == shareOutStatusFailed}
+			SiteURL: shareOutSiteURL(r, re0Base), CanRetry: r.Status != shareOutStatusDone}
 		if t, ok := titles[titleKey{r.LinkID, r.TmdbID}]; ok {
 			d.Title, d.Year, d.Poster = t.Title, t.Year, t.PosterPath
 		}
@@ -144,15 +144,17 @@ func (h *Handler) shareOutDTOs(rows []model.ShareOut, now time.Time) []shareOutR
 
 var errShareOutBusy = errors.New("正在处理别的分享，稍后再试")
 
-// ShareOutRetry POST /shareout/records/:id/retry：失败的手动重试一次，后台立刻发
+// ShareOutRetry POST /shareout/records/:id/retry：失败 / 跳过的手动重试一次，后台立刻发
 func (h *Handler) ShareOutRetry(c *gin.Context) {
 	var row model.ShareOut
 	if h.DB.First(&row, c.Param("id")).Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}
-	if row.Status != shareOutStatusFailed {
-		c.JSON(http.StatusConflict, gin.H{"error": "只有失败的才能重试"})
+	// 跳过的也能重试：站点拒收的原因可能已经不在了（本站修了提交方式、用户在站上删了旧分享），
+	// 原因还在的（从两站拿到的、站上已有）重试也只是再记一次跳过
+	if row.Status == shareOutStatusDone {
+		c.JSON(http.StatusConflict, gin.H{"error": "已经分享成功了"})
 		return
 	}
 	if err := h.shareOutRetryNow(row); err != nil {

@@ -16,6 +16,8 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,6 +153,49 @@ func re0ShareErr(err error) error {
 	return shareOutRefusal("RE0", firstNonEmpty(e.Description, e.Message, e.Code))
 }
 
+// re0RSCJS 对站内详情页要一次 RSC（服务端照样给，不用等前端渲染）
+const re0RSCJS = `async (path) => {
+  try { const r = await fetch(path, { headers: { RSC: '1' }, credentials: 'include' }); return await r.text() } catch (e) { return '' }
+}`
+
+var (
+	re0SharePropsRe = regexp.MustCompile(`"movieId":(?:"?(\d*)"?),"tvId":(?:"?(\d*)"?)`)
+	re0MovieNumRe   = regexp.MustCompile(`"movieId":(\d+)`)
+	re0TvNumRe      = regexp.MustCompile(`"tvId":(\d+)`)
+)
+
+// re0StationNumOf 从详情页 RSC 里取分享按钮属性上的站内数字编号（{"movieId":273,"tvId":"",...}；剧集是 tvId）
+func re0StationNumOf(rsc, kind string) string {
+	// 先认分享按钮那组属性（movieId、tvId 挨着），页面别处以后多出 movieId 也不会取错；认不到再退回宽松匹配
+	if m := re0SharePropsRe.FindStringSubmatch(rsc); m != nil {
+		v := m[1]
+		if kind == "tv" {
+			v = m[2]
+		}
+		if v != "" && v != "0" {
+			return v
+		}
+	}
+	re := re0MovieNumRe
+	if kind == "tv" {
+		re = re0TvNumRe
+	}
+	if m := re.FindStringSubmatch(rsc); m != nil && m[1] != "0" {
+		return m[1]
+	}
+	return ""
+}
+
+// re0BodyKeys 日志里列出提交了哪些字段（不打值：带着访问码）
+func re0BodyKeys(body map[string]any) string {
+	keys := make([]string, 0, len(body))
+	for k := range body {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
 var re0StationIDRe = regexp.MustCompile(`/(movie|tv)/([A-Za-z0-9_-]{6,})(?:[/?#]|$)`)
 
 // re0WebShareJS 在页面里调站点自己的发布接口，**必须走站点的 signedFetch**（2026-10-18 现场：普通 fetch 带着 Cookie 与
@@ -228,10 +273,49 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 		if kind != pl.MediaType {
 			return shareOutSkipf("RE0 把这部片认成了%s", map[string]string{"movie": "电影", "tv": "剧集"}[kind])
 		}
+		// 地址里的是站内 uuid，发布接口要的 movie_id / tv_id 是站内**数字**编号（2026-10-18 现场：传 uuid 回「参数错误」）。
+		// 数字编号只在详情页分享按钮的属性里（RSC：{"movieId":273,"tvId":"",...}）。/tmdb/... 到 /movie/... 是前端跳转，
+		// 当前页面脚本里装的是跳转前那页，所以对详情页单独要一次 RSC
+		re0Step("读站内编号")
+		num := ""
+		if r, err := p.Eval(re0RSCJS, "/"+kind+"/"+id); err == nil {
+			num = re0StationNumOf(r.Value.Str(), kind)
+		}
+		if num == "" {
+			log.Printf("[RE0网页]   /%s/%s 的页面数据里没找到分享按钮的站内编号（站点可能改版）", kind, id)
+			return fmt.Errorf("RE0 详情页里读不到站内编号（页面可能改版）")
+		}
+		n, _ := strconv.Atoi(num)
 		if kind == "tv" {
-			body["tv_id"] = id
+			body["tv_id"] = n
 		} else {
-			body["movie_id"] = id
+			body["movie_id"] = n
+		}
+		// 同站点表单：先让站点解析一遍链接（check/resource），用它规范化过的链接与访问码。失败不影响发布
+		re0Step("检查分享链接")
+		if r, err := p.Eval(re0WebShareJS, "/api/customer/check/resource", map[string]any{"url": body["url"]}); err == nil &&
+			r.Value.Get("status").Int() == http.StatusOK {
+			var chk struct {
+				Data struct {
+					Website    string `json:"website"`
+					URL        string `json:"url"`
+					BaseLink   string `json:"base_link"`
+					AccessCode string `json:"access_code"`
+				} `json:"data"`
+			}
+			if json.Unmarshal([]byte(r.Value.Get("text").Str()), &chk) == nil {
+				switch {
+				case chk.Data.Website != "" && chk.Data.Website != "115":
+					return shareOutSkipf("RE0 认出的网盘类型是 %s，不是 115", chk.Data.Website)
+				case chk.Data.Website == "115":
+					if u := firstNonEmpty(chk.Data.BaseLink, chk.Data.URL); u != "" {
+						body["url"] = u
+					}
+					if chk.Data.AccessCode != "" {
+						body["access_code"] = chk.Data.AccessCode
+					}
+				}
+			}
 		}
 		re0Step("提交分享")
 		res, err := p.Eval(re0WebShareJS, "/api/customer/resources", body)
@@ -253,6 +337,10 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 		}
 		_ = json.Unmarshal([]byte(text), &out)
 		msg := firstNonEmpty(out.Message, out.Msg, out.ErrCode, out.Code)
+		if status < 200 || status >= 300 || (out.Success != nil && !*out.Success) {
+			// 站点原文进日志：「参数错误」这种笼统提示，具体是哪个字段常写在原文里
+			log.Printf("[RE0网页]   发布接口 HTTP %d：%s（提交的字段 %s）", status, truncateStr(text, 300), re0BodyKeys(body))
+		}
 		switch {
 		case status == http.StatusUnauthorized:
 			// 刷新过一次还是 401：把站点给的错误码带上（session_user_mismatch / 签名问题 / 真过期，排查时分得开）
