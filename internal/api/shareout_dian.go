@@ -246,14 +246,18 @@ func dianShareBody(pl shareOutPayload, cfg shareOutSiteCfg, res dianResourceRef)
 		"receive_code":     pl.Code,
 		"total_size_bytes": pl.SizeBytes,
 		"file_name":        pl.ShareName,
-		"title_override":   pl.ShareName,
+		"title_override":   shareOutHeadline(pl), // 站上列表显示的标题；file_name 留原分享名（前端拿它认格式）
 		"file_extension":   strings.ToUpper(pl.Ext),
 		"file_list":        pl.Files,
 		"tag":              dianTagString(tokens),
 		"subtitle_kind":    "",
 	}
-	if pl.HasSubs {
-		body["subtitle_kind"] = "external_chs"
+	// external_chs 是「外挂中字」：字幕文件名认得出中文才这么标，认不出语言的不替它说是中字
+	for _, l := range pl.SubLangs {
+		if strings.HasPrefix(l, "简") || strings.HasPrefix(l, "繁") {
+			body["subtitle_kind"] = "external_chs"
+			break
+		}
 	}
 	if cfg.UnlockPoints > 0 {
 		body["unlock_cost_override"] = cfg.UnlockPoints
@@ -338,7 +342,7 @@ func dianPublishShare(pl shareOutPayload, cfg shareOutSiteCfg) (string, int, err
 				case ae.Code == "share_code_duplicate":
 					return shareOutSkipf("癫影上已经有这条分享")
 				case ae.Status >= 400 && ae.Status < 500 && ae.Status != 429 && !ae.needLogin():
-					return shareOutSkipf("癫影拒收：%s", ae.Error())
+					return shareOutRefusal("癫影", ae.Error())
 				}
 			}
 			return err

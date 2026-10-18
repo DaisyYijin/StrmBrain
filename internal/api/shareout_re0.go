@@ -11,6 +11,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,8 +40,11 @@ func re0ShareReady(cfg *re0Cfg) string {
 func re0ShareBody(pl shareOutPayload, cfg shareOutSiteCfg) map[string]any {
 	body := map[string]any{
 		"url":       pl.URL,
-		"title":     pl.ShareName,
+		"title":     shareOutHeadline(pl),
 		"hide_link": true,
+	}
+	if r := shareOutRemark(pl); r != "" {
+		body["remark"] = r
 	}
 	if pl.Code != "" {
 		body["access_code"] = pl.Code
@@ -56,13 +60,9 @@ func re0ShareBody(pl shareOutPayload, cfg shareOutSiteCfg) map[string]any {
 	}
 	if pl.HasSubs {
 		body["subtitle_type"] = []string{"外挂"}
-	}
-	if pl.MediaType == "tv" && len(pl.Seasons) > 0 {
-		var marks []string
-		for _, s := range pl.Seasons {
-			marks = append(marks, fmt.Sprintf("S%02d E%s", s, episodesCSV(pl.Episodes[s])))
+		if len(pl.SubLangs) > 0 {
+			body["subtitle_language"] = pl.SubLangs
 		}
-		body["remark"] = strings.Join(marks, "；")
 	}
 	if cfg.UnlockPoints > 0 {
 		body["unlock_points"] = cfg.UnlockPoints
@@ -137,12 +137,18 @@ func re0PublishShare(pl shareOutPayload, cfg shareOutSiteCfg) (string, int, erro
 	return re0WebPublishShare(pl, body)
 }
 
-// re0ShareErr 站点拒收里分出「不该再试」的：重复、链接无效、权限不够都不是重试能解决的
+// re0ShareErr 站点的错误里分出「不该再试」的：只有限流、5xx 这种过一会儿可能好的才重试，
+// 其余（重复、链接无效、权限不够、参数不对）重试也一样被拒。重复不一定是 4xx，也可能是 200 + success:false
 func re0ShareErr(err error) error {
-	if e, ok := err.(*re0Err); ok && e.Status >= 400 && e.Status < 500 && e.Status != http.StatusTooManyRequests {
-		return shareOutSkipf("RE0 拒收：%s", firstNonEmpty(e.Description, e.Message, e.Code))
+	var e *re0Err
+	if !errors.As(err, &e) {
+		return err // 网络错误、要重新授权：等下一轮
 	}
-	return err
+	code := strings.ToUpper(e.Code)
+	if e.Status == http.StatusTooManyRequests || e.Status >= 500 || strings.Contains(code, "RATE_LIMIT") || code == "OPENAPI_COOLDOWN" {
+		return err
+	}
+	return shareOutRefusal("RE0", firstNonEmpty(e.Description, e.Message, e.Code))
 }
 
 var re0StationIDRe = regexp.MustCompile(`/(movie|tv)/([A-Za-z0-9_-]{6,})(?:[/?#]|$)`)
@@ -210,11 +216,11 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 		case status == http.StatusUnauthorized:
 			return fmt.Errorf("RE0 登录态失效（HTTP 401）")
 		case status >= 400 && status < 500 && status != http.StatusTooManyRequests:
-			return shareOutSkipf("RE0 拒收：%s", firstNonEmpty(msg, fmt.Sprintf("HTTP %d", status)))
+			return shareOutRefusal("RE0", firstNonEmpty(msg, fmt.Sprintf("HTTP %d", status)))
 		case status < 200 || status >= 300:
 			return fmt.Errorf("RE0 发布失败（HTTP %d）：%s", status, firstNonEmpty(msg, truncateStr(text, 80)))
 		case out.Success != nil && !*out.Success:
-			return shareOutSkipf("RE0 拒收：%s", firstNonEmpty(msg, "未说明原因"))
+			return shareOutRefusal("RE0", firstNonEmpty(msg, "未说明原因"))
 		}
 		ref = out.Data.Slug
 		if ref == "" && out.Data.ID != nil {

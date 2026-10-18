@@ -188,6 +188,7 @@ type shareOutPayload struct {
 	TmdbID    int
 	MediaType string // movie / tv
 	Title     string // TMDB 片名
+	Year      string // 年份（整理记录上的）
 	Poster    string // TMDB 海报路径（/xxx.jpg）
 	ShareName string // 分享标题：分享者起的名字，没有就用片名
 	SizeBytes int64
@@ -195,6 +196,7 @@ type shareOutPayload struct {
 	Ext       string   // 主视频扩展名，大写（MKV）
 	Info      ResourceInfo
 	HasSubs   bool          // 带了字幕文件（外挂）
+	SubLangs  []string      // 外挂字幕的语言（按字幕文件名认，RE0 的枚举写法：简中 / 繁中 / 简英双语…），认不出为空
 	Seasons   []int         // 剧集：涉及哪几季
 	Episodes  map[int][]int // 剧集：每季的集号
 }
@@ -214,7 +216,7 @@ func shareOutPayloadOf(link model.DownloadLink, v shareOutVerdict) shareOutPaylo
 	seen := map[string]bool{}
 	for _, r := range v.Records {
 		if pl.Title == "" {
-			pl.Title, pl.Poster = r.Title, r.PosterPath
+			pl.Title, pl.Poster, pl.Year = r.Title, r.PosterPath, r.Year
 		}
 		files := unmarshalRecordFiles(r.Files)
 		var sum int64
@@ -223,6 +225,9 @@ func shareOutPayloadOf(link model.DownloadLink, v shareOutVerdict) shareOutPaylo
 			switch f.Kind {
 			case "subtitle":
 				pl.HasSubs = true
+				if l := subLangOf(firstNonEmpty(f.Orig, f.Name)); l != "" && !containsStr(pl.SubLangs, l) {
+					pl.SubLangs = append(pl.SubLangs, l)
+				}
 			case "video":
 				if seen[f.Fid] {
 					continue
@@ -301,6 +306,115 @@ func humanSize(n int64) string {
 		return fmt.Sprintf("%.1f GB", float64(n)/gb)
 	}
 	return fmt.Sprintf("%.0f MB", float64(n)/mb)
+}
+
+// subLangOf 按字幕文件名认语言（xxx.chs.ass / xxx.简体.srt / xxx.chs&eng.ass），写成 RE0 的枚举。
+// 只认文件名里明写的，认不出就不填：填错了比不填更误导人
+func subLangOf(name string) string {
+	low := strings.ToLower(name)
+	has := func(keys ...string) bool {
+		for _, k := range keys {
+			if strings.Contains(low, k) {
+				return true
+			}
+		}
+		return false
+	}
+	sc := has("chs", ".sc.", "zh-cn", "zh-hans", "zh_cn", "简", "gb.")
+	tc := has("cht", ".tc.", "zh-tw", "zh-hk", "zh-hant", "繁", "big5")
+	en := has("eng", "英")
+	jp := has("jpn", ".ja.", "日")
+	switch {
+	case sc && en:
+		return "简英双语"
+	case tc && en:
+		return "繁英双语"
+	case sc && jp:
+		return "简日双语"
+	case tc && jp:
+		return "繁日双语"
+	case sc:
+		return "简中"
+	case tc:
+		return "繁中"
+	}
+	return ""
+}
+
+// shareOutHeadline 发布用的标题：「片名 (年份) S01 4K WEB-DL」。分享者自己起的名字常是第一个文件名或一串广告，
+// 别人在站上一眼要看到的是哪一部、哪几季、什么画质；原名放进备注
+func shareOutHeadline(pl shareOutPayload) string {
+	parts := []string{pl.Title}
+	if pl.Year != "" {
+		parts[0] += " (" + pl.Year + ")"
+	}
+	if pl.MediaType == "tv" && len(pl.Seasons) > 0 {
+		if len(pl.Seasons) == 1 {
+			parts = append(parts, fmt.Sprintf("S%02d", pl.Seasons[0]))
+		} else {
+			parts = append(parts, fmt.Sprintf("S%02d-S%02d", pl.Seasons[0], pl.Seasons[len(pl.Seasons)-1]))
+		}
+	}
+	if r := re0ResolutionOf(pl.Info.Pix); r != "" {
+		parts = append(parts, r)
+	}
+	if pl.Info.Type != "" {
+		parts = append(parts, pl.Info.Type)
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// shareOutRemark 备注：片名年份、季集、视频、音频、字幕、文件，一项一行；没认出的那行不写
+func shareOutRemark(pl shareOutPayload) string {
+	var lines []string
+	add := func(label string, vals ...string) {
+		var vs []string
+		for _, v := range vals {
+			if v = strings.TrimSpace(v); v != "" {
+				vs = append(vs, v)
+			}
+		}
+		if len(vs) > 0 {
+			lines = append(lines, label+"："+strings.Join(vs, " · "))
+		}
+	}
+	name := pl.Title
+	if pl.Year != "" {
+		name += " (" + pl.Year + ")"
+	}
+	add("片名", name)
+	if pl.MediaType == "tv" {
+		var eps []string
+		total := 0
+		for _, s := range pl.Seasons {
+			eps = append(eps, fmt.Sprintf("S%02d E%s", s, episodesCSV(pl.Episodes[s])))
+			total += len(pl.Episodes[s])
+		}
+		if total > 0 {
+			eps = append(eps, fmt.Sprintf("共 %d 集", total))
+		}
+		add("季集", eps...)
+	}
+	ri := pl.Info
+	add("视频", re0ResolutionOf(ri.Pix), ri.Type, ri.Source, ri.VideoEncode, ri.Effect, ri.FPS)
+	add("音频", ri.AudioEncode)
+	subs := ""
+	if pl.HasSubs {
+		subs = "外挂"
+		if len(pl.SubLangs) > 0 {
+			subs += " " + strings.Join(pl.SubLangs, " / ")
+		}
+	}
+	add("字幕", subs)
+	files := ""
+	if n := len(pl.Files); n > 0 {
+		files = fmt.Sprintf("%d 个视频", n)
+	}
+	add("文件", pl.Ext, files, humanSize(pl.SizeBytes), ri.Team)
+	if pl.ShareName != "" && pl.ShareName != pl.Title {
+		add("原分享名", pl.ShareName)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // shareOutBadSource 枪版：两站都不收
@@ -421,6 +535,8 @@ func (h *Handler) shareOutLink(link model.DownloadLink, v shareOutVerdict, todo 
 		switch {
 		case v.Skip != "":
 			row.Status, row.Message = shareOutStatusSkipped, v.Skip
+		case h.shareOutFromSite(row.ShareCode):
+			row.Status, row.Message = shareOutStatusSkipped, "这条分享是从 RE0 / 癫影拿到的，两站都不收重复链接"
 		case h.shareOutSentBefore(site, row.ShareCode, link.ID):
 			row.Status, row.Message = shareOutStatusSkipped, "这条分享之前已经发过"
 		default:
@@ -461,6 +577,27 @@ func (h *Handler) shareOutLink(link model.DownloadLink, v shareOutVerdict, todo 
 	}
 }
 
+// shareOutFromSite 这个分享码以前是从 RE0 / 癫影拿到的：用户把站上解锁出来的链接复制下来又贴进「链接转存」，
+// 提交入口认不出来，只能翻本地历史——找资源提交的来源链接记着站名（「RE0」，老数据「影巢」，「癫影」），
+// 订阅提交的来源写的是「订阅」，站名在对应的 SubAttempt 上。两站都不收重复链接，发了也是被拒
+func (h *Handler) shareOutFromSite(shareCode string) bool {
+	if shareCode == "" {
+		return false
+	}
+	var ids []uint
+	h.DB.Model(&model.DownloadLink{}).Where("hash = ?", shareCode).Pluck("id", &ids)
+	if len(ids) == 0 {
+		return false
+	}
+	var n int64
+	h.DB.Model(&model.DownloadLink{}).Where("id IN ? AND source IN ?", ids, []string{"RE0", "影巢", "癫影"}).Count(&n)
+	if n > 0 {
+		return true
+	}
+	h.DB.Model(&model.SubAttempt{}).Where("link_id IN ? AND source IN ?", ids, []string{"re0", "dian"}).Count(&n)
+	return n > 0
+}
+
 // shareOutSentBefore 同一站、同一分享码已经发成过（另一条链接，同一个分享又贴了一次）
 func (h *Handler) shareOutSentBefore(site, shareCode string, linkID uint) bool {
 	if shareCode == "" {
@@ -470,6 +607,18 @@ func (h *Handler) shareOutSentBefore(site, shareCode string, linkID uint) bool {
 	h.DB.Model(&model.ShareOut{}).Where("site = ? AND share_code = ? AND status = ? AND link_id <> ?",
 		site, shareCode, shareOutStatusDone, linkID).Count(&n)
 	return n > 0
+}
+
+// shareOutRefusal 站点拒收（不重试）。两站都不收重复链接，提示里带「已存在 / 重复」的写成一句人话，
+// 其余照站点原文
+func shareOutRefusal(site, msg string) error {
+	low := strings.ToLower(msg)
+	for _, k := range []string{"已存在", "已经存在", "重复", "已被分享", "exist", "duplicate"} {
+		if strings.Contains(low, k) {
+			return shareOutSkipf("%s 上已经有这条分享", site)
+		}
+	}
+	return shareOutSkipf("%s 拒收：%s", site, msg)
 }
 
 func shareOutSiteLabel(site string) string {

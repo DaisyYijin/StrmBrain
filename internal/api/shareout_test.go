@@ -15,7 +15,7 @@ import (
 )
 
 func shareOutRec(id uint, status string, tmdb int, mt string, at time.Time, files ...orgRecordFile) model.OrganizeRecord {
-	r := model.OrganizeRecord{ID: id, LinkID: 1, Status: status, TmdbID: tmdb, MediaType: mt, Title: "绝命毒师",
+	r := model.OrganizeRecord{ID: id, LinkID: 1, Status: status, TmdbID: tmdb, MediaType: mt, Title: "绝命毒师", Year: "2008",
 		PosterPath: "/p.jpg", Files: marshalRecordFiles(files)}
 	r.CreatedAt, r.UpdatedAt = at, at
 	return r
@@ -66,10 +66,10 @@ func TestShareOutPayload(t *testing.T) {
 	}
 	v := shareOutJudge(link, recs, time.Now())
 	pl := shareOutPayloadOf(link, v)
-	if pl.ShareCode != "swabc123" || pl.Code != "x1y2" || pl.TmdbID != 1396 || pl.MediaType != "tv" || pl.Title != "绝命毒师" {
+	if pl.ShareCode != "swabc123" || pl.Code != "x1y2" || pl.TmdbID != 1396 || pl.MediaType != "tv" || pl.Title != "绝命毒师" || pl.Year != "2008" {
 		t.Fatalf("基本字段不对: %+v", pl)
 	}
-	if len(pl.Files) != 3 || pl.Ext != "MKV" || !pl.HasSubs || pl.Info.Pix != "2160p" {
+	if len(pl.Files) != 3 || pl.Ext != "MKV" || !pl.HasSubs || pl.Info.Pix != "2160p" || len(pl.SubLangs) != 1 || pl.SubLangs[0] != "简中" {
 		t.Errorf("文件 / 画质不对: files=%v ext=%s subs=%v info=%+v", pl.Files, pl.Ext, pl.HasSubs, pl.Info)
 	}
 	if len(pl.Seasons) != 1 || pl.Seasons[0] != 1 || episodesCSV(pl.Episodes[1]) != "1-2,5" {
@@ -115,7 +115,7 @@ func TestDianTagString(t *testing.T) {
 
 func dianTestPayload() shareOutPayload {
 	return shareOutPayload{URL: "https://115cdn.com/s/swabc123", ShareCode: "swabc123", Code: "x1y2", TmdbID: 1396, MediaType: "tv",
-		Title: "绝命毒师", Poster: "/p.jpg", ShareName: "绝命毒师 S01", SizeBytes: 12 << 30, Files: []string{"a.mkv"}, Ext: "MKV",
+		Title: "绝命毒师", Year: "2008", Poster: "/p.jpg", ShareName: "Breaking.Bad.S01.2160p 搬运自某群", SizeBytes: 12 << 30, Files: []string{"a.mkv"}, Ext: "MKV",
 		Info: ParseResourceInfo("Breaking.Bad.S01E01.2160p.WEB-DL.H.265.mkv"), Seasons: []int{1}, Episodes: map[int][]int{1: {1, 2, 5}}}
 }
 
@@ -165,11 +165,20 @@ func asSkip(err error, out **errShareOutSkip) bool {
 
 func TestRe0ShareBody(t *testing.T) {
 	pl := dianTestPayload()
-	pl.HasSubs = true
+	pl.HasSubs, pl.SubLangs = true, []string{"简中"}
 	b := re0ShareBody(pl, shareOutSiteCfg{UnlockPoints: 3, Anonymous: true})
 	if b["url"] != pl.URL || b["access_code"] != "x1y2" || b["share_size"] != "12.0 GB" || b["hide_link"] != true ||
-		b["unlock_points"] != 3 || b["is_anonymous"] != true || b["remark"] != "S01 E1-2,5" {
+		b["unlock_points"] != 3 || b["is_anonymous"] != true || b["title"] != "绝命毒师 (2008) S01 4K WEB-DL" {
 		t.Errorf("请求体不对: %v", b)
+	}
+	// 备注一项一行：片名年份、季集、视频、音频（没认出不写）、字幕、文件、原分享名
+	wantRemark := "片名：绝命毒师 (2008)\n季集：S01 E1-2,5 · 共 3 集\n视频：4K · WEB-DL · H265\n字幕：外挂 简中\n" +
+		"文件：MKV · 1 个视频 · 12.0 GB\n原分享名：Breaking.Bad.S01.2160p 搬运自某群"
+	if b["remark"] != wantRemark {
+		t.Errorf("备注不对:\n%v\n应为:\n%s", b["remark"], wantRemark)
+	}
+	if l, _ := b["subtitle_language"].([]string); len(l) != 1 || l[0] != "简中" {
+		t.Errorf("字幕语言应为简中: %v", b["subtitle_language"])
 	}
 	if r, _ := b["video_resolution"].([]string); len(r) != 1 || r[0] != "4K" {
 		t.Errorf("分辨率应为 4K: %v", b["video_resolution"])
@@ -304,7 +313,7 @@ func TestShareOutRunFlow(t *testing.T) {
 func TestRe0PublishShareOpenAPI(t *testing.T) {
 	newShareOutEnv(t)
 	var got map[string]any
-	reject := false
+	reject := ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/open/shares" || r.Method != http.MethodPost {
 			w.Write([]byte(`{"success":false,"code":"NOT_FOUND"}`))
@@ -315,9 +324,21 @@ func TestRe0PublishShareOpenAPI(t *testing.T) {
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
-		if reject {
+		switch reject {
+		case "400":
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(`{"success":false,"code":"400","message":"分享链接已存在"}`))
+			return
+		case "200dup": // 重复也可能是 200 + success:false
+			w.Write([]byte(`{"success":false,"code":"SHARE_DUPLICATED","message":"该链接已被分享"}`))
+			return
+		case "400other":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"success":false,"code":"400","message":"链接无效"}`))
+			return
+		case "500":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"success":false,"code":"500","message":"internal"}`))
 			return
 		}
 		w.Write([]byte(`{"success":true,"code":"200","data":{"slug":"abc"}}`))
@@ -336,15 +357,99 @@ func TestRe0PublishShareOpenAPI(t *testing.T) {
 	if got["tmdb_id"] != "550" || got["media_type"] != "movie" || got["access_code"] != "x1y2" || got["url"] != pl.URL {
 		t.Errorf("请求体不对: %v", got)
 	}
-	reject = true
 	var skip *errShareOutSkip
-	if _, _, err := re0PublishShare(pl, shareOutSiteCfg{}); !asSkip(err, &skip) || !strings.Contains(err.Error(), "已存在") {
-		t.Errorf("400 应当作拒收（不重试），得到 %v", err)
+	for _, c := range []struct{ reject, want string }{
+		{"400", "RE0 上已经有这条分享"},
+		{"200dup", "RE0 上已经有这条分享"},
+		{"400other", "RE0 拒收：链接无效"},
+	} {
+		reject = c.reject
+		if _, _, err := re0PublishShare(pl, shareOutSiteCfg{}); !asSkip(err, &skip) || err.Error() != c.want {
+			t.Errorf("%s 应当作拒收（不重试）「%s」，得到 %v", c.reject, c.want, err)
+		}
 	}
+	reject = "500" // 站点临时出错：照失败记，到点重试
+	if _, _, err := re0PublishShare(pl, shareOutSiteCfg{}); err == nil || asSkip(err, &skip) {
+		t.Errorf("500 应按失败重试，得到 %v", err)
+	}
+	reject = ""
 
 	// 授权里没有 write：不发
 	_ = saveRe0Cfg(&re0Cfg{BaseURL: srv.URL, ClientSecret: "sec", AccessToken: "at", TokenExp: time.Now().Add(time.Hour).Unix(), Scope: "meta query unlock"})
 	if _, _, err := re0PublishShare(pl, shareOutSiteCfg{}); !asSkip(err, &skip) || !strings.Contains(err.Error(), "write") {
 		t.Errorf("没有 write 权限应跳过，得到 %v", err)
+	}
+}
+
+func TestSubLangOf(t *testing.T) {
+	for name, want := range map[string]string{
+		"Show.S01E01.chs.ass":     "简中",
+		"Show.S01E01.cht.srt":     "繁中",
+		"Show.S01E01.chs&eng.ass": "简英双语",
+		"Show.S01E01.简日双语.ass":    "简日双语",
+		"Show.S01E01.zh-Hant.srt": "繁中",
+		"Show.S01E01.ass":         "",
+		"Show.S01E01.eng.srt":     "",
+		"Show.S01E01.default.ass": "",
+	} {
+		if got := subLangOf(name); got != want {
+			t.Errorf("subLangOf(%q) = %q，应为 %q", name, got, want)
+		}
+	}
+}
+
+// 电影：标题不带季，备注没有季集那行，音频写出来
+func TestShareOutRemarkMovie(t *testing.T) {
+	pl := shareOutPayload{Title: "搏击俱乐部", Year: "1999", MediaType: "movie", ShareName: "搏击俱乐部", Ext: "MKV",
+		Files: []string{"a.mkv"}, SizeBytes: 10 << 30,
+		Info: ParseResourceInfo("Fight.Club.1999.1080p.BluRay.x264.DTS-HD.MA.5.1-FRDS.mkv")}
+	if h := shareOutHeadline(pl); h != "搏击俱乐部 (1999) 1080P BluRay" {
+		t.Errorf("标题 %q", h)
+	}
+	r := shareOutRemark(pl)
+	if strings.Contains(r, "季集") || strings.Contains(r, "原分享名") || !strings.Contains(r, "音频：DTS-HD.MA.5.1") ||
+		!strings.Contains(r, "视频：1080P · BluRay · ") || !strings.Contains(r, "FRDS") {
+		t.Errorf("备注不对:\n%s", r)
+	}
+}
+
+// 从 RE0 / 癫影拿到的链接（找资源提交、订阅提交）又被贴进链接转存：两站都不发
+func TestShareOutFromSite(t *testing.T) {
+	h := newShareOutEnv(t)
+	_ = saveShareOutCfg(shareOutCfg{Re0: shareOutSiteCfg{Enabled: true}, Dian: shareOutSiteCfg{Enabled: true}})
+	calls := 0
+	oldPubs := shareOutPublishers
+	t.Cleanup(func() { shareOutPublishers = oldPubs })
+	pub := func(shareOutPayload, shareOutSiteCfg) (string, int, error) { calls++; return "x", 0, nil }
+	shareOutPublishers = map[string]shareOutPublisher{shareOutSiteRe0: pub, shareOutSiteDian: pub}
+
+	// 找资源从癫影解锁转存过一次（来源链接记着站名）；订阅从 RE0 转存过另一个（站名在 SubAttempt 上）
+	dlLinkRecord(h, "https://115cdn.com/s/swfromdian", "share", "x", "癫影", nil)
+	subLink := dlLinkRecord(h, "https://115cdn.com/s/swfromre0", "share", "x", "订阅", nil)
+	h.DB.Create(&model.SubAttempt{SubID: 1, LinkID: subLink, Source: "re0", Hash: "swfromre0"})
+	// 观影来的不算
+	dlLinkRecord(h, "https://115cdn.com/s/swfromgy", "share", "x", "观影", nil)
+
+	now := time.Now()
+	for _, code := range []string{"swfromdian", "swfromre0", "swfromgy"} {
+		id := dlLinkRecord(h, "https://115cdn.com/s/"+code, "share", "x", "web", nil)
+		h.shareOutMark(id, "abcd")
+		rec := model.OrganizeRecord{LinkID: id, Status: "success", TmdbID: 550, MediaType: "movie", Title: "x",
+			Files: marshalRecordFiles([]orgRecordFile{{Fid: code, Name: "x.mkv", Orig: "x.1080p.mkv", Kind: "video", Size: 1 << 30}})}
+		h.DB.Create(&rec)
+	}
+	h.shareOutRun(now.Add(shareOutSettle + time.Minute))
+	if calls != 2 {
+		t.Fatalf("只有观影来的那条该发（两站各一次），实际发了 %d 次", calls)
+	}
+	var skipped []model.ShareOut
+	h.DB.Where("status = ?", shareOutStatusSkipped).Find(&skipped)
+	if len(skipped) != 4 {
+		t.Fatalf("从两站来的两条 × 两站应全部跳过，得到 %+v", skipped)
+	}
+	for _, o := range skipped {
+		if !strings.Contains(o.Message, "从 RE0 / 癫影拿到的") {
+			t.Errorf("跳过原因不对: %+v", o)
+		}
 	}
 }
