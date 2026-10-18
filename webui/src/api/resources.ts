@@ -175,3 +175,37 @@ export interface ShareOutConfig {
 export const shareOutConfig = () => http.get<ShareOutConfig>('/shareout/config')
 export const shareOutSave = (site: ShareOutSite, cfg: ShareOutSiteCfg) =>
   http.post<{ message: string }>('/shareout/config', { site, ...cfg })
+
+/** 任务中心「分享记录」一行（后端 shareoutrecords.go，只读本地记账） */
+export interface ShareOutRecord {
+  id: number
+  link_id: number
+  site: ShareOutSite
+  /** done = 发成了 / skipped = 不发（原因在 message）/ failed = 失败 */
+  status: 'done' | 'skipped' | 'failed'
+  message: string
+  ref: string
+  points: number
+  attempts: number
+  tmdb_id: number
+  media_type: string
+  title: string
+  year: string
+  poster_path: string
+  share_name: string
+  link_url: string
+  source: string
+  /** 站上那条分享（发成的才有） */
+  site_url?: string
+  /** 失败了、还会自动重试的时间 */
+  next_retry?: string
+  can_retry: boolean
+  created_at: string
+  updated_at: string
+}
+export const shareOutRecords = (params: { status?: string; page?: number; size?: number }) =>
+  http.get<{ data: ShareOutRecord[]; total: number; counts: Record<string, number>; page: number; size: number }>(
+    '/shareout/records',
+    { params },
+  )
+export const shareOutRetry = (id: number) => http.post<{ message: string }>(`/shareout/records/${id}/retry`, {})

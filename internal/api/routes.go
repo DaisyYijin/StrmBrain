@@ -415,6 +415,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/dian/check", h.DianCheck)
 		protected.GET("/shareout/config", h.ShareOutGetConfig)
 		protected.POST("/shareout/config", h.ShareOutSaveConfig)
+		protected.GET("/shareout/records", h.ShareOutRecords)
+		protected.POST("/shareout/records/:id/retry", h.ShareOutRetry)
 		protected.GET("/dian/checkin", h.DianCheckinGet)
 		protected.POST("/dian/checkin", h.DianCheckinSave)
 		protected.POST("/dian/checkin/run", h.DianCheckinRun)

@@ -7,7 +7,8 @@ import HistoryTab from './tasks/HistoryTab.vue'
 import ProbeTab from './tasks/ProbeTab.vue'
 import JobDetail from './tasks/JobDetail.vue'
 import RecordsTab from './tasks/RecordsTab.vue'
-import { tasksApi } from '@/api'
+import ShareOutTab from './tasks/ShareOutTab.vue'
+import { resourcesApi, tasksApi } from '@/api'
 import type { ProbeStatus } from '@/api/tasks'
 import { recordStats } from '@/stores/recordStats'
 import { useQueueStore } from '@/stores/queue'
@@ -17,7 +18,7 @@ import { useTabQuery } from '@/composables/useTabQuery'
  * 任务中心：日常要处理的都在这一页 —— 队列里的任务、任务历史、Emby 提前探测的失败清单，以及整理产出的记录。
  * 顶栏的任务弹层只管「现在怎么样」，历史、筛选、详情在这里。
  *
- * 页签：jobs 进行中（值沿用旧名，收藏的 ?tab=jobs 仍然有效）/ history 历史 / probe Emby 探测 / records 整理记录。
+ * 页签：jobs 进行中（值沿用旧名，收藏的 ?tab=jobs 仍然有效）/ history 历史 / probe Emby 探测 / records 整理记录 / shareout 分享记录。
  * 历史与探测原来叠在「任务」一页里，数据一多历史要滚一屏多才看得到，所以拆开。
  *
  * 地址栏：?tab= 页签；?job= 打开的任务详情（刷新 / 转发链接能直接打开）；
@@ -44,6 +45,22 @@ const probeVisible = computed(() => {
   return !!s && (s.enabled || s.queue > 0 || !!s.running || s.fail_total > 0 || s.ignored_total > 0)
 })
 
+// ---- 分享记录（转存后分享到 RE0 / 癫影）：没开分享、也没有记录的不给页签，角标是失败数 ----
+const shareOut = ref<{ total: number; failed: number; enabled: boolean }>({ total: 0, failed: 0, enabled: false })
+async function loadShareOut() {
+  try {
+    const [rec, cfg] = await Promise.all([resourcesApi.shareOutRecords({ size: 1 }), resourcesApi.shareOutConfig()])
+    shareOut.value = {
+      total: rec.counts?.all ?? 0,
+      failed: rec.counts?.failed ?? 0,
+      enabled: !!cfg.re0?.enabled || !!cfg.dian?.enabled,
+    }
+  } catch {
+    // 拉不到不影响页面其余部分
+  }
+}
+const shareOutVisible = computed(() => shareOut.value.enabled || shareOut.value.total > 0)
+
 const tabs = computed(() => [
   { value: 'jobs', label: '进行中', count: queue.running + queue.queued },
   { value: 'history', label: '历史' },
@@ -51,6 +68,9 @@ const tabs = computed(() => [
     ? [{ value: 'probe', label: 'Emby 探测', count: probe.value?.fail_total ?? 0, countTone: 'warning' as const }]
     : []),
   { value: 'records', label: '整理记录', count: recordStats.value.awaiting || 0, countTone: 'warning' as const },
+  ...(shareOutVisible.value || tab.value === 'shareout'
+    ? [{ value: 'shareout', label: '分享记录', count: shareOut.value.failed, countTone: 'danger' as const }]
+    : []),
 ])
 
 const jobId = computed(() => {
@@ -81,6 +101,7 @@ let timer: number | undefined
 let offFinished: (() => void) | undefined
 onMounted(() => {
   void loadProbe()
+  void loadShareOut()
   timer = window.setInterval(loadProbe, 15_000)
   // 探测任务跑完，失败清单会变
   offFinished = queue.onFinished((j) => {
@@ -101,6 +122,7 @@ onUnmounted(() => {
       <HistoryTab v-else-if="tab === 'history'" @open="openJob" />
       <ProbeTab v-else-if="tab === 'probe'" :st="probe" @changed="loadProbe" />
       <RecordsTab v-else-if="tab === 'records'" @open-job="openJob" />
+      <ShareOutTab v-else-if="tab === 'shareout'" @changed="loadShareOut" />
     </div>
     <JobDetail :job-id="jobId" @close="closeJob" @records="showRecords" />
   </div>
