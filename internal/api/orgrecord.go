@@ -395,6 +395,29 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 		log.Printf("[整理] ○ 撞名处理：%d 个不要的文件已移到 冗余/%s", len(fids), holding)
 	}
 
+	// 洗版：落点上已有的别的版本输给这次的文件就让位。此前重新整理不洗版，
+	// 「已存在」里的新版按改过的策略重新整理进库后，与旧版并排躺在同一个季目录里（2026-10-19 现场：
+	// 间谍过家家 S03 的 REMUX 与 WEB-DL 各 13 集）。只做让位、不把判输的移「已存在」：
+	// 重新整理是用户点名要这批文件入库。指定季集自己判过洗版（fileepisode.go），这里不重复
+	if len(opt.episodes) == 0 {
+		if st := matchWashStrategy(media.MediaType, category); st != nil {
+			libName := sink.libNameOf(newLib)
+			own := map[string]bool{}
+			for _, f := range files {
+				own[f.Fid] = true
+			}
+			plans := planRedoWash(media, st, groups, own,
+				func(rel string) []model.SyncedFile { return libraryFilesOf(rel, libName) },
+				func(m string) { log.Printf("[整理] %s", m) })
+			if len(plans) > 0 {
+				setJobProgress("洗版：旧版让位", 1, redoSteps, rootRel)
+				if err := applyWashPlans(ops, cfg, media, st, plans, func(m string) { log.Printf("[整理] %s", m) }, notifyEmbyDeleted); err != nil {
+					return fmt.Errorf("洗版旧版让位失败，网盘上的文件没动: %w", err)
+				}
+			}
+		}
+	}
+
 	// ---- 2) 原地改名 + 搬移（原地刷新时整段跳过）----
 	rootCid := rec.TargetCid
 	setJobProgress("改名与搬移", 1, redoSteps, rootRel)
@@ -568,6 +591,42 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 		rememberRecognition(rec.RecogKey, rec.Source, media)
 	}
 	return nil
+}
+
+// planRedoWash 重新整理的洗版判定（只读台账）：每个视频按落点目录与最终文件名去比，
+// 这次记录自己的文件（own）不算库内版本，否则原地刷新时文件会判给自己让位。
+// 只收新版赢了的 plan；平手 / 判输的照常入库（与改造前的重新整理一致）
+func planRedoWash(media *TmdbMedia, st *washStrategy, groups map[string][]orgRecordFile, own map[string]bool,
+	inDir func(rel string) []model.SyncedFile, onLog func(string)) []*washPlan {
+	rels := make([]string, 0, len(groups))
+	for rel := range groups {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	var plans []*washPlan
+	for _, rel := range rels {
+		var lib []model.SyncedFile
+		for _, sf := range inDir(rel) {
+			if !own[sf.FileID] {
+				lib = append(lib, sf)
+			}
+		}
+		if len(lib) == 0 {
+			continue
+		}
+		for _, g := range groups[rel] {
+			if g.Kind != "video" {
+				continue
+			}
+			plan := decideWash(media, g.Name, "", rel, st, lib, nil, onLog)
+			if plan.decision != washReplaced {
+				continue
+			}
+			plan.landing = []string{rel + "/" + g.Name}
+			plans = append(plans, &plan)
+		}
+	}
+	return plans
 }
 
 // dedupRecordFids 记录快照里同一个 fid 只留第一次出现的那条：重复的一条会在下面的重名检查里撞上自己
