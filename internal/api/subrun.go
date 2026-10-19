@@ -259,7 +259,8 @@ func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		msg += fmt.Sprintf("，%d 个出错", failed)
 	}
 	if failed > 0 && failed == len(res.Items) {
-		return jobOutcome{Result: res}, errors.New(msg)
+		// 全部出错时把第一个原因带上：多半是同一个原因（TMDB 连不上），队列日志一眼能看出来
+		return jobOutcome{Result: res}, errors.New(msg + "：" + truncateStr(res.Items[0].Err, 120))
 	}
 	idle := job.Priority == jobPriorityBackground && submitted == 0 && failed == 0
 	return jobOutcome{Message: msg, Result: res, Idle: idle, Partial: failed > 0}, nil
@@ -374,6 +375,8 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 	}
 	if err != nil {
 		item.Err = "盘点失败：" + err.Error()
+		// 队列那行只有「N 个出错」，原因只在任务结果与订阅的 last_result 里，日志里看不出为什么
+		log.Printf("[订阅] ✗ 《%s》%s，1 小时后再查", sub.Title, item.Err)
 		next := now.Add(time.Hour)
 		db.Model(sub).Updates(map[string]any{"last_check_at": now, "next_check_at": next, "last_result": truncateStr(item.Err, 250)})
 		return item, true
