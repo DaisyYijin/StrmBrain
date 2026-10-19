@@ -43,10 +43,19 @@ type orgRecordDTO struct {
 	DupPicked map[string]string `json:"dup_picked,omitempty"`
 	// LibName 落点在附加媒体库时那个库的目录名（主库为空，界面上不显示）。只查路径缓存，不发请求
 	LibName string `json:"lib_name,omitempty"`
+	// DeepDeletable 记录里有文件还在媒体库台账里，「深度删除」才有东西可删（与 deepDelRowsForRecord 同口径）。
+	// 判输进「已存在」、失败、未识别、待确认的记录文件都不在库里，按钮点下去只会 400，所以不显示
+	DeepDeletable bool `json:"deep_deletable"`
 }
 
-func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink) orgRecordDTO {
+func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink, inLedger map[string]bool) orgRecordDTO {
 	d := orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files), Link: links[r.LinkID]}
+	for _, f := range d.FileList {
+		if f.Fid != "" && inLedger[f.Fid] {
+			d.DeepDeletable = true
+			break
+		}
+	}
 	if r.LibCid != "" {
 		if row, ok := lookupCachedRow(r.LibCid); ok {
 			d.LibName = row.Name
@@ -62,7 +71,29 @@ func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink) org
 
 // recordDTO 单条记录的返回体（详情、确认、重新整理之后回给前端的那一条）
 func (h *Handler) recordDTO(r model.OrganizeRecord) orgRecordDTO {
-	return toRecordDTO(r, recordLinks(h.DB, []model.OrganizeRecord{r}))
+	recs := []model.OrganizeRecord{r}
+	return toRecordDTO(r, recordLinks(h.DB, recs), recordFidsInLedger(h.DB, recs))
+}
+
+// recordFidsInLedger 这批记录里哪些 fid 在媒体库台账里。只读台账，零 115 请求
+func recordFidsInLedger(db *gorm.DB, recs []model.OrganizeRecord) map[string]bool {
+	var fids []string
+	for _, r := range recs {
+		for _, f := range unmarshalRecordFiles(r.Files) {
+			if f.Fid != "" {
+				fids = append(fids, f.Fid)
+			}
+		}
+	}
+	out := make(map[string]bool)
+	for _, batch := range chunkStrings(fids, 400) {
+		var hit []string
+		db.Model(&model.SyncedFile{}).Where("file_id IN ?", batch).Pluck("file_id", &hit)
+		for _, id := range hit {
+			out[id] = true
+		}
+	}
+	return out
 }
 
 // ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&target_dir=&link_id=&page=&size=
@@ -126,9 +157,10 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	q.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
 
 	links := recordLinks(h.DB, rows)
+	inLedger := recordFidsInLedger(h.DB, rows)
 	items := make([]orgRecordDTO, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, toRecordDTO(r, links))
+		items = append(items, toRecordDTO(r, links, inLedger))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size})
 }

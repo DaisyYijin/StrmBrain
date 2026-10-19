@@ -824,7 +824,7 @@ function shareOutText(o: ShareOutView): string {
                 <!-- 两个删除按钮差别极大，必须让人一眼分清：
                      这个删网盘真文件（红色实底 + 文字），下面那个只删记录（弱化的图标） -->
                 <HPopconfirm
-                  v-if="r.file_list?.length"
+                  v-if="r.deep_deletable"
                   danger
                   confirm-text="深度删除"
                   :disabled="busy || !!queuedJob(r)"

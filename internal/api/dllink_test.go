@@ -123,13 +123,13 @@ func TestRecordLinksLookup(t *testing.T) {
 	}
 	recs := []model.OrganizeRecord{{ID: 1, LinkID: row.ID}, {ID: 2}, {ID: 3, LinkID: row.ID + 100}}
 	links := recordLinks(h.DB, recs)
-	if d := toRecordDTO(recs[0], links); d.Link == nil || d.Link.URL != row.URL {
+	if d := toRecordDTO(recs[0], links, nil); d.Link == nil || d.Link.URL != row.URL {
 		t.Errorf("来源链接未带出: %+v", d.Link)
 	}
-	if d := toRecordDTO(recs[1], links); d.Link != nil {
+	if d := toRecordDTO(recs[1], links, nil); d.Link != nil {
 		t.Errorf("无来源的记录不该带链接: %+v", d.Link)
 	}
-	if d := toRecordDTO(recs[2], links); d.Link != nil {
+	if d := toRecordDTO(recs[2], links, nil); d.Link != nil {
 		t.Errorf("已清理的链接不该带出: %+v", d.Link)
 	}
 }
@@ -184,5 +184,26 @@ func TestBackfillRecordLinks(t *testing.T) {
 	BackfillRecordLinks(db)
 	if got := get(second.ID); got != 0 {
 		t.Errorf("补认领不该重复执行: got=%d", got)
+	}
+}
+
+// 深度删除按钮只给文件还在台账里的记录：判输进「已存在」的那批 fid 不在台账，点了只会 400
+func TestRecordDeepDeletable(t *testing.T) {
+	if _, err := model.InitDB("file:record_deepdel_flag_test?mode=memory&cache=shared"); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	model.DB.Where("1=1").Delete(&model.SyncedFile{})
+	model.DB.Create(&model.SyncedFile{FileID: "lib1", RelPath: "库/剧集/心灵猎人 (2017)/Season 2/E01.strm", Kind: "video"})
+	recs := []model.OrganizeRecord{
+		{ID: 1, Status: "success", Files: marshalRecordFiles([]orgRecordFile{{Fid: "lib1", Name: "E01.mkv"}})},
+		{ID: 2, Status: "exists", Files: marshalRecordFiles([]orgRecordFile{{Fid: "ex1", Name: "E01.mkv"}, {Fid: "ex2", Name: "E02.mkv"}})},
+		{ID: 3, Status: "failed"},
+	}
+	in := recordFidsInLedger(model.DB, recs)
+	want := []bool{true, false, false}
+	for i, r := range recs {
+		if got := toRecordDTO(r, nil, in).DeepDeletable; got != want[i] {
+			t.Errorf("记录 %d（%s）DeepDeletable = %v，应为 %v", r.ID, r.Status, got, want[i])
+		}
 	}
 }

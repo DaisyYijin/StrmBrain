@@ -209,6 +209,8 @@ export interface OrganizeRecord {
   job_id?: number
   created_at: string
   file_list: OrganizeRecordFile[]
+  /** 记录里有文件还在媒体库台账里，深度删除才有东西可删（已存在 / 失败 / 未识别的没有） */
+  deep_deletable?: boolean
   /** 来源链接；不是离线 / 分享提交进来的（手动丢进待整理等）没有 */
   link?: OrganizeRecordLink
 }
