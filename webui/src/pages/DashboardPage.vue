@@ -28,6 +28,7 @@ import PosterImage from '@/components/PosterImage.vue'
 import CalibrateModal from '@/components/dashboard/CalibrateModal.vue'
 import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
 import HeroBanner, { type HeroSlide } from '@/components/dashboard/HeroBanner.vue'
+import SetupChecklist from '@/components/dashboard/SetupChecklist.vue'
 import { bytes, num, percent } from '@/utils/format'
 import { embyImageUrl, posterUrl } from '@/utils/media'
 import { toastError } from '@/composables/useFeedback'
@@ -271,6 +272,9 @@ const strmSub = computed(() => {
         />
       </template>
     </div>
+
+    <!-- ==== 上手清单：新用户该做的几步（全部做完或点了不再显示就没了） ==== -->
+    <SetupChecklist />
 
     <!-- ==== 多个媒体库：各库由谁整理、刮不刮、台账里几部（单库时不显示） ==== -->
     <div v-if="!loading && dashLibs.length" class="libs-row">

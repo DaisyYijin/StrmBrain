@@ -153,6 +153,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	{
 		// 仪表盘
 		protected.GET("/dashboard", h.DashboardEnhanced)
+		protected.GET("/setup/status", h.SetupStatus)
+		protected.POST("/setup/hide", h.SetupHide)
 		// 媒体库台账校准（只读本地 STRM 树 → 清 MediaLibrary 幽灵行，见 medialib.go）
 		protected.POST("/media-library/calibrate", h.CalibrateMediaLibrary)
 

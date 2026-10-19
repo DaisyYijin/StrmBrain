@@ -11,6 +11,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import HTagsInput from '@/components/hero/HTagsInput.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
+import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import FullHelp from './FullHelp.vue'
 import AdoptDialog from '@/components/strm/AdoptDialog.vue'
@@ -134,32 +135,39 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
     </div>
 
     <div class="grid">
-      <SectionCard title="扫描范围" hint="怎么遍历、哪些文件生成 STRM 或下载到本地">
-        <FieldRow
-          label="同步模式"
-          tip="标准模式逐个目录遍历，兼容性最好；快速模式一次性取回整棵目录树与文件表，请求数少两个数量级。"
+      <SectionCard title="扫描范围" hint="怎么遍历、哪些文件生成 STRM 或下载到本地；默认值适合绝大多数媒体库">
+        <AdvancedSection
+          id="full-scan"
+          :changed="full.changed('mode', 'video_ext', 'image_ext', 'data_ext')"
+          hint="同步模式与三组文件后缀"
         >
-          <template v-if="runs.fastAvailable.value">
-            <HSegmented v-model="cfg.mode" :options="MODE_OPTIONS" aria-label="同步模式" />
-            <HAlert v-if="runs.fullMode.value === 'fast'" class="mode-note" status="warning">
-              媒体库文件数超过 20 万时，建议先用标准模式完整跑通一次，确认无异常后再切快速模式。
-              快速模式依赖 115 客户端端点，若接口变动会自动降级为标准模式。
-            </HAlert>
-          </template>
-          <span v-else class="mode-locked">标准模式{{ runs.fastReason.value ? `（${runs.fastReason.value}）` : '' }}</span>
-        </FieldRow>
+          <FieldRow
+            label="同步模式"
+            :changed="full.changed('mode')"
+            tip="标准模式逐个目录遍历，兼容性最好；快速模式一次性取回整棵目录树与文件表，请求数少两个数量级。"
+          >
+            <template v-if="runs.fastAvailable.value">
+              <HSegmented v-model="cfg.mode" :options="MODE_OPTIONS" aria-label="同步模式" />
+              <HAlert v-if="runs.fullMode.value === 'fast'" class="mode-note" status="warning">
+                媒体库文件数超过 20 万时，建议先用标准模式完整跑通一次，确认无异常后再切快速模式。
+                快速模式依赖 115 客户端端点，若接口变动会自动降级为标准模式。
+              </HAlert>
+            </template>
+            <span v-else class="mode-locked">标准模式{{ runs.fastReason.value ? `（${runs.fastReason.value}）` : '' }}</span>
+          </FieldRow>
 
-        <FieldRow label="视频文件后缀" tip="匹配这些后缀的文件视为视频，生成 STRM。">
-          <HTagsInput v-model="cfg.video_ext" placeholder=".mkv 回车添加" />
-        </FieldRow>
+          <FieldRow label="视频文件后缀" :changed="full.changed('video_ext')" tip="匹配这些后缀的文件视为视频，生成 STRM。">
+            <HTagsInput v-model="cfg.video_ext" placeholder=".mkv 回车添加" />
+          </FieldRow>
 
-        <FieldRow label="媒体图片后缀" tip="匹配这些后缀的图片下载到本地（poster 等 Emby 刮削用）。">
-          <HTagsInput v-model="cfg.image_ext" placeholder=".jpg 回车添加" />
-        </FieldRow>
+          <FieldRow label="媒体图片后缀" :changed="full.changed('image_ext')" tip="匹配这些后缀的图片下载到本地（poster 等 Emby 刮削用）。">
+            <HTagsInput v-model="cfg.image_ext" placeholder=".jpg 回车添加" />
+          </FieldRow>
 
-        <FieldRow label="数据文件后缀" tip="匹配这些后缀的数据文件下载到本地（.nfo 始终包含）。">
-          <HTagsInput v-model="cfg.data_ext" placeholder=".nfo 回车添加" />
-        </FieldRow>
+          <FieldRow label="数据文件后缀" :changed="full.changed('data_ext')" tip="匹配这些后缀的数据文件下载到本地（.nfo 始终包含）。">
+            <HTagsInput v-model="cfg.data_ext" placeholder=".nfo 回车添加" />
+          </FieldRow>
+        </AdvancedSection>
       </SectionCard>
 
       <SectionCard title="检测与定时" hint="失效 STRM 标记、定时全量、结束后刷新 Emby">

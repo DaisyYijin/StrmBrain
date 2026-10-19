@@ -10,6 +10,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
+import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import { configApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -37,6 +38,11 @@ const loading = ref(true)
 const loadError = ref(false)
 const fingerprint = computed(() => JSON.stringify(model.value))
 const verifiedSaved = computed(() => verified.value === fingerprint.value && saved.value === fingerprint.value)
+/** 两个域名只在国内网络需要换反代时才动，收进高级设置；改过的要标出来 */
+const urlChanged = computed(() => ({
+  api: model.value.api_url.trim() !== DEFAULTS.api_url,
+  image: model.value.image_url.trim() !== DEFAULTS.image_url,
+}))
 const busy = computed(() => loading.value || saving.value || testing.value)
 watch(fingerprint, () => {
   banner.value = null
@@ -133,13 +139,6 @@ onMounted(load)
       </div>
     </HAlert>
     <fieldset :disabled="busy || loadError" class="tmdb-fields">
-    <FieldRow label="API 域名" tip="TMDB API 地址，国内网络可换反代加速。">
-      <HInput v-model="model.api_url" placeholder="https://api.tmdb.org" />
-    </FieldRow>
-
-    <FieldRow label="图片域名" tip="TMDB 海报图片域名，可换反代加速。">
-      <HInput v-model="model.image_url" placeholder="https://image.tmdb.org" />
-    </FieldRow>
 
     <FieldRow
       label="API 密钥"
@@ -149,12 +148,30 @@ onMounted(load)
     >
       <SecretInput ref="keyInput" v-model="model.api_key" :status="keyError ? 'error' : undefined" name="tmdb-api-key" placeholder="填写 TMDB API Key（必填）" />
       <HButton variant="ghost" class="text-btn" tag="a" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">获取 API Key ↗</HButton>
+      <ol v-if="!model.api_key.trim()" class="key-guide">
+        <li>在 themoviedb.org 免费注册一个账号并登录</li>
+        <li>点「获取 API Key」打开设置 → API，申请 Developer 类型，用途写个人使用即可</li>
+        <li>复制「API 密钥」那一串（32 位），不是更长的「API 读访问令牌」</li>
+      </ol>
     </FieldRow>
 
     <FieldRow label="语言" tip="中文优先返回中文片名与简介；英文返回原名。">
       <HSegmented v-model="model.language" :options="[{ label: '中文', value: 'zh-CN' }, { label: '英文', value: 'en-US' }]" />
     </FieldRow>
 
+    <AdvancedSection
+      id="tmdb-urls"
+      :changed="Number(urlChanged.api) + Number(urlChanged.image)"
+      hint="连不上 TMDB 时换成反代地址"
+    >
+      <FieldRow label="API 域名" :changed="urlChanged.api" tip="TMDB API 地址，国内网络可换反代加速。">
+        <HInput v-model="model.api_url" placeholder="https://api.tmdb.org" />
+      </FieldRow>
+
+      <FieldRow label="图片域名" :changed="urlChanged.image" tip="TMDB 海报图片域名，可换反代加速。">
+        <HInput v-model="model.image_url" placeholder="https://image.tmdb.org" />
+      </FieldRow>
+    </AdvancedSection>
     </fieldset>
     <FormActions>
       <HButton variant="primary" :loading="busy" :disabled="busy || loadError" @click="saveAndTest">保存并测试</HButton>
@@ -172,4 +189,5 @@ onMounted(load)
 .alert-action { margin-top: 12px; }
 .tmdb-fields { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
 p { color: var(--c-text-3); font-size: 12px; }
+.key-guide { margin: 8px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
 </style>

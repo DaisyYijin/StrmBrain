@@ -147,9 +147,22 @@ const dirty = computed(() => {
   return modelDirty.value || currentPathMapping() !== joinMapping(m.local, m.emby, mediaRoot.value)
 })
 
+/**
+ * 新用户最常卡在映射：Emby 连上了、映射还空着时，替他推算一次（只填表单，保存仍由用户点）。
+ * 推算读的是**已保存**的 Emby 地址与密钥（/emby/path-suggest），所以只在表单这两项已保存时做；
+ * 用户填过映射的一律不碰
+ */
+function autoDetectIfEmpty() {
+  if (embyMediaRoot.value.trim() || detecting.value) return
+  const s = saved.value
+  if (s.server_url.trim() !== model.value.server_url.trim() || s.api_key.trim() !== model.value.api_key.trim()) return
+  if (!s.server_url.trim() || !s.api_key.trim()) return
+  detectEmbyRoot()
+}
+
 async function saveEmby() {
   model.value.path_mapping = currentPathMapping()
-  await save()
+  if (await save()) autoDetectIfEmpty()
 }
 
 async function testConnection() {
@@ -169,6 +182,7 @@ async function testConnection() {
           detail: `${d.server_name || 'Emby'}${d.version ? ` · v${d.version}` : ''} · ${d.library_count ?? 0} 个媒体库`,
         }
       : { status: 'err', title: 'Emby 连接失败', detail: d.error || '未知错误' }
+    if (d.ok) autoDetectIfEmpty()
   } catch (e) {
     banner.value = { status: 'err', title: 'Emby 连接失败', detail: e instanceof Error ? e.message : '' }
   } finally {
