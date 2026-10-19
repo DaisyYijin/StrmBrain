@@ -103,8 +103,8 @@ const helpVisible = ref(false)
 const adoptVisible = ref(false)
 
 const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
-  { label: '标准模式（默认）', value: 'normal' },
-  { label: '快速模式', value: 'fast' },
+  { label: '快速模式（默认）', value: 'fast' },
+  { label: '标准模式', value: 'normal' },
 ]
 </script>
 
@@ -203,18 +203,8 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
     <div class="save-bar" :class="{ 'is-dirty': full.dirty.value }">
       <span class="save-note">{{ full.dirty.value ? '有未保存的改动' : '整库扫描请求量大，日常不用手动跑' }}</span>
       <HButton variant="tertiary" size="sm" :disabled="busy" @click="resetFullOptions">重置同步选项</HButton>
-      <!-- 配置改过没保存时由 runFull 里的确认框接管（那个框里也带着同一句话），
-           这里再弹一次 popconfirm 就成了连点两下 -->
-      <HPopconfirm v-if="!full.dirty.value" confirm-text="开始" :disabled="busy" @confirm="void runs.runFull()">
-        <HButton variant="secondary" size="sm" :disabled="busy" :loading="runs.runningFull.value">
-          <template #icon><Play :size="14" /></template>
-          开始全量同步
-        </HButton>
-        <template #content>
-          {{ runs.fullMode.value === 'fast' ? '确定用快速模式开始全量同步？' : '确定开始全量同步？整库扫描耗时较长。' }}
-        </template>
-      </HPopconfirm>
-      <HButton v-else variant="secondary" size="sm" :disabled="busy" :loading="runs.runningFull.value" @click="void runs.runFull()">
+      <!-- 开跑前的确认在 runFull 里（配置脏不脏都弹），这里别再套 popconfirm，否则要连点两下 -->
+      <HButton variant="secondary" size="sm" :disabled="busy" :loading="runs.runningFull.value" @click="void runs.runFull()">
         <template #icon><Play :size="14" /></template>
         开始全量同步
       </HButton>

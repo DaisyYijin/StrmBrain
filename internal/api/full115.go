@@ -196,7 +196,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		VideoExt  []string `json:"video_ext"`
 		ImageExt  []string `json:"image_ext"`
 		DataExt   []string `json:"data_ext"`
-		Mode      string   `json:"mode"` // normal(默认) / fast
+		Mode      string   `json:"mode"` // fast(界面默认) / normal
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Cid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：请填写 115 媒体库 cid"})

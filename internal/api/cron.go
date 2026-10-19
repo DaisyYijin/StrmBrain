@@ -177,6 +177,10 @@ func (h *Handler) fullParamsFromConfig() fullParams {
 	if p.LocalPath == "" {
 		p.LocalPath = defaultLocalPath
 	}
+	// 没选过模式按快速模式（与界面默认一致）；不可用时 collectSyncFiles 自己降级
+	if p.Mode == "" {
+		p.Mode = "fast"
+	}
 	return p
 }
 

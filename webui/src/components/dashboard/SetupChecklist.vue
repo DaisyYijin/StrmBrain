@@ -6,14 +6,13 @@
  * **这里不放任何配置表单**，只放跳转：同一份配置多一个编辑入口就多一处整存整取互相覆盖
  * （incr.cron 吃过一次）。唯一的例外是「一键创建工作目录」，它调的是账号页同一个接口、不带参数。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { Check, ChevronRight, X } from '@lucide/vue'
 import { dashboardApi, organizeApi } from '@/api'
 import type { SetupStatus, SetupStep } from '@/api/dashboard'
 import HButton from '@/components/hero/HButton.vue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
-import { setupReopenTick } from '@/composables/setupChecklist'
 
 const { message } = useFeedback()
 const status = ref<SetupStatus | null>(null)
@@ -28,7 +27,6 @@ async function load() {
   }
 }
 onMounted(load)
-watch(setupReopenTick, load)
 defineExpose({ load })
 
 /** 每一步去哪儿做。页签值都是各页 ?tab= 认的，别改 */
@@ -69,7 +67,7 @@ async function hide() {
   try {
     await dashboardApi.setupHide(true)
     if (status.value) status.value.hidden = true
-    message.success('已隐藏，可从右上角账号菜单「上手清单」重新打开')
+    message.success('已隐藏')
   } catch (e) {
     toastError(e, '操作失败')
   }

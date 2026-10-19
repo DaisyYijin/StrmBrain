@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ListChecks, LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
+import { LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
 import AppSidebar from './AppSidebar.vue'
 import MobileTabBar from './MobileTabBar.vue'
 import HButton from '@/components/hero/HButton.vue'
@@ -15,8 +15,6 @@ import { useQueueStore } from '@/stores/queue'
 import { refreshRecordStats } from '@/stores/recordStats'
 import { displayVersion, refreshUpdateStatus } from '@/stores/update'
 import { systemApi } from '@/api'
-import { toastError } from '@/composables/useFeedback'
-import { reopenSetupChecklist } from '@/composables/setupChecklist'
 
 const route = useRoute()
 const router = useRouter()
@@ -85,20 +83,10 @@ const desc = computed(() => (route.meta.desc as string) ?? '')
 watch(() => route.fullPath, () => (drawerOpen.value = false))
 
 const accountOptions = [
-  { label: '上手清单', key: 'setup', icon: ListChecks },
   { label: '退出登录', key: 'logout', icon: LogOut, danger: true },
 ]
 
-async function onAccount(key: string) {
-  if (key === 'setup') {
-    try {
-      await reopenSetupChecklist()
-      router.push({ name: 'dashboard' })
-    } catch (e) {
-      toastError(e, '打开失败')
-    }
-    return
-  }
+function onAccount(key: string) {
   if (key === 'logout') {
     auth.logout()
     router.push({ name: 'login' })

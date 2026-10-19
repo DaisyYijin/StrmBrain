@@ -18,7 +18,8 @@ export function defaultFull(): FullSyncConfig {
     video_ext: ['mp4', 'mkv', 'ts', 'avi', 'mov', 'rmvb', 'webm', 'flv', 'm2ts', 'wmv', 'mpg', 'iso'],
     image_ext: ['jpg', 'png', 'jpeg', 'webp'],
     data_ext: ['ass', 'srt', 'ssa', 'sub'],
-    mode: 'normal',
+    // 默认快速模式：不可用时 useStrmRuns 回落标准、后端也会自动降级
+    mode: 'fast',
     detect_orphans: false,
     refresh_emby: false,
     cron_enabled: false,

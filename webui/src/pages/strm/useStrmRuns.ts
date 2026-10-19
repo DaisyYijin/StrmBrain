@@ -12,7 +12,7 @@ import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
  * 全量页签又要知道快速模式可不可用 —— 所以抽出来由 SyncPage 持有一份，两处共用。
  */
 export function useStrmRuns(full: FullSetting) {
-  const { message } = useFeedback()
+  const { message, dialog } = useFeedback()
   const queue = useQueueStore()
 
   /**
@@ -67,6 +67,20 @@ export function useStrmRuns(full: FullSetting) {
       message.warning('请至少保留一个视频文件后缀')
       return
     }
+    // 全量要扫整个媒体库、请求量大，无论从哪儿点、配置脏不脏，开跑前都要用户点头一次
+    const mode: FullSyncMode = fastAvailable.value ? src.mode : 'normal'
+    const ok = await dialog.confirm({
+      title: '开始全量同步？',
+      content:
+        mode === 'fast'
+          ? '将用快速模式扫描整个媒体库并生成 STRM。快速模式请求少，接口不可用时会自动降级为标准模式。'
+          : '将用标准模式逐个目录扫描整个媒体库并生成 STRM，库大时耗时较长、115 请求较多。',
+      actions: [
+        { label: '取消', value: false, variant: 'tertiary' },
+        { label: '开始', value: true, variant: 'primary' },
+      ],
+    })
+    if (!ok) return
     runningFull.value = true
     try {
       const d = await syncApi.runFull({
@@ -75,7 +89,7 @@ export function useStrmRuns(full: FullSetting) {
         video_ext: src.video_ext,
         image_ext: src.image_ext,
         data_ext: src.data_ext,
-        mode: fastAvailable.value ? src.mode : 'normal',
+        mode,
       })
       message.success(d.message)
       await queue.submitted(d.job_id)
