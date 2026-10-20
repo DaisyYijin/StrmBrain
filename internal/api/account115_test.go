@@ -137,20 +137,6 @@ func TestCookieOfAndReadOnlyOps(t *testing.T) {
 	if err != nil || ops.acct != extra.ID || !strings.HasPrefix(ops.cookie, "UID=2_") {
 		t.Fatalf("附加账号的通道：%+v %v", ops, err)
 	}
-	// 附加账号的通道一律不许写网盘（这几个调用都在发请求之前就返回）
-	if _, err := ops.mkdir("0", "x"); err != errAcctReadOnly {
-		t.Errorf("mkdir：%v", err)
-	}
-	if err := ops.rename("1", "x"); err != errAcctReadOnly {
-		t.Errorf("rename：%v", err)
-	}
-	if err := ops.moveFiles("0", []string{"1"}); err != errAcctReadOnly {
-		t.Errorf("move：%v", err)
-	}
-	if err := ops.deleteFiles([]string{"1"}); err != errAcctReadOnly {
-		t.Errorf("delete：%v", err)
-	}
-
 	// 同一个 115 用户不能同时是主号和附加账号
 	if dup := h.acctDupOf(extra.ID, "UID=1_B2_z; SEID=s"); dup != "主账号" {
 		t.Errorf("和主号同一个用户：%q", dup)

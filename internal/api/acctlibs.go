@@ -23,9 +23,9 @@ import (
 //
 //   - 库存在 setting acct_libs（老版本读不到，回退时就像没有这些库），库 key = a{账号}:{cid}；
 //   - 直链 /d/{账号}~{pickcode}（主号不变），302 按账号段取那个账号的 Cookie；
-//   - 台账 FileID 存 a{账号}:{fid}、PickCode 存 {账号}~{pickcode}。两种都不是合法的 115 id：
-//     万一被哪条只认主号的老代码拿去调 115 接口，只会报错，不会动到主号的文件；
-//   - 洗版 / sha1 去重、订阅「库里已有」、深度删除、元数据回传都排除这些行（ledgerMainOnlySQL / isAcctLedgerFid）；
+//   - 台账 FileID 按 115 的 fid 原样存、另记 Account（2026-10-20 V2 改：fid 是 115 全局编号，见 model.SyncedFile），
+//     PickCode 存 {账号}~{pickcode}（和直链一致，不是合法的 115 pickcode：被只认主号的老代码拿去调接口只会报错）；
+//   - 洗版 / sha1 去重、订阅「库里已有」只看同一个账号的行（ledgerAcctSQL）；
 //   - 不写 PathCache（按路径查时不分账号）。
 //
 // 只靠全量同步更新（没有生活事件增量），另有 acctLibSyncTick 每 6 小时补一次只同步它们的全量。
@@ -160,26 +160,16 @@ func decodePlayID(id string) (uint, string) {
 	return uint(n), pc
 }
 
-// acctLedgerFid 台账里的 FileID：附加账号加 a{账号}: 前缀（fid 跨账号是否唯一没验证过，§14）
-func acctLedgerFid(acct uint, fid string) string {
-	if acct == acctMain || fid == "" {
-		return fid
-	}
-	return fmt.Sprintf("a%d:%s", acct, fid)
-}
+// ledgerAcctSQL 只看某个账号台账行的条件（洗版、sha1 去重、订阅「库里已有」：不做跨账号去重，
+// 让位也只能动同一个账号里的文件）。配 ? 的参数是账号 id
+const ledgerAcctSQL = "account = ?"
 
-// isAcctLedgerFid 台账行是不是附加账号的（主号的 fid 是纯数字）
-func isAcctLedgerFid(fid string) bool { return isAcctLibKey(fid) }
-
-// ledgerMainOnlySQL 只看主号台账行的条件（洗版、sha1 去重、订阅「库里已有」：不做跨账号去重）
-const ledgerMainOnlySQL = "file_id NOT LIKE 'a%:%'"
-
-// dropAcctLedgerRows 去掉附加账号的台账行，返回去掉了几行（深度删除等会改网盘的入口用）
-func dropAcctLedgerRows(rows []model.SyncedFile) ([]model.SyncedFile, int) {
+// dropAcctLedgerRows 去掉不在这个账号的台账行，返回去掉了几行
+func dropAcctLedgerRows(rows []model.SyncedFile, acct uint) ([]model.SyncedFile, int) {
 	keep := rows[:0:0]
 	n := 0
 	for _, r := range rows {
-		if isAcctLedgerFid(r.FileID) {
+		if r.Account != acct {
 			n++
 			continue
 		}
@@ -261,4 +251,33 @@ func (h *Handler) enqueueAcctLibSync(title, source string, priority int) (model.
 		log.Printf("[同步] ✗ 附加账号的库同步入队失败: %v", err)
 	}
 	return job, err
+}
+
+// MigrateAcctLedgerIDs 早先（V2 之前的阶段 3）别的账号的台账行 fid 存成了 a{账号}:{fid}：
+// 换成原样的 fid + Account（幂等，没有这种行时一次查询就结束）。撞上同 fid 的行就删掉带前缀的那条
+func MigrateAcctLedgerIDs(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	var rows []model.SyncedFile
+	db.Where("file_id LIKE 'a%:%'").Find(&rows)
+	fixed := 0
+	for _, r := range rows {
+		acct, fid, ok := splitAcctLibKey(r.FileID)
+		if !ok {
+			continue
+		}
+		var n int64
+		db.Model(&model.SyncedFile{}).Where("file_id = ?", fid).Count(&n)
+		if n > 0 {
+			db.Delete(&model.SyncedFile{}, r.ID)
+			continue
+		}
+		if db.Model(&model.SyncedFile{}).Where("id = ?", r.ID).Updates(map[string]any{"file_id": fid, "account": acct}).Error == nil {
+			fixed++
+		}
+	}
+	if fixed > 0 {
+		log.Printf("[媒体库] ✓ %d 条别的账号的台账行改成原样的 fid + 账号", fixed)
+	}
 }

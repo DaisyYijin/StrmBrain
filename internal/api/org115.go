@@ -29,31 +29,47 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	if _, err := loadTmdbClient(); err != nil {
 		return nil, nil, fmt.Errorf("未执行：%w", err)
 	}
+	if msg := mediaRootProblem(); msg != "" {
+		return nil, nil, fmt.Errorf("未执行：%s", msg)
+	}
 	orgStart := time.Now()
 	log.Printf("[整理] ▶ 开始整理 %s", time.Now().Format("15:04:05"))
 	steps := []gin.H{}
 
-	orgCfg, err := h.loadOrgConfig()
+	// 一个库一轮（orgconfigv2.go）：放进哪个库的转存文件夹就整理进哪个库，用那个库所在账号的通道
+	runs, problems, err := h.organizeRuns()
 	if err != nil {
 		return append(steps, gin.H{"step": "整理", "status": "跳过", "message": err.Error()}), nil, err
 	}
-
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return append(steps, gin.H{"step": "整理", "status": "失败", "message": err.Error()}), nil, err
+	for _, p := range problems {
+		steps = append(steps, gin.H{"step": "整理", "status": "失败", "message": p})
 	}
-	ops.suppress = true // 整理自产的网盘变更不该再被增量同步处理一遍
-
-	sink := h.newOrgSink(orgCfg.Library)
+	var all []OrganizeResult
+	successCount := 0
 	logFn := func(msg string) { log.Println(msg) }
-	orgResults, successCount := runOrganizeEngine(ops, orgCfg, sink, logFn)
+	for _, run := range runs {
+		if jobStopRequested() {
+			break
+		}
+		if run.lib.ID != 0 && len(runs) > 1 {
+			log.Printf("[整理] ▶ 媒体库「%s」", run.lib.Name)
+		}
+		sink := h.newOrgSinkFor(run.cfg)
+		results, ok := runOrganizeEngine(run.ops, run.cfg, sink, logFn)
+		successCount += ok
+		// 刮削与 Emby 刷新按片目聚合，一部剧只做一次
+		if n := sink.strmTotal(); n > 0 {
+			steps = append(steps, gin.H{"step": "STRM 生成", "status": "完成",
+				"message": fmt.Sprintf("%s整理时直接生成 %d 个 STRM（无需等待增量同步）", libStepPrefix(run.lib), n)})
+		}
+		sink.flushScrape()
+		sink.flushRefresh()
+		finishOrganize(sink, results, orgStart)
+		all = append(all, results...)
+	}
 
-	// 原来这里还要「顺带扫一遍转存目录」：转存与待整理已合成一个目录（stagingdir.go），
-	// 上面扫的就是它
-
-	totalFiles := len(orgResults)
 	existsCount, failedCount, awaitingCount := 0, 0, 0
-	for _, r := range orgResults {
+	for _, r := range all {
 		switch r.Status {
 		case "exists":
 			existsCount++
@@ -63,23 +79,23 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 			awaitingCount++
 		}
 	}
-	msg := fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)
+	msg := fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", len(all), successCount, existsCount, failedCount)
 	if awaitingCount > 0 {
 		msg += fmt.Sprintf("，待人工确认 %d", awaitingCount)
 	}
 	steps = append(steps, gin.H{"step": "整理", "status": "完成", "message": msg})
-
-	// ---- 收尾：刮削与 Emby 刷新按片目聚合，一部剧只做一次 ----
-	strmCreated := sink.strmTotal()
-	if strmCreated > 0 {
-		steps = append(steps, gin.H{"step": "STRM 生成", "status": "完成",
-			"message": fmt.Sprintf("整理时直接生成 %d 个 STRM（无需等待增量同步）", strmCreated)})
+	if len(runs) == 0 && len(problems) > 0 {
+		return steps, all, fmt.Errorf("%s", strings.Join(problems, "；"))
 	}
-	sink.flushScrape()
-	sink.flushRefresh()
+	return steps, all, nil
+}
 
-	finishOrganize(sink, orgResults, orgStart)
-	return steps, orgResults, nil
+// libStepPrefix 多个库时步骤摘要前面带上库名
+func libStepPrefix(lib model.Library) string {
+	if lib.Name == "" {
+		return ""
+	}
+	return "「" + lib.Name + "」"
 }
 
 // finishOrganize 整理收尾：按部汇总 + 完成行（都只进日志）。
@@ -227,7 +243,7 @@ func (h *Handler) RunOrganizePipeline(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.loadOrgConfig(); err != nil {
+	if err := h.organizeReady(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

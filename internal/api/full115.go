@@ -660,7 +660,7 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 			st.StrmExisting++
 		}
 		videoRows = append(videoRows, model.SyncedFile{
-			FileID: f.ledgerFid(), PickCode: f.playID(),
+			FileID: f.ledgerFid(), PickCode: f.playID(), Account: f.Acct,
 			RelPath: strmRel, Kind: "video", Size: f.Size, Sha1: f.Sha1,
 		})
 	}
@@ -735,10 +735,13 @@ func upsertSyncedFile(db *gorm.DB, f remoteFile, relPath, kind string) {
 	if db == nil || f.Fid == "" {
 		return
 	}
-	sf := model.SyncedFile{FileID: f.ledgerFid(), PickCode: f.playID(), RelPath: relPath, Kind: kind, Size: f.Size, Sha1: f.Sha1}
+	sf := model.SyncedFile{FileID: f.ledgerFid(), PickCode: f.playID(), RelPath: relPath, Kind: kind, Size: f.Size, Sha1: f.Sha1, Account: f.Acct}
+	if ledgerFidTaken(db, []model.SyncedFile{sf})[sf.FileID] {
+		return
+	}
 	db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "file_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"pick_code", "rel_path", "kind", "size", "sha1", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"pick_code", "rel_path", "kind", "size", "sha1", "account", "updated_at"}),
 	}).Create(&sf)
 }
 
@@ -747,9 +750,20 @@ func upsertSyncedFiles(db *gorm.DB, sfs []model.SyncedFile) {
 	if db == nil || len(sfs) == 0 {
 		return
 	}
+	if taken := ledgerFidTaken(db, sfs); len(taken) > 0 {
+		keep := sfs[:0:0]
+		for _, sf := range sfs {
+			if !taken[sf.FileID] {
+				keep = append(keep, sf)
+			}
+		}
+		if sfs = keep; len(sfs) == 0 {
+			return
+		}
+	}
 	db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "file_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"pick_code", "rel_path", "kind", "size", "sha1", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"pick_code", "rel_path", "kind", "size", "sha1", "account", "updated_at"}),
 	}).CreateInBatches(&sfs, 200)
 }
 
@@ -1039,4 +1053,26 @@ func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f
 	}
 	markFreshStrm(strmPath) // 入库确认后只探新写出的（embyfresh.go）
 	return strmRel, true, nil
+}
+
+// ledgerFidTaken 这些行里，fid 已经被**别的账号**的台账行占着的（返回这些 fid）。
+// 115 的 fid 是全局编号（model.SyncedFile），正常不会撞；真撞上了不覆盖别的账号的行、记一行日志，
+// 宁可这个文件这次不进台账，也不能把两个账号的文件串成一行（MULTI-ACCOUNT-V2-PLAN.md §10）
+func ledgerFidTaken(db *gorm.DB, sfs []model.SyncedFile) map[string]bool {
+	byAcct := map[uint][]string{}
+	for _, sf := range sfs {
+		byAcct[sf.Account] = append(byAcct[sf.Account], sf.FileID)
+	}
+	taken := map[string]bool{}
+	for acct, fids := range byAcct {
+		for _, batch := range chunkStrings(fids, 500) {
+			var rows []model.SyncedFile
+			db.Select("file_id", "account", "rel_path").Where("file_id IN ? AND account <> ?", batch, acct).Find(&rows)
+			for _, r := range rows {
+				taken[r.FileID] = true
+				log.Printf("[同步] ✗ fid %s 已经是账号 %d 的文件（%s），账号 %d 的同一个 fid 没写进台账：115 的 fid 跨账号撞了，请反馈", r.FileID, r.Account, r.RelPath, acct)
+			}
+		}
+	}
+	return taken
 }

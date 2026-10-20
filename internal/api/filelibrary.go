@@ -164,6 +164,15 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	rec := libTitleRecord(it, fp.Cid, rel, catMT, files)
 	// 片目现在在哪个库：重新整理据此认旧的本地产物（分类规则指定别的库时会整部搬过去）
 	rec.LibCid = recordLibCid(chain[chainRoleIndex(chain, roles, "library")].Cid)
+	if libs := loadLibraries(); len(libs) > 0 {
+		cids := make([]string, 0, len(chain))
+		for _, c := range chain {
+			cids = append(cids, c.Cid)
+		}
+		if lib, _, ok := libOfChain(libs, acctMain, cids); ok {
+			rec.LibID, rec.Account = lib.ID, lib.Account // 重新整理按它回这个库（orgconfigv2.go）
+		}
+	}
 	if rec.VideoCount == 0 {
 		return jobOutcome{}, errors.New("片目里没有视频文件")
 	}

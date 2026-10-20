@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"115-station/internal/model"
+	"github.com/gin-gonic/gin"
 )
 
 func tmdbSetupRequest(t *testing.T, handler gin.HandlerFunc, body string) *httptest.ResponseRecorder {
@@ -68,7 +68,7 @@ func TestTmdbSetupBlocksOrganizeAndReportsFailure(t *testing.T) {
 		t.Fatalf("缺少配置的整理不该入队: %d", len(q))
 	}
 	beginTask("后台整理")
-	_, _, err := h.executeOrganizeWithConfig(nil)
+	_, _, err := h.executeOrganize()
 	endTask()
 	runs := recentFinishedJobs(1)
 	if err == nil || len(runs) == 0 || runs[0].Status != jobFailed || !strings.Contains(runs[0].Message, "TMDB") {

@@ -372,7 +372,7 @@ func libEpisodeLedger(libName string) episodeLedger {
 		inDir: func(rel string) []model.SyncedFile { return libraryFilesOf(rel, libName) },
 		bySha1: func(sha1 string) []model.SyncedFile {
 			var rows []model.SyncedFile
-			model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerMainOnlySQL, sha1).Find(&rows)
+			model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerAcctSQL, sha1, acctMain).Find(&rows)
 			return rows
 		},
 	}
@@ -458,7 +458,7 @@ func (h *Handler) SubmitFileEpisodes(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.loadOrgConfig(); err != nil {
+	if _, err := h.orgConfigForChain(req.Chain); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -498,15 +498,15 @@ func execLibEpisodeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, err
 	}
 	ops.suppress = true // 整理自产：洗版让位、移「已存在」都登记事件抑制（§6.8）
-	cfg, err := h.loadOrgConfig()
-	if err != nil {
-		return jobOutcome{}, err
-	}
 	chain, err := h.resolveBrowseChain(fp.Cid, fp.Chain)
 	if err != nil {
 		if errors.Is(err, errDirGone) {
 			return jobOutcome{}, errors.New("文件所在的目录已不存在（被删除或移动了），请刷新后重选")
 		}
+		return jobOutcome{}, err
+	}
+	cfg, err := h.orgConfigForChain(chain) // 片目在哪个库就按哪个库（orgconfigv2.go）
+	if err != nil {
 		return jobOutcome{}, err
 	}
 	ctx, err := h.prepareEpisodeContext(chain, fp.Items)

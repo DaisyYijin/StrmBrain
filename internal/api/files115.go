@@ -64,8 +64,8 @@ type remoteFile struct {
 	Acct uint `json:"acct,omitempty"`
 }
 
-// ledgerFid 这个文件在台账里的 FileID（附加账号带前缀，acctlibs.go）
-func (f remoteFile) ledgerFid() string { return acctLedgerFid(f.Acct, f.Fid) }
+// ledgerFid 这个文件在台账里的 FileID：就是 115 的 fid（全局编号，账号另记在 SyncedFile.Account）
+func (f remoteFile) ledgerFid() string { return f.Fid }
 
 // playID 这个文件在直链与台账里的播放标识（附加账号是 {账号}~{pickcode}）
 func (f remoteFile) playID() string { return encodePlayID(f.Acct, f.PickCode) }

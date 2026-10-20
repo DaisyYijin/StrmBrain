@@ -53,7 +53,7 @@ func (h *Handler) OrganizeFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.loadOrgConfig(); err != nil {
+	if _, err := h.orgConfigForChain(req.Chain); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -115,10 +115,6 @@ func execFileOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	defer resetFileListCache()
 
-	cfg, err := h.loadOrgConfig()
-	if err != nil {
-		return jobOutcome{}, err
-	}
 	tc, err := loadTmdbClient()
 	if err != nil {
 		return jobOutcome{}, err
@@ -139,6 +135,10 @@ func execFileOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	roles := h.workspaceRoles()
 	if err := orgPickPrecheck(chain, roles, fp.Items); err != nil {
+		return jobOutcome{}, err
+	}
+	cfg, err := h.orgConfigForChain(chain) // 在哪个库的转存文件夹里就整理进哪个库（orgconfigv2.go）
+	if err != nil {
 		return jobOutcome{}, err
 	}
 
@@ -166,9 +166,9 @@ func execFileOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	logFn := func(msg string) { log.Println("[整理] " + msg) }
 	libAbs := ""
 	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library)
+		libAbs = orgDirAbs(ops, cfg.Library)
 	}
-	sink := h.newOrgSink(cfg.Library)
+	sink := h.newOrgSinkFor(cfg)
 	ctx := &orgCtx{ops: ops, cfg: &rcfg, tc: tc, rules: loadReplaceRules(), libAbs: libAbs, sink: sink,
 		pruner: newDirPruner(ops, orgProtectedCids(cfg), logFn), onLog: logFn, forced: forced,
 		held: loadAwaiting(), handled: map[string]bool{}}

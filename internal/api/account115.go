@@ -27,16 +27,13 @@ import (
 // 这一阶段刻意不做的：
 //   - 附加账号的 OpenAPI：只支持扫码 / 手动导入 Cookie（开放平台要每个账号各申请一个 AppID，阶段 3 再看要不要）；
 //   - 按账号分节流队列：附加账号的请求照旧排进主号那条全局队列，只会更慢不会更快。拆不拆要等阶段 0 实测风控按账号还是按 IP 算；
-//   - 写操作：附加账号的 pan115Ops 一律拒绝 move / rename / delete / mkdir（acctReadOnly），防止哪条路误拿它去改网盘；
+//   - 写操作：阶段 2 时附加账号的通道只读；2026-10-20 V2 起各账号平等、都能整理（MULTI-ACCOUNT-V2-PLAN.md），放开了；
 //   - 路径缓存：附加账号的目录不写 PathCache（那张表按路径查时不分账号，两个账号都有「/影视」就会串）。
 //
 // 界面默认藏着（STATION_MULTI_ACCOUNT=1 才显示）：阶段 3 之前附加账号登录了也挂不了库，露出来只会让人困惑。
 
 // acctMain 主号在代码里的账号 id
 const acctMain uint = 0
-
-// errAcctReadOnly 附加账号的通道不许写网盘
-var errAcctReadOnly = errors.New("附加账号只能读，不能改动网盘上的文件")
 
 // multiAccountUIEnabled 界面是否显示附加账号（阶段 3 完成前默认关）
 func multiAccountUIEnabled() bool {

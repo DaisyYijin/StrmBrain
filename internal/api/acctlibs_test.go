@@ -49,19 +49,13 @@ func TestPlayIDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAcctLedgerIDs(t *testing.T) {
-	if acctLedgerFid(acctMain, "123") != "123" || acctLedgerFid(3, "123") != "a3:123" {
-		t.Fatal("台账 fid 前缀")
-	}
-	if !isAcctLedgerFid("a3:123") || isAcctLedgerFid("123") || isAcctLedgerFid("abc") {
-		t.Fatal("认附加账号的台账行")
-	}
-	rows := []model.SyncedFile{{FileID: "1"}, {FileID: "a3:2"}, {FileID: "3"}}
-	kept, n := dropAcctLedgerRows(rows)
+func TestDropAcctLedgerRows(t *testing.T) {
+	rows := []model.SyncedFile{{FileID: "1"}, {FileID: "2", Account: 3}, {FileID: "3"}}
+	kept, n := dropAcctLedgerRows(rows, acctMain)
 	if n != 1 || len(kept) != 2 || kept[1].FileID != "3" {
-		t.Fatalf("去掉附加账号的行：%v %d", kept, n)
+		t.Fatalf("只留主号的行：%v %d", kept, n)
 	}
-	if len(rows) != 3 || rows[1].FileID != "a3:2" {
+	if len(rows) != 3 || rows[1].FileID != "2" {
 		t.Fatal("不该改到传进来的切片")
 	}
 }
@@ -174,7 +168,7 @@ func TestApplySyncResultsAcctFiles(t *testing.T) {
 	root := t.TempDir()
 	videos := []remoteFile{
 		{Fid: "11", Name: "主号片.mkv", Path: "影视/电影/主号片", PickCode: "pcmain"},
-		{Fid: "11", Name: "副号片.mkv", Path: "副号电影/副号片", PickCode: "pcextra", Acct: 2},
+		{Fid: "12", Name: "副号片.mkv", Path: "副号电影/副号片", PickCode: "pcextra", Acct: 2},
 	}
 	st := applySyncResults(model.DB, &pan115Ops{}, videos, nil, root, "http://h:6086", "pick_code", false, false, "")
 	if st.StrmCreated != 2 {
@@ -185,17 +179,44 @@ func TestApplySyncResultsAcctFiles(t *testing.T) {
 	if string(main) != "http://h:6086/d/pcmain" || string(extra) != "http://h:6086/d/2~pcextra" {
 		t.Fatalf("直链：%q / %q", main, extra)
 	}
-	// 同一个 fid 在两个账号里也不打架：附加账号的台账行带前缀
+	// 台账：fid 原样、另记账号
 	var rows []model.SyncedFile
 	model.DB.Order("file_id").Find(&rows)
-	if len(rows) != 2 || rows[0].FileID != "11" || rows[1].FileID != "a2:11" || rows[1].PickCode != "2~pcextra" {
+	if len(rows) != 2 || rows[0].FileID != "11" || rows[0].Account != 0 || rows[1].FileID != "12" || rows[1].Account != 2 || rows[1].PickCode != "2~pcextra" {
 		t.Fatalf("台账：%+v", rows)
 	}
-	// 洗版 / sha1 去重不看附加账号的行
+	// 洗版 / sha1 去重只看同一个账号
 	model.DB.Model(&model.SyncedFile{}).Where("1 = 1").Update("sha1", "S")
-	w := newWashScanner(nil, &OrgConfig{})
-	if got := w.sameFile("S"); len(got) != 1 || got[0].FileID != "11" {
-		t.Fatalf("sha1 去重只看主号：%+v", got)
+	if got := newWashScanner(nil, &OrgConfig{}).sameFile("S"); len(got) != 1 || got[0].FileID != "11" {
+		t.Fatalf("主号的整理只看主号：%+v", got)
+	}
+	if got := newWashScanner(&pan115Ops{acct: 2}, &OrgConfig{}).sameFile("S"); len(got) != 1 || got[0].FileID != "12" {
+		t.Fatalf("账号 2 的整理只看账号 2：%+v", got)
+	}
+	// fid 跨账号撞了：不覆盖别的账号的行
+	clash := []remoteFile{{Fid: "11", Name: "撞号.mkv", Path: "副号电影/撞号", PickCode: "pcx", Acct: 2}}
+	applySyncResults(model.DB, &pan115Ops{}, clash, nil, root, "http://h:6086", "pick_code", false, false, "")
+	var r11 model.SyncedFile
+	model.DB.Where("file_id = ?", "11").First(&r11)
+	if r11.Account != 0 || r11.RelPath != "影视/电影/主号片/主号片.strm" {
+		t.Fatalf("撞号时主号那行不能被改：%+v", r11)
+	}
+}
+
+func TestMigrateAcctLedgerIDs(t *testing.T) {
+	newTestDB(t, "acctmig.db")
+	model.DB.Create(&model.SyncedFile{FileID: "a2:77", RelPath: "副号/a.strm", Kind: "video"})
+	model.DB.Create(&model.SyncedFile{FileID: "a2:88", RelPath: "副号/b.strm", Kind: "video"})
+	model.DB.Create(&model.SyncedFile{FileID: "88", RelPath: "主号/b.strm", Kind: "video"})
+	MigrateAcctLedgerIDs(model.DB)
+	var r model.SyncedFile
+	if model.DB.Where("file_id = ?", "77").First(&r).Error != nil || r.Account != 2 {
+		t.Fatalf("前缀行应换成原样 fid + 账号：%+v", r)
+	}
+	var n int64
+	model.DB.Model(&model.SyncedFile{}).Where("file_id LIKE 'a%:%'").Count(&n)
+	if n != 0 {
+		t.Fatal("撞上同 fid 的前缀行应删掉")
 	}
 }
 

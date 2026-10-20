@@ -119,7 +119,7 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 	}
 	res := OrganizeResult{FileName: source, Status: orgStatusAwaiting}
 	if media != nil {
-		category, libVal := classifyTarget(media)
+		category, libVal := classifyTargetFor(c.cfg, media)
 		// 预览落进哪个媒体库：认不出就留空，确认入库时 classify 会报出来
 		if cid, bySource, err := c.pickLib(libVal); err == nil {
 			if cid != c.cfg.Library {
@@ -179,15 +179,48 @@ type confirmPick struct {
 // confirmAwaiting 按确认结果把一批待确认条目走完后半条流水线。
 // pick 非空 = 用户改指定（只用于单条）。返回每条记录处理后的最新状态
 func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick) ([]model.OrganizeRecord, error) {
-	cfg, err := h.loadOrgConfig()
-	if err != nil {
-		return nil, err
+	// 一个库一组（orgconfigv2.go）：每条记录回它自己那个库的配置与账号通道
+	type group struct {
+		cfg  *OrgConfig
+		ops  *pan115Ops
+		recs []model.OrganizeRecord
 	}
+	var groups []*group
+	byKey := map[string]*group{}
+	for _, rec := range recs {
+		cfg, ops, err := h.orgConfigForRecord(&rec)
+		if err != nil {
+			if len(recs) == 1 {
+				return nil, err
+			}
+			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(withJobID(map[string]interface{}{
+				"status": "failed", "stage": "confirm", "message": err.Error(),
+			}))
+			continue
+		}
+		key := fmt.Sprintf("%d|%d|%s", cfg.LibID, cfg.Account, cfg.Library)
+		g := byKey[key]
+		if g == nil {
+			g = &group{cfg: cfg, ops: ops}
+			byKey[key] = g
+			groups = append(groups, g)
+		}
+		g.recs = append(g.recs, rec)
+	}
+	var out []model.OrganizeRecord
+	for _, g := range groups {
+		part, err := h.confirmAwaitingIn(g.cfg, g.ops, g.recs, pick)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, part...)
+	}
+	return out, nil
+}
+
+// confirmAwaitingIn 同一个库的一批待确认条目
+func (h *Handler) confirmAwaitingIn(cfg *OrgConfig, ops *pan115Ops, recs []model.OrganizeRecord, pick *confirmPick) ([]model.OrganizeRecord, error) {
 	tc, err := loadTmdbClient()
-	if err != nil {
-		return nil, err
-	}
-	ops, err := h.newPan115Ops()
 	if err != nil {
 		return nil, err
 	}
@@ -196,9 +229,9 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 	logFn := func(msg string) { log.Println("[整理] " + msg) }
 	libAbs := ""
 	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library)
+		libAbs = orgDirAbs(ops, cfg.Library)
 	}
-	sink := h.newOrgSink(cfg.Library)
+	sink := h.newOrgSinkFor(cfg)
 	pruner := newDirPruner(ops, orgProtectedCids(cfg), logFn)
 	rules := loadReplaceRules()
 
@@ -348,11 +381,7 @@ func (h *Handler) IgnoreOrganizeRecord(c *gin.Context) {
 
 // ignoreAwaiting 忽略一条待确认记录：移到冗余，记录改成未识别。调用方持有 taskMu
 func (h *Handler) ignoreAwaiting(rec *model.OrganizeRecord) (string, error) {
-	cfg, err := h.loadOrgConfig()
-	if err != nil {
-		return "", err
-	}
-	ops, err := h.newPan115Ops()
+	cfg, ops, err := h.orgConfigForRecord(rec) // 回它自己那个库的账号：冗余文件夹每个账号一份
 	if err != nil {
 		return "", err
 	}

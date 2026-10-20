@@ -82,6 +82,9 @@ var errNoOrganizeLib = errors.New("没有本站整理的媒体库，整理停着
 
 // noOrganizeLibNow 配了媒体库、却一个本站整理的都没有（没配媒体库不算：那是另一个报错）
 func noOrganizeLibNow() bool {
+	if libs := loadLibraries(); len(libs) > 0 {
+		return len(organizeLibs(libs)) == 0 // 媒体库表：设了转存文件夹的库才整理（orgconfigv2.go）
+	}
 	cids := parseFullCfg(settingValueCompat("full")).libCids()
 	return len(cids) > 0 && loadLibOpts().fallbackOf(cids) == ""
 }

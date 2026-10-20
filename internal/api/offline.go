@@ -227,20 +227,12 @@ func (h *Handler) runTransferOrganize() (int, *incrSummary, error) {
 
 	start := time.Now()
 
-	// 整理：扫转存/待整理目录（loadOrgConfig 的扫描根就是它，stagingdir.go）
+	// 整理：每个库扫自己的转存文件夹（executeOrganize 按库跑，orgconfigv2.go）
 	organized := 0 // 本轮整理处理了几个条目（0 且增量也没产出 = 空转，任务历史里不留）
-	if orgCfg, err := h.loadOrgConfig(); err != nil {
-		log.Printf("[上传] ○ 整理跳过（配置缺失）: %v", err)
-	} else if h.pendingOverlapsLibraries(orgCfg) {
-		// 转存/待整理目录与媒体库存在包含关系（建在了库里，或覆盖整个库）：
-		// 扫描会波及库内容，直接放弃本次自动整理（引擎层守卫之外的第二道防线）
-		log.Printf("[上传] ⚠ 转存/待整理目录与媒体库存在包含关系，跳过自动整理以防误搬库内容，请到「自动整理 → 基础配置」修正")
+	if _, details, orgErr := h.executeOrganize(); orgErr != nil {
+		log.Printf("[上传] ○ 转存目录整理失败: %v", orgErr)
 	} else {
-		_, details, orgErr := h.executeOrganizeWithConfig(orgCfg)
 		organized = len(details)
-		if orgErr != nil {
-			log.Printf("[上传] ○ 转存/待整理目录整理失败: %v", orgErr)
-		}
 	}
 
 	// 增量同步：切到自己的阶段、清掉整理的计数，否则任务详情会把增量耗的时间都算在「整理 1/1」头上
@@ -430,30 +422,28 @@ func (w *transferWatch) tick(h *Handler) {
 	if noOrganizeLibNow() {
 		return // 没有本站整理的库：整理线停着，转存目录里的东西本来就不会动，别每分钟去列一次、再一路计数到熔断
 	}
-	cid := h.shareFolderCid()
-	if cid == "" {
-		return
-	}
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return
-	}
-	entries, _, err := ops.listEntries(cid, 0)
-	if err != nil {
-		if w.lastJob != 0 {
-			// 复查失败≠未清空：不计失败次数（此前三次瞬时抖动就误触 30 分钟熔断）
-			log.Printf("[守望] ○ 复查转存目录失败（不计失败次数）: %v", err)
+	// 每个要整理的库各看一眼自己的转存文件夹（orgconfigv2.go），合起来算还有几个条目
+	n := 0
+	for _, d := range h.watchStagingDirs() {
+		entries, _, err := d.ops.listEntries(d.cid, 0)
+		if err != nil {
+			if w.lastJob != 0 {
+				// 复查失败≠未清空：不计失败次数（此前三次瞬时抖动就误触 30 分钟熔断）
+				log.Printf("[守望] ○ 复查转存目录失败（不计失败次数）: %v", err)
+			}
+			return
 		}
-		return
-	}
-	// 只剩等人工确认的条目也算「没活」，否则每轮空跑一次再被熔断。
-	// 绑定了媒体库的子目录本身不算条目，算它里面的（stagingsub.go）
-	n, err := countStagingUnheld(func(cid string) ([]map[string]interface{}, error) { return listAllEntries(ops, cid) }, entries, stagingLibMap(loadStagingLibs()))
-	if err != nil {
-		if w.lastJob != 0 {
-			log.Printf("[守望] ○ 复查转存子目录失败（不计失败次数）: %v", err)
+		// 只剩等人工确认的条目也算「没活」，否则每轮空跑一次再被熔断。
+		// 绑定了媒体库的子目录本身不算条目，算它里面的（stagingsub.go）
+		ops := d.ops
+		k, err := countStagingUnheld(func(cid string) ([]map[string]interface{}, error) { return listAllEntries(ops, cid) }, entries, d.subs)
+		if err != nil {
+			if w.lastJob != 0 {
+				log.Printf("[守望] ○ 复查转存子目录失败（不计失败次数）: %v", err)
+			}
+			return
 		}
-		return
+		n += k
 	}
 	w.decide(h, n, now)
 }

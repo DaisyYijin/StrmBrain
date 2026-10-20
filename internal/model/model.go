@@ -181,6 +181,10 @@ type SyncedFile struct {
 	RelPath  string `json:"rel_path" gorm:"size:500;not null;index"` // 相对本地库根的路径（含文件名）
 	Kind     string `json:"kind" gorm:"size:10;index"`               // video / asset
 	Size     int64  `json:"size"`
+	// Account 这个文件在哪个 115 账号上（0 = 主账号，其他是 Storage.ID）。
+	// FileID 按 115 的 fid 原样存：fid 是 115 全局的编号（openStrm 多账号也按 file_id 一个主键存），
+	// 万一撞了，写台账时 applySyncResults 拒绝覆盖别的账号的行（不悄悄串号）
+	Account uint `json:"account" gorm:"index;default:0"`
 	// OrphanAt 最近一次「完整」全量扫描中该文件在网盘上已不存在的时刻。
 	// 非空即为失效 STRM 候选：本地 strm/附属还在，源文件没了（网页版手动删除、
 	// 增量同步停机期间的变动等生活事件漏掉的情况）。只做标记不自动删除，
@@ -453,6 +457,10 @@ type OrganizeRecord struct {
 	TargetCid  string `json:"target_cid" gorm:"size:64"`
 	// LibCid TargetDir 在哪个媒体库：空 = 主媒体库（老记录都是空），附加媒体库记它的 cid
 	LibCid string `json:"lib_cid" gorm:"size:64"`
+	// LibID 落进哪个媒体库（Library.ID，2026-10-20 V2）。老记录为 0，按 LibCid 认（orgLibOfRecord）
+	LibID uint `json:"lib_id" gorm:"index;default:0"`
+	// Account 在哪个 115 账号上整理的（0 = 主账号）；重新整理、确认入库都用这个账号的通道
+	Account uint `json:"account" gorm:"default:0"`
 	// LibBySource 库是按来源定的（条目来自绑定了媒体库的转存子目录，stagingsub.go）。
 	// 重新整理时这种记录留在原库，不再按分类规则改库：来源子目录事后可能已经不在、或改绑了
 	LibBySource bool `json:"lib_by_source"`

@@ -89,10 +89,17 @@ type deepDelResult struct {
 func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDelResult, error) {
 	cfg := h.loadDeepDelCfg()
 	res := deepDelResult{}
-	// 附加账号的库不深删（MULTI-ACCOUNT-PLAN.md §5.5）：它的台账 fid 带账号前缀，主号的通道也删不到它
-	if kept, n := dropAcctLedgerRows(rows); n > 0 {
-		log.Printf("[深度删除] ○ %d 个文件属于附加账号的库，不深删（只动本地的事交给失效 STRM 清理）", n)
-		rows = kept
+	// 深删按账号（MULTI-ACCOUNT-V2-PLAN.md §10.1）：别的账号的文件交给它自己的通道删，这一批只删一个账号的
+	if acct, mixed := deepDelAccountOf(rows); mixed {
+		var rest []model.SyncedFile
+		rows, rest = splitRowsByAccount(rows, acct)
+		if len(rest) > 0 {
+			defer func() {
+				if _, err := h.runDeepDelete(rest, reason); err != nil {
+					log.Printf("[深度删除] ✗ 另一个账号的 %d 个文件删除失败: %v", len(rest), err)
+				}
+			}()
+		}
 	}
 	if len(rows) == 0 {
 		return res, nil
@@ -117,7 +124,8 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 		return res, nil
 	}
 
-	ops, err := h.newPan115Ops()
+	acct := rows[0].Account // 上面已经按账号拆好了，这一批是同一个账号的
+	ops, err := h.opsFor(acct)
 	if err != nil {
 		return res, fmt.Errorf("115 通道不可用: %w", err)
 	}
@@ -144,8 +152,11 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 
 	// 空目录清理放在删除之后：目录要空了才判得出来，而目录本身不会因为删文件消失，
 	// 逐级按名字查 cid 这条路删完照样走得通
-	if cfg.prunePanDirs() {
+	if cfg.prunePanDirs() && acct == acctMain {
 		res.PanDirs = h.pruneDeepDelDirsByLib(ops, rows)
+	} else if cfg.prunePanDirs() {
+		// 别的账号的库按名字逐级找目录那一套还没接（要它自己的库根），只删文件、空目录留着（可手动删）
+		log.Printf("[深度删除] ○ 别的账号（%d）的库暂不清网盘空目录，只删了文件", acct)
 	}
 
 	log.Printf("[深度删除] ✓ %s：删除网盘文件 %d 个（视频 %d / 附属 %d），空目录 %d 个",
@@ -287,11 +298,9 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 	cids := resolveDeepDelDirCids(ops, rootCid, rels)
 
 	guard := map[string]bool{rootCid: true, "0": true}
-	if cfg, err := h.loadOrgConfig(); err == nil && cfg != nil {
-		for _, cid := range orgProtectedCids(cfg) {
-			if cid != "" {
-				guard[cid] = true
-			}
+	for _, cid := range h.allOrgProtectedCids() {
+		if cid != "" {
+			guard[cid] = true
 		}
 	}
 	// 深的先处理：季目录删掉之后，标题目录才可能跟着空
@@ -613,4 +622,30 @@ func (h *Handler) ListDeepDeleteRecords(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size})
+}
+
+// deepDelAccountOf 这批台账行属于哪个账号；mixed = 不止一个账号（要拆开各用各的通道删）
+func deepDelAccountOf(rows []model.SyncedFile) (uint, bool) {
+	if len(rows) == 0 {
+		return acctMain, false
+	}
+	first := rows[0].Account
+	for _, r := range rows[1:] {
+		if r.Account != first {
+			return first, true
+		}
+	}
+	return first, false
+}
+
+// splitRowsByAccount 拆成「这个账号的」和「其余的」
+func splitRowsByAccount(rows []model.SyncedFile, acct uint) (mine, rest []model.SyncedFile) {
+	for _, r := range rows {
+		if r.Account == acct {
+			mine = append(mine, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	return mine, rest
 }

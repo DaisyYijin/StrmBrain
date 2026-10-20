@@ -280,7 +280,8 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	if len(files) == 0 {
 		return fmt.Errorf("这条记录里的文件都已由之后的整理接手，没有需要重新整理的内容（可以删除这条记录）")
 	}
-	cfg, err := h.loadOrgConfig()
+	// 回这条记录所在的库与账号（orgconfigv2.go）
+	cfg, ops, err := h.orgConfigForRecord(rec)
 	if err != nil {
 		return err
 	}
@@ -300,12 +301,8 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	media.MediaType = mediaType
 	ensureRenameTpl()
 
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return err
-	}
 	ops.suppress = true
-	sink := h.newOrgSink(cfg.Library)
+	sink := h.newOrgSinkFor(cfg)
 	pruner := newDirPruner(ops, orgProtectedCids(cfg), nil)
 	// 旧位置在哪个媒体库（记录上记着，空 = 主库）。那个库已经移出配置的话，旧产物的本地路径拼不出来，
 	// 删旧 STRM 会删错地方，宁可不做
@@ -332,7 +329,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// ---- 1) 先把新布局算出来 ----
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
-	category, libVal := classifyTarget(media)
+	category, libVal := classifyTargetFor(cfg, media)
 	newLibCid, bySource, err := redoLibOf(cfg, sink, rec, libVal)
 	if err != nil {
 		return err
@@ -1218,6 +1215,9 @@ func isInPlaceRedo(rec *model.OrganizeRecord, rootRel string, renames map[string
 //  2. 从没入过库（失败 / 未识别，TargetDir 为空）、扫到它的目录是绑定子目录 → 按来源；
 //  3. 其余按分类规则（第 2 期的行为：规则改了库，重新整理就搬过去）。
 func redoLibOf(cfg *OrgConfig, sink *orgSink, rec *model.OrganizeRecord, ruleVal string) (cid string, bySource bool, err error) {
+	if cfg.PinLib {
+		return cfg.Library, false, nil // 媒体库表里的库：记录在哪个库就留在哪个库（orgconfigv2.go）
+	}
 	if rec.LibBySource && recordLibOK(cfg, rec.LibCid) {
 		if rec.LibCid == "" {
 			return cfg.Library, true, nil

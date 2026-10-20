@@ -17,8 +17,6 @@ import (
 
 	"115-station/internal/model"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/mozillazg/go-pinyin"
 )
 
@@ -62,6 +60,20 @@ type OrgConfig struct {
 	// Fallback 「默认放这里」的库 cid：没写 library 的规则落进它（libOpts.fallbackOf）。
 	// 和 Library（首个库）分开：首个库可以是自己整理的，整理记录 LibCid 记空仍指首个库
 	Fallback string `json:"-"`
+
+	// ---- 媒体库表（V2，orgconfigv2.go）：一个库一套配置，放进哪个库的转存文件夹就整理进哪个库 ----
+	// LibID 这套配置是哪个库的（0 = 老口径的配置）
+	LibID uint `json:"-"`
+	// Account 这个库在哪个 115 账号上（0 = 主账号）
+	Account uint `json:"-"`
+	// SchemeID 用哪套分类方案；0 且 !Flat 时按方案「默认」（老口径）
+	SchemeID uint `json:"-"`
+	// Flat 不分类：整理直接放进库的网盘目录下（库没选分类方案）
+	Flat bool `json:"-"`
+	// PinLib 一律整理进 Library，不按分类规则的 library / 来源子目录换库（V2 的库配置都是这样）
+	PinLib bool `json:"-"`
+	// LibLocal 库的本地目录（媒体根下，可以多级）
+	LibLocal string `json:"-"`
 }
 
 // workspaceRootCids 整理引擎永不当条目处理的根：媒体库（全部）、待整理、已存在、冗余、转存
@@ -124,7 +136,7 @@ func (c *orgCtx) probeSessionFor(media *TmdbMedia) *probeSession {
 // sink 切过去、ctx.libAbs 换成那个库的路径。之后的 ensurePath / 洗版 / 落盘都用 libCid()。
 // 库认不出时返回错误，调用方要在任何网盘写之前停下
 func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
-	category, val := classifyTarget(media)
+	category, val := classifyTargetFor(c.cfg, media)
 	cid, bySource, err := c.pickLib(val)
 	if err != nil {
 		return category, err
@@ -136,6 +148,9 @@ func (c *orgCtx) classify(media *TmdbMedia) (string, error) {
 
 // pickLib 选库：来源子目录 > 规则 library > 主库。bySource 表示是按来源定的（记进整理记录，重新整理沿用）
 func (c *orgCtx) pickLib(ruleVal string) (cid string, bySource bool, err error) {
+	if c.cfg.PinLib {
+		return c.cfg.Library, false, nil // 放进哪个库的转存文件夹就整理进哪个库（V2）
+	}
 	if cid, ok, err := sourceLibOf(c.cfg); ok || err != nil {
 		return cid, ok, err
 	}
@@ -212,7 +227,11 @@ func (c *orgCtx) enterLib(cid string) {
 	abs, ok := c.absOf[cid]
 	if !ok {
 		if c.ops != nil && c.ops.cookie != "" {
-			abs = absPathOf(c.ops.cookie, cid)
+			if c.ops.acct != acctMain {
+				abs, _ = acctDirAbs(c.ops.cookie, cid) // 别的账号不写路径缓存（account115.go）
+			} else {
+				abs = absPathOf(c.ops.cookie, cid)
+			}
 		}
 		c.absOf[cid] = abs
 	}
@@ -281,7 +300,7 @@ var renameTpl *RenameConfig
 
 // ensureRenameTpl 加载重命名模板：用户配置（org-rename）优先，缺失或解析失败
 // 回退默认模板。此前只在 runOrganizeEngine 里初始化，转存触发的
-// runOrganizeEngineWithConfig 不经过它 → renameBeforeMove 解引用 nil panic
+// 转存触发的整理入口不经过它 → renameBeforeMove 解引用 nil panic（两条入口已合成一条）
 func ensureRenameTpl() {
 	renameTpl = defaultRenameConfig()
 	if v := modelSettingValue("org-rename"); v != "" {
@@ -330,6 +349,15 @@ func mergeRenameConfig(dst, src *RenameConfig) {
 // loadOrgConfig 加载整理配置（yaml 优先 DB 回退）；
 // 影视库不再单独配置，直接使用全量同步配置的媒体库 cid
 func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
+	// 媒体库表里有库：一个库一套配置（orgconfigv2.go）。这里给只要「一套配置」的老调用方：主号第一个要整理的库
+	if libs := loadLibraries(); len(libs) > 0 {
+		return h.defaultOrgConfig(libs)
+	}
+	return h.loadOrgConfigLegacy()
+}
+
+// loadOrgConfigLegacy 媒体库表还空（迁移前、测试）时的老口径：一个转存目录 + 分类规则选库
+func (h *Handler) loadOrgConfigLegacy() (*OrgConfig, error) {
 	var cfg OrgConfig
 	if v := h.getSettingValue("org-basic"); v != "" {
 		json.Unmarshal([]byte(v), &cfg)
@@ -738,17 +766,48 @@ func forgetClassifyRules() {
 }
 
 func classifyRules(mediaType string) []model.CategoryRule {
+	return classifyRulesOf(primarySchemeID(), mediaType)
+}
+
+// classifyRulesOf 某一套分类方案的规则（catscheme.go）
+func classifyRulesOf(scheme uint, mediaType string) []model.CategoryRule {
 	classifyRuleMu.Lock()
 	defer classifyRuleMu.Unlock()
-	if rs, ok := classifyRuleCache[mediaType]; ok && time.Since(classifyRuleAt[mediaType]) < 10*time.Second {
+	key := fmt.Sprintf("%d:%s", scheme, mediaType)
+	if rs, ok := classifyRuleCache[key]; ok && time.Since(classifyRuleAt[key]) < 10*time.Second {
 		return rs
 	}
 	var categories []model.CategoryRule
-	// 阶段 3 之前整理只用方案「默认」（catscheme.go）
-	model.DB.Where("media_type = ? AND scheme_id = ?", mediaType, primarySchemeID()).Order("priority ASC").Find(&categories)
-	classifyRuleCache[mediaType] = categories
-	classifyRuleAt[mediaType] = time.Now()
+	model.DB.Where("media_type = ? AND scheme_id = ?", mediaType, scheme).Order("priority ASC").Find(&categories)
+	classifyRuleCache[key] = categories
+	classifyRuleAt[key] = time.Now()
 	return categories
+}
+
+// categoryFlat 库没选分类方案（不分类）时的「分类」：categoryDir 认它返回空，片目直接放进库目录下。
+// 用一个不可能是分类名的值（libSubPath 会把它削成空），省得把「不分类」一路往下传
+const categoryFlat = "/"
+
+// classifyTargetFor 按整理配置分类：库没选方案 → categoryFlat；选了 → 那套方案；老口径的配置 → 方案「默认」
+func classifyTargetFor(cfg *OrgConfig, media *TmdbMedia) (category, library string) {
+	if cfg != nil && cfg.Flat {
+		return categoryFlat, ""
+	}
+	scheme := primarySchemeID()
+	if cfg != nil && cfg.SchemeID != 0 {
+		scheme = cfg.SchemeID
+	}
+	category, library = classifyTargetIn(scheme, media)
+	if cfg != nil && cfg.PinLib {
+		library = "" // V2：库不由规则定
+	}
+	return category, library
+}
+
+// classifyMediaFor 同 classifyMedia，按整理配置的方案
+func classifyMediaFor(cfg *OrgConfig, media *TmdbMedia) string {
+	category, _ := classifyTargetFor(cfg, media)
+	return category
 }
 
 // classifyMedia 根据分类规则判断分类目录（**库内相对路径**，可多级）。
@@ -767,12 +826,17 @@ func classifyMedia(media *TmdbMedia) string {
 // classifyTarget 同 classifyMedia，另外带回命中那条规则指定的媒体库（YAML 的 library，原样；空 = 主库）。
 // 库值换成 cid 见 pickRuleLib（要认库目录名，得有各库的名字）
 func classifyTarget(media *TmdbMedia) (category, library string) {
+	return classifyTargetIn(primarySchemeID(), media)
+}
+
+// classifyTargetIn 同 classifyTarget，按指定的分类方案
+func classifyTargetIn(scheme uint, media *TmdbMedia) (category, library string) {
 	// 电影和电视剧分开查询
 	mediaType := "movie"
 	if media.MediaType == "tv" {
 		mediaType = "tv"
 	}
-	categories := classifyRules(mediaType)
+	categories := classifyRulesOf(scheme, mediaType)
 
 	for _, cat := range categories {
 		if matchCategory(&cat, media) {
@@ -795,6 +859,9 @@ func classifyTarget(media *TmdbMedia) (category, library string) {
 // categoryDir 分类目录的库内相对路径。分类名为空 = 用户不要分类子目录，
 // 此时退回媒体类型默认目录（电影/剧集），而不是把片子丢在库根
 func categoryDir(mediaType, category string) string {
+	if category == categoryFlat {
+		return "" // 库没选分类方案：直接放进库目录下（V2）
+	}
 	if c := libSubPath(category); c != "" {
 		return c
 	}
@@ -1093,7 +1160,7 @@ func checkByCloudSHA1(ops *pan115Ops, media *TmdbMedia, cfg *OrgConfig, libAbs, 
 		return false
 	}
 	absDir := strings.TrimSuffix(libAbs, "/") + "/" +
-		libSubPath(categoryDir(media.MediaType, classifyMedia(media)), folderName)
+		libSubPath(categoryDir(media.MediaType, classifyMediaFor(cfg, media)), folderName)
 
 	// 查目标标题目录 cid
 	cid, ok := cloudPathCid(ops.cookie, absDir)
@@ -1623,6 +1690,7 @@ func collectDirFiles(ops *pan115Ops, cid, basePath string) ([]remoteFile, error)
 // 目录绝对路径时守卫自动失效（靠 trigger 层校验兜底）
 type orgGuards struct {
 	cookie    string
+	acct      uint // 哪个账号（别的账号查路径不走缓存）
 	memo      map[string]dirInfo
 	absCache  map[string]string
 	protected []string // 受保护子树绝对路径（尾 / 已去除）
@@ -1631,7 +1699,7 @@ type orgGuards struct {
 
 // newOrgGuards 计算扫描根与三棵保护子树的空间关系
 func newOrgGuards(cookie, scanCid string, cfg *OrgConfig) *orgGuards {
-	g := &orgGuards{cookie: cookie, memo: map[string]dirInfo{}, absCache: map[string]string{}}
+	g := &orgGuards{cookie: cookie, acct: cfg.Account, memo: map[string]dirInfo{}, absCache: map[string]string{}}
 	if cookie == "" {
 		return g
 	}
@@ -1668,6 +1736,9 @@ func (g *orgGuards) absOf(cid string) string {
 		return a
 	}
 	a := absPathOfFresh(g.cookie, cid)
+	if g.acct != acctMain {
+		a, _ = acctDirAbs(g.cookie, cid) // 别的账号不写路径缓存（account115.go）
+	}
 	g.absCache[cid] = a
 	return a
 }
@@ -1719,14 +1790,13 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 	}
 
 	if len(topEntries) == 0 {
-		onLog("○ 待整理目录为空")
-		return results, 0
+		return results, 0 // 空转静默：每个库一轮，守望者每分钟也来，不为空目录刷日志
 	}
 
 	// 库根绝对路径（去重记录的网盘验证用；OpenAPI 通道取不到则跳过验证）
 	libAbs := ""
 	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library)
+		libAbs = orgDirAbs(ops, cfg.Library)
 	}
 	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
 		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog,
@@ -3432,112 +3502,6 @@ func isEpisodeOnly(title string) bool {
 // 旧的仅读 DB 写法会永远读到空——替换规则/重命名模板等在整理执行时全部失效）
 func modelSettingValue(key string) string {
 	return settingValueCompat(key)
-}
-
-// executeOrganizeWithConfig 用指定的 OrgConfig 执行整理（转存目录等场景）。
-// 与 executeOrganize 一样自带落盘：引擎跑完统一刮削 + 刷 Emby
-func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) (stepsOut []gin.H, detailsOut []OrganizeResult, runErr error) {
-	defer func() { failTask(runErr) }()
-	if _, err := loadTmdbClient(); err != nil {
-		return nil, nil, fmt.Errorf("未执行：%w", err)
-	}
-	orgStart := time.Now()
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return nil, nil, err
-	}
-	ops.suppress = true
-
-	sink := h.newOrgSink(cfg.Library)
-	logFn := func(msg string) { log.Println(msg) }
-	orgResults, successCount := runOrganizeEngineWithConfig(ops, cfg, sink, logFn)
-	sink.flushScrape()
-	sink.flushRefresh()
-	// 收尾与 executeOrganize 共用：同一件事不该因为触发来源不同而汇总不同
-	finishOrganize(sink, orgResults, orgStart)
-
-	totalFiles := len(orgResults)
-	existsCount, failedCount := 0, 0
-	for _, r := range orgResults {
-		if r.Status == "exists" {
-			existsCount++
-		}
-		if r.Status == "failed" {
-			failedCount++
-		}
-	}
-	steps := []gin.H{{"step": "整理（转存目录）", "status": "完成",
-		"message": fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)}}
-
-	return steps, orgResults, nil
-}
-
-// runOrganizeEngineWithConfig 用指定的 OrgConfig 运行整理引擎
-func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func(string)) ([]OrganizeResult, int) {
-	results := []OrganizeResult{}
-	successCount := 0
-
-	tc, err := loadTmdbClient()
-	if err != nil {
-		onLog("✗ TMDB 配置错误: " + err.Error())
-		return results, 0
-	}
-
-	replaceRules := loadReplaceRules()
-
-	// 重命名模板必须先就绪（转存触发路径此前漏了这一步 → renameBeforeMove nil panic）
-	ensureRenameTpl()
-
-	// 计算库根绝对路径（去重记录网盘验证用，不能传空否则验证被跳过）
-	topEntries, err := listPendingTopLevel(ops, cfg.Pending)
-	if err != nil {
-		onLog("✗ 遍历转存目录失败: " + err.Error())
-		return results, 0
-	}
-	if len(topEntries) == 0 {
-		return results, 0 // 空转静默：库根路径等开销留到确认有活干之后
-	}
-
-	libAbs := ""
-	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library)
-	}
-	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
-		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog,
-		held: loadAwaiting(), handled: map[string]bool{}}
-
-	// 五个工作区根目录自身永不被当作条目处理，绑定子目录展开（与 runOrganizeEngine 一致）
-	topEntries, ctxs := stagingWork(ctx, expandStagingEntries(orgLister(ops), cfg, topEntries, func(string) {}))
-	if len(topEntries) == 0 {
-		return results, 0 // 只剩等待人工确认的条目：静默，记录页里看得到
-	}
-
-	guards := newOrgGuards(ops.cookie, cfg.Pending, cfg)
-	if guards.active {
-		onLog("⚠ 扫描根覆盖到媒体库/已存在/冗余目录，这些子树内的条目将被跳过（防误整理库内容）")
-	}
-
-	onLog(fmt.Sprintf("▶ 转存目录发现 %d 个条目，开始整理...", len(topEntries)))
-	defer holdMediaNotif()() // 一轮整理的入库通知收尾后一起发，多季合集不再一季一条
-	done := 0
-	for i, entry := range topEntries {
-		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
-		if jobStopRequested() {
-			onLog(fmt.Sprintf("○ 已按要求停止：完成 %d/%d 个条目，其余留在原处", i, len(topEntries)))
-			break
-		}
-		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
-		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
-		results = append(results, processEntry(ctxs[i], guards, entry, 0, &successCount)...)
-		done = i + 1
-		time.Sleep(300 * time.Millisecond)
-	}
-	// 循环里只在「开始处理第 i 条」时报 i，最后一条做完没人补：
-	// 不补的话任务收尾落库的进度永远停在「整理 0/1」这种半截数字
-	setJobProgress("", done, progressKeep, "")
-	ctx.pruner.flush()
-	SetTaskProgress("")
-	return results, successCount
 }
 
 // shortLogName 日志用短名：剥掉发布站广告前缀（【…】块/域名@），超长截断。

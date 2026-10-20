@@ -103,6 +103,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	h.FreezeLibLocalNames()
 	// 老配置换算成媒体库表（一次性、幂等，libstore.go）：要在本地名定下来之后
 	h.MigrateLibrariesV2()
+	MigrateAcctLedgerIDs(db)
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 

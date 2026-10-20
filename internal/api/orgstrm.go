@@ -64,6 +64,10 @@ type orgSink struct {
 	curNames map[string]string
 	// bySource 当前条目的库是按来源（绑定了库的转存子目录）定的，记进整理记录的 LibBySource
 	bySource bool
+	// libID / acct 这一轮整理的媒体库（V2 一个库一套，orgconfigv2.go）：记进整理记录；
+	// acct 也决定写出的 STRM 直链带不带账号段、台账行记在哪个账号（applySyncResults）
+	libID uint
+	acct  uint
 
 	mu          sync.Mutex
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次
@@ -102,6 +106,16 @@ func (h *Handler) newOrgSink(libCid string) *orgSink {
 	}
 }
 
+// newOrgSinkFor 一个库的落盘出口（V2，orgconfigv2.go）：库名就是它的本地目录，不再问 115
+func (h *Handler) newOrgSinkFor(cfg *OrgConfig) *orgSink {
+	s := h.newOrgSink(cfg.Library)
+	if cfg.LibID != 0 {
+		s.libName, s.libResolved = cfg.LibLocal, true
+		s.libID, s.acct = cfg.LibID, cfg.Account
+	}
+	return s
+}
+
 // useLib 切到某个媒体库（空或主库 cid = 主库）。之后的 libRel / 落盘 / 记录都按它
 func (s *orgSink) useLib(cid string) {
 	if cid == s.libCid {
@@ -127,6 +141,14 @@ func (s *orgSink) libNameOf(cid string) string {
 		return n
 	}
 	name := libLocalName(cid)
+	if name == "" {
+		// 媒体库表里的库：本地目录（可以多级）就是它的「库名」（libstore.go）
+		for _, l := range loadLibraries() {
+			if l.Account == s.acct && l.Cid == cid {
+				name = normLibLocal(l.Local)
+			}
+		}
+	}
 	if name == "" && s.h != nil {
 		if cookie, err := s.h.get115Cookie(); err == nil && cookie != "" {
 			name = libDirName(cookie, cid)
@@ -194,6 +216,7 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 			continue
 		}
 		f.Path = s.libRel(mediaRel)
+		f.Acct = s.acct
 		vs = append(vs, f)
 	}
 	as := make([]remoteFile, 0, len(assets))
@@ -203,6 +226,7 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 			continue
 		}
 		f.Path = s.libRel(mediaRel)
+		f.Acct = s.acct
 		as = append(as, f)
 	}
 
@@ -624,6 +648,9 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		return
 	}
 	rec.BatchID = s.batchID
+	if s.libID != 0 && rec.LibID == 0 {
+		rec.LibID, rec.Account = s.libID, s.acct
+	}
 	if rec.TargetDir != "" && rec.LibCid == "" && s.cur != "" {
 		rec.LibCid = s.cur
 	}

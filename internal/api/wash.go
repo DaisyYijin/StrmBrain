@@ -283,6 +283,9 @@ func ledgerPrefixOf(ops *pan115Ops, cfg *OrgConfig) string {
 	if cfg == nil || cfg.Library == "" {
 		return ""
 	}
+	if cfg.LibLocal != "" {
+		return cfg.LibLocal // 媒体库表里的库（orgconfigv2.go）：本地目录可以是多级
+	}
 	if n := libLocalName(cfg.Library); n != "" {
 		return n
 	}
@@ -342,11 +345,18 @@ type washScanner struct {
 	gotPrefix bool
 	dirs      map[string][]model.SyncedFile
 	sha1s     map[string][]model.SyncedFile
+	// acct 这次整理在哪个 115 账号上（ops.acct）：sha1 去重 / 让位只看同一个账号的台账行，
+	// 别的账号里的同一份文件既挡不住新内容、也让不了位（115 不能跨账号移动）
+	acct uint
 }
 
 func newWashScanner(ops *pan115Ops, cfg *OrgConfig) *washScanner {
-	return &washScanner{ops: ops, cfg: cfg,
+	w := &washScanner{ops: ops, cfg: cfg,
 		dirs: map[string][]model.SyncedFile{}, sha1s: map[string][]model.SyncedFile{}}
+	if ops != nil {
+		w.acct = ops.acct
+	}
+	return w
 }
 
 // inLib 指定库名前缀（多个媒体库时洗版只比目标库里的版本，libroots.go）。
@@ -386,7 +396,7 @@ func (w *washScanner) sameFile(sha1 string) []model.SyncedFile {
 	}
 	var rows []model.SyncedFile
 	// 附加账号的行不参与：不做跨账号去重，让位也动不了别的账号的文件（acctlibs.go）
-	model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerMainOnlySQL, sha1).Find(&rows)
+	model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerAcctSQL, sha1, w.acct).Find(&rows)
 	w.sha1s[sha1] = rows
 	return rows
 }
@@ -427,7 +437,7 @@ type washPlan struct {
 func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName, newSha1, targetDir, landing string, onLog func(string)) string {
 	sc := newWashScanner(ops, cfg).inLib(libName)
 	sameFiles := sc.sameFile(newSha1)
-	st := matchWashStrategy(media.MediaType, classifyMedia(media))
+	st := matchWashStrategy(media.MediaType, classifyMediaFor(cfg, media))
 	if st == nil {
 		return washNoStrategy(newName, sameFiles, onLog).decision
 	}

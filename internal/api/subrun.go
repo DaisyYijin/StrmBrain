@@ -1265,7 +1265,7 @@ func subLedgerHasSha1(sha1 string) bool {
 	}
 	var n int64
 	// 附加账号里有不算：订阅是往主号里补（acctlibs.go）
-	model.DB.Model(&model.SyncedFile{}).Where("UPPER(sha1) = ? AND orphan_at IS NULL AND "+ledgerMainOnlySQL, strings.ToUpper(sha1)).Count(&n)
+	model.DB.Model(&model.SyncedFile{}).Where("UPPER(sha1) = ? AND orphan_at IS NULL AND "+ledgerAcctSQL, strings.ToUpper(sha1), acctMain).Count(&n)
 	return n > 0
 }
 
