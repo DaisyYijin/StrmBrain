@@ -58,6 +58,10 @@ export interface LibraryView {
   pan_name: string
   /** 台账里已经有这个库的内容：本地目录名不能再改 */
   local_locked: boolean
+  /** 附加账号的库（后端 acctlibs.go）：账号 id（主号 0）、账号名；cid 是 a{账号}:{cid}，raw_cid 是它在那个账号里的目录 id */
+  account: number
+  account_name?: string
+  raw_cid?: string
   /** 「默认放这里」的库：二级分类里没写 library 的规则落进它（阶段 3 起不一定是首个库） */
   default: boolean
   /** 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除 */
@@ -98,6 +102,8 @@ export interface LibrariesView {
   local_root: string
   emby_configured: boolean
   emby_error?: string
+  /** 界面要不要显示附加账号相关的东西（后端 STATION_MULTI_ACCOUNT） */
+  multi_account: boolean
 }
 
 /** 一个转存入口：cid 是已有子目录；cid 为空 = 按 name 在转存目录下新建（同名已存在就复用） */
@@ -120,6 +126,8 @@ export interface LibSaveReq {
   fallback?: string
   /** 要设的本地目录名（库 cid → 名字），只带用户改过的；新库不带就用 115 目录名 */
   locals?: Record<string, string>
+  /** 附加账号的库，整份替换；不带 = 沿用 */
+  acct_libs?: { account: number; cid: string; path: string; local: string }[]
 }
 
 /** 409：转存目录里已有同名子目录、里面有东西，要用户确认 */

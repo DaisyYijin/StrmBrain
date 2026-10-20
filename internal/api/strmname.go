@@ -73,14 +73,14 @@ func strmNameFor(f remoteFile) string {
 	}
 	if f.Fid != "" {
 		var own model.SyncedFile
-		if model.DB.Where("file_id = ?", f.Fid).First(&own).Error == nil && path.Dir(own.RelPath) == f.Path {
+		if model.DB.Where("file_id = ?", f.ledgerFid()).First(&own).Error == nil && path.Dir(own.RelPath) == f.Path {
 			if b := path.Base(own.RelPath); b == name || b == legacy {
 				return b
 			}
 		}
 	}
 	var other model.SyncedFile
-	if model.DB.Where("rel_path = ? AND file_id <> ? AND orphan_at IS NULL", path.Join(f.Path, name), f.Fid).
+	if model.DB.Where("rel_path = ? AND file_id <> ? AND orphan_at IS NULL", path.Join(f.Path, name), f.ledgerFid()).
 		First(&other).Error == nil {
 		return legacy
 	}

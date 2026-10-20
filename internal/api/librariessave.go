@@ -40,6 +40,8 @@ type libSaveReq struct {
 	// Locals 要设的本地目录名（库 cid → 名字，liblocal.go）。只带用户填过的；没带的库沿用现在的，
 	// 新库没带就取 115 目录名。台账里已经有内容的库不能改
 	Locals map[string]string `json:"locals"`
+	// AcctLibs 附加账号的库（acctlibs.go），整份替换；不带这个字段 = 沿用现在的（老客户端）
+	AcctLibs []acctLibEntry `json:"acct_libs"`
 }
 
 // libInboxReq 一个转存入口：Cid 是已有的子目录；Cid 为空 = 按 Name 在转存目录下建（同名的已存在就复用）
@@ -69,6 +71,8 @@ type libSaveDeps struct {
 	dirOf func(cid string) (dirInfo, error)
 	// ledgerHas 台账里有没有以这个名字为第一段的行（零 115 请求；为 nil 按没有）
 	ledgerHas func(name string) bool
+	// acctOK 附加账号还在、登录着（只对新加的附加账号库调用；为 nil 按可以）
+	acctOK func(acct uint) error
 }
 
 // libSaveInput 规划所需的现状
@@ -79,6 +83,7 @@ type libSaveInput struct {
 	OldBindings  []stagingLib
 	CategoryYAML string // 没存过 YAML（规则来自种子）为空
 	OptsRaw      string // 现在的 lib_opts 原文
+	AcctRaw      string // 现在的 acct_libs 原文
 }
 
 // libSavePlan 规划结果：要写什么
@@ -100,6 +105,11 @@ type libSavePlan struct {
 	// Fallback 保存后「默认放这里」的库（空 = 一个本站整理的库都没有）
 	Fallback        string
 	FallbackChanged bool
+	// 附加账号的库（acctlibs.go）：要写的 acct_libs、这次加的与移除的
+	AcctJSON    string
+	AcctChanged bool
+	AcctAdded   []acctLibEntry
+	AcctRemoved []acctLibEntry
 }
 
 // planLibrariesSave 校验并算出要写的东西。不写任何东西；要用户确认时返回 confirms（不报错）
@@ -147,6 +157,16 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		}
 	}
 
+	// ---- 附加账号的库（acctlibs.go）：一律自己整理，本地名必填 ----
+	acctNext, err := planAcctLibs(&plan, in, req, deps)
+	if err != nil {
+		return plan, nil, err
+	}
+	acctKeys := acctLibKeysOf(acctNext)
+	for _, k := range acctKeys {
+		nextSet[k] = true
+	}
+
 	// ---- 整理方式 ----
 	oldOpts := parseLibOpts(in.OptsRaw)
 	opts := libOpts{Libs: map[string]libOpt{}}
@@ -164,6 +184,12 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		}
 		if !validLibScrape(o.Scrape) {
 			return plan, nil, fmt.Errorf("不认识的刮削方式「%s」", o.Scrape)
+		}
+		if isAcctLibKey(cid) {
+			o.Mode = libModeSelf // 附加账号的库只能自己整理（acctlibs.go）
+			if o.Depth == 0 {
+				o.Depth = 2
+			}
 		}
 		switch o.Mode {
 		case "", "organize":
@@ -186,6 +212,14 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 	if err := planLibLocals(&plan, &opts, oldOpts, in, req, primary, extras, next, deps); err != nil {
 		return plan, nil, err
 	}
+	// 附加账号的库的本地名不能和主号的库撞（大小写不敏感）
+	for _, e := range acctNext {
+		for cid, name := range plan.Locals {
+			if libLocalKey(name) == libLocalKey(e.Local) {
+				return plan, nil, fmt.Errorf("附加账号的库「%s」和 cid=%s 的库本地目录名相同，会落进同一个本地目录：换个名字", e.Local, cid)
+			}
+		}
+	}
 	if req.Opts != nil {
 		opts.Fallback = strings.TrimSpace(req.Fallback)
 	}
@@ -193,7 +227,7 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 	opts.Fallback = opts.fallbackOf(next)
 	plan.Fallback = opts.Fallback
 	plan.FallbackChanged = opts.Fallback != oldOpts.fallbackOf(cur.libCids())
-	plan.OptsJSON = marshalLibOpts(opts, next)
+	plan.OptsJSON = marshalLibOpts(opts, append(append([]string{}, next...), acctKeys...))
 	plan.OptsChanged = plan.OptsJSON != strings.TrimSpace(in.OptsRaw) && !(plan.OptsJSON == "{}" && strings.TrimSpace(in.OptsRaw) == "")
 
 	// ---- 转存入口 ----
@@ -304,6 +338,9 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 	for _, r := range plan.Removed {
 		removedByCid[r.Cid] = r
 	}
+	for _, e := range plan.AcctRemoved {
+		removedByCid[e.key()] = libRoot{Cid: e.key(), Name: e.Local, Account: e.Account}
+	}
 	for _, cid := range req.CleanLocal {
 		r, ok := removedByCid[strings.TrimSpace(cid)]
 		if !ok {
@@ -381,6 +418,83 @@ func planLibLocals(plan *libSavePlan, opts *libOpts, oldOpts libOpts, in libSave
 	return nil
 }
 
+// planAcctLibs 附加账号的库：校验、算出要写的 acct_libs（acctlibs.go）。返回保存后的清单。
+// 本地名的规则同主号的库（planLibLocals）：已有内容的库不能改名、新名字不能和台账里的残留撞；
+// 和主号的库撞名由调用方在 planLibLocals 之后再查
+func planAcctLibs(plan *libSavePlan, in libSaveInput, req libSaveReq, deps libSaveDeps) ([]acctLibEntry, error) {
+	old := parseAcctLibs(in.AcctRaw)
+	if req.AcctLibs == nil {
+		plan.AcctJSON = strings.TrimSpace(in.AcctRaw)
+		return old, nil
+	}
+	has := func(name string) bool { return deps.ledgerHas != nil && name != "" && deps.ledgerHas(name) }
+	oldByKey := map[string]acctLibEntry{}
+	for _, e := range old {
+		oldByKey[e.key()] = e
+	}
+	next := make([]acctLibEntry, 0, len(req.AcctLibs))
+	seenKey := map[string]bool{}
+	seenName := map[string]bool{}
+	for _, e := range req.AcctLibs {
+		e.Cid, e.Path, e.Local = strings.TrimSpace(e.Cid), strings.TrimSpace(e.Path), strings.TrimSpace(e.Local)
+		if e.Account == acctMain {
+			return nil, errors.New("附加账号的库要选是哪个账号")
+		}
+		if e.Cid == "" || e.Cid == "0" {
+			return nil, errors.New("附加账号的库要选一个具体的目录，不能是网盘根")
+		}
+		k := e.key()
+		if seenKey[k] {
+			return nil, fmt.Errorf("附加账号的同一个目录加了两次（%s）", firstNonEmpty(e.Path, e.Cid))
+		}
+		seenKey[k] = true
+		prev, existed := oldByKey[k]
+		if existed && e.Local == "" {
+			e.Local = prev.Local
+		}
+		if !existed || e.Local != prev.Local {
+			if err := checkLibLocalName(e.Local); err != nil {
+				return nil, fmt.Errorf("附加账号的库%v", err)
+			}
+			if existed && has(prev.Local) {
+				return nil, fmt.Errorf("附加账号的库「%s」里已经有同步进来的内容，本地目录名不能再改", prev.Local)
+			}
+			if has(e.Local) {
+				return nil, fmt.Errorf("本地已经有「%s」目录的内容（可能是移除过的库留下的），换个名字，或先在「媒体库」的残留提示里清理掉", e.Local)
+			}
+		}
+		if !existed && deps.acctOK != nil {
+			if err := deps.acctOK(e.Account); err != nil {
+				return nil, err
+			}
+		}
+		if existed && e.Path == "" {
+			e.Path = prev.Path
+		}
+		if seenName[libLocalKey(e.Local)] {
+			return nil, fmt.Errorf("两个附加账号的库本地目录名都是「%s」", e.Local)
+		}
+		seenName[libLocalKey(e.Local)] = true
+		if !existed {
+			plan.AcctAdded = append(plan.AcctAdded, e)
+		}
+		next = append(next, e)
+	}
+	for _, e := range old {
+		if !seenKey[e.key()] {
+			plan.AcctRemoved = append(plan.AcctRemoved, e)
+		}
+	}
+	b, _ := json.Marshal(next)
+	plan.AcctJSON = string(b)
+	if len(next) == 0 {
+		plan.AcctJSON = "[]"
+	}
+	oldJSON, _ := json.Marshal(old)
+	plan.AcctChanged = plan.AcctJSON != string(oldJSON) && !(len(old) == 0 && len(next) == 0)
+	return next, nil
+}
+
 // subscribeCfgWithoutSubdir 订阅全局默认的转存子目录被解绑时清空它（空 = 转存目录本身，运行时也是这么退的）
 func subscribeCfgWithoutSubdir(raw string, unbound map[string]bool) (string, bool) {
 	if raw == "" || len(unbound) == 0 {
@@ -409,16 +523,20 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	fullRaw := h.getSettingValue("full")
 	cookie, _ := h.get115Cookie()
 
-	// 现有各库的名字：移除库时要按名字找 YAML 里的 library。缓存里没有才问一次 115
-	sources := libNameSources(fullRaw)
-	oldLibs := make([]libRoot, len(sources))
-	for i, s := range sources {
-		oldLibs[i] = s.libRootOf()
-		if oldLibs[i].Name == "" && cookie != "" {
+	// 现有各库的名字：移除库时要按名字找 YAML 里的 library。缓存里没有才问一次 115。
+	// 只要主号的库：附加账号的库另走 planAcctLibs（acctlibs.go）
+	var oldLibs []libRoot
+	for _, s := range libNameSources(fullRaw) {
+		if s.Account != acctMain {
+			continue
+		}
+		r := s.libRootOf()
+		if r.Name == "" && cookie != "" {
 			if info, err := get115DirInfo(cookie, s.Cid); err == nil {
-				oldLibs[i].Name = info.n
+				r.Name = info.n
 			}
 		}
+		oldLibs = append(oldLibs, r)
 	}
 	var catRule model.ScrapeRule
 	h.DB.Where("type = ?", "category_config").First(&catRule)
@@ -439,6 +557,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	plan, confirms, err := planLibrariesSave(libSaveInput{
 		FullRaw: fullRaw, OldLibs: oldLibs, StagingRoot: stagingRoot,
 		OldBindings: loadStagingLibs(), CategoryYAML: catRule.Config, OptsRaw: h.getSettingValue(libOptsKey),
+		AcctRaw: h.getSettingValue(acctLibsKey),
 	}, req, libSaveDeps{
 		listRoot: func() ([]dirEntry, error) {
 			o, err := needOps()
@@ -462,6 +581,10 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 			return get115DirInfo(cookie, cid)
 		},
 		ledgerHas: ledgerHasLib,
+		acctOK: func(acct uint) error {
+			_, err := h.cookieOf(acct) // 账号还在、登录着（account115.go）
+			return err
+		},
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -520,6 +643,9 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	}
 	if plan.OptsChanged {
 		settings[libOptsKey] = plan.OptsJSON
+	}
+	if plan.AcctChanged {
+		settings[acctLibsKey] = plan.AcctJSON
 	}
 	if v, ok := subscribeCfgWithoutSubdir(h.getSettingValue("subscribe"), plan.Unbound); ok {
 		settings["subscribe"] = v
@@ -586,7 +712,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 
 	// ---- 收尾 ----
 	forgetClassifyRules()
-	if plan.OptsChanged || plan.FullChanged {
+	if plan.OptsChanged || plan.FullChanged || plan.AcctChanged {
 		// 片目认在哪一层变了：海报墙、刮削、对账读的台账聚合都得重算
 		forgetLedgerTitles()
 		forgetLocalTitles()
@@ -604,6 +730,12 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	for _, r := range plan.Removed {
 		log.Printf("[媒体库] ✓ 已移除媒体库「%s」（cid=%s），网盘上的目录不动", r.Name, r.Cid)
 	}
+	for _, e := range plan.AcctRemoved {
+		log.Printf("[媒体库] ✓ 已移除附加账号的库「%s」（账号 %d），网盘上的目录不动", e.Local, e.Account)
+	}
+	for _, e := range plan.AcctAdded {
+		log.Printf("[媒体库] ✓ 已添加附加账号的库「%s」（账号 %d，%s），只同步、不整理", e.Local, e.Account, firstNonEmpty(e.Path, "cid="+e.Cid))
+	}
 	if plan.YAMLChanged {
 		log.Printf("[媒体库] ✓ 指向已移除媒体库的分类规则已改回默认库")
 	}
@@ -612,6 +744,12 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	}
 	log.Printf("[媒体库] ✓ 媒体库已保存：%d 个库、%d 个转存入口（新建 %d 个）", len(parseFullCfg(plan.FullJSON).libCids()), len(plan.Bindings), len(created))
 	var jobs []uint
+	if len(plan.AcctAdded) > 0 {
+		// 新加的附加账号的库马上同步一次，不然要等 6 小时一轮的定时（acctlibs.go）
+		if job, err := h.enqueueAcctLibSync("同步附加账号的库", "web", jobPriorityManual); err == nil {
+			jobs = append(jobs, job.ID)
+		}
+	}
 	for _, name := range plan.Clean {
 		job, err := enqueueJob(h.DB, jobSpec{Kind: "libclean", Title: "清理已移除媒体库的本地残留「" + name + "」",
 			DedupeKey: "libclean:" + name, Source: "web", Priority: jobPriorityManual, Params: jobParams{LibName: name}})

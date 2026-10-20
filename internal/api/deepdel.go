@@ -89,6 +89,11 @@ type deepDelResult struct {
 func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDelResult, error) {
 	cfg := h.loadDeepDelCfg()
 	res := deepDelResult{}
+	// 附加账号的库不深删（MULTI-ACCOUNT-PLAN.md §5.5）：它的台账 fid 带账号前缀，主号的通道也删不到它
+	if kept, n := dropAcctLedgerRows(rows); n > 0 {
+		log.Printf("[深度删除] ○ %d 个文件属于附加账号的库，不深删（只动本地的事交给失效 STRM 清理）", n)
+		rows = kept
+	}
 	if len(rows) == 0 {
 		return res, nil
 	}

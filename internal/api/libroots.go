@@ -78,6 +78,9 @@ type libRoot struct {
 	// Default 「默认放这里」的库：没写 library 的规则落进它（libOpts.fallbackOf）。
 	// 一个都没标时按第一个算（老调用方与测试只给首个库在前的清单）
 	Default bool
+	// Account 附加账号的库（acctlibs.go）：Cid 是 a{账号}:{cid}、Abs 为空、一定是 Self。
+	// 本站不往它的网盘上写任何东西，panDirOfLocal 对它返回空
+	Account uint
 }
 
 // resolveLibRoots 把库清单解析成名字与网盘路径（都走路径缓存，命中不打接口）。
@@ -132,8 +135,25 @@ func (h *Handler) resolveConfiguredLibRoots(cookie string) ([]libRoot, error) {
 	}
 	roots, err := resolveLibRoots(func(cid string) string { return libDirName(cookie, cid) },
 		func(cid string) string { return absPathOf(cookie, cid) }, cids)
+	if err != nil {
+		return roots, err
+	}
+	// 附加账号的库（acctlibs.go）：只认本地名，没有网盘路径；本地名不能和别的库撞
+	taken := map[string]string{}
+	for _, r := range roots {
+		if r.Name != "" {
+			taken[libLocalKey(r.Name)] = r.Cid
+		}
+	}
+	for _, r := range acctLibRoots(loadAcctLibs()) {
+		if prev, ok := taken[libLocalKey(r.Name)]; ok {
+			return nil, fmt.Errorf("附加账号的库「%s」和 cid=%s 的库本地目录名相同，会落进同一个本地目录", r.Name, prev)
+		}
+		taken[libLocalKey(r.Name)] = r.Cid
+		roots = append(roots, r)
+	}
 	markLibRoles(roots, loadLibOpts())
-	return roots, err
+	return roots, nil
 }
 
 // markLibRoles 按 lib_opts 标出自己整理的库与「默认放这里」的库
@@ -167,6 +187,9 @@ func panDirOfLocal(roots []libRoot, relDir string) string {
 			root, rest = x, r
 			break
 		}
+	}
+	if root.Account != acctMain {
+		return "" // 附加账号的库：本站不往它的网盘上写（acctlibs.go），调用方按「没有目标目录」跳过
 	}
 	abs := strings.TrimSuffix(root.Abs, "/")
 	if abs == "" {

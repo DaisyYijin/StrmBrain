@@ -24,6 +24,8 @@ export interface CidValue {
 const props = defineProps<{
   modelValue: CidValue
   placeholder?: string
+  /** 哪个 115 账号的目录：附加账号的 id，不传 = 主号 */
+  account?: number
 }>()
 const emit = defineEmits<{ 'update:modelValue': [CidValue] }>()
 
@@ -59,7 +61,7 @@ async function resolve(v: string) {
   if (!path || /^\d+$/.test(path)) return
   resolving.value = true
   try {
-    const data = await storageApi.resolve115(path)
+    const data = await storageApi.resolve115(path, props.account)
     // 解析期间用户可能又改了输入，结果已经过期就丢弃
     if (data.cid && text.value.trim() === path) {
       emit('update:modelValue', { cid: data.cid, path: v })
@@ -109,6 +111,7 @@ defineExpose({ ensureCid })
       mode="115"
       :initial="modelValue.path"
       :initial-cid="modelValue.cid"
+      :account="account"
       @pick="onPick"
     />
   </div>

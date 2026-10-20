@@ -164,7 +164,8 @@ func fetch115FlatPage(cookie, cid string, offset int) ([]map[string]interface{},
 //
 // 第一个返回值表示本次清单是否「完整」——翻页短缺、祖先链断裂都会置 false。
 // 失效 STRM 清理拿它当闸：清单不完整时算出来的「网盘已删除」可能是假的，一删就是真丢数据。
-func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remoteFile, f *syncFilter, skipCids map[string]bool) (bool, error) {
+// remember 为 false 时不把认出的目录记进路径缓存（附加账号：PathCache 按路径查时不分账号，acctlibs.go）
+func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remoteFile, f *syncFilter, skipCids map[string]bool, remember bool) (bool, error) {
 	// ① 首页：一次拿到总数 + 第一批数据 + 一个 pickcode（用来推不动点）
 	first, total, origin, err := fetch115FlatPage(cookie, rootCid, 0)
 	if err != nil {
@@ -238,7 +239,9 @@ func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remo
 	}
 
 	// 认出来的目录（含文件的那些）顺手记进路径缓存，删目录事件按目录 id 找位置用
-	rememberSubdirs(rootCid, basePath, res.cache, func(cid string) string { return dirs[cid].parentID })
+	if remember {
+		rememberSubdirs(rootCid, basePath, res.cache, func(cid string) string { return dirs[cid].parentID })
+	}
 
 	if res.skipped > 0 {
 		vlog("[同步] ○ 快速模式：按整理工作区排除 %d 个文件", res.skipped)
@@ -382,19 +385,26 @@ func (h *Handler) collectSyncFiles(
 	// 网盘上删目录时增量才认得出删的是哪个（「Season 0」按名字认不出）。
 	// 缓存过了 7 天保鲜期（关着增量、只跑全量的部署）时查不到，整轮就一个目录都不记，
 	// 所以这里允许为它发一次祖先链请求，一轮全量至多一次
-	if _, ok := lookupCachedAbs(cid); !ok && strings.TrimSpace(cookie) != "" {
+	// 附加账号的目录一律不进路径缓存（acctlibs.go）：按路径查时不分账号，两个账号都有「/影视」就会串
+	main := ops == nil || ops.acct == acctMain
+	if _, ok := lookupCachedAbs(cid); main && !ok && strings.TrimSpace(cookie) != "" {
 		if _, err := resolveDirAbs(cookie, cid); err != nil {
 			vlog("[同步] ○ 取媒体库根的网盘位置失败（%v），本轮不记录目录位置", err)
 		}
 	}
 	if mode == "fast" {
-		if ok, reason := h.fastSyncAvailable(); !ok {
+		ok, reason := h.fastSyncAvailable()
+		if !main {
+			// 附加账号只走 Cookie，主号开没开 OpenAPI 与它无关
+			ok, reason = strings.TrimSpace(cookie) != "", "附加账号没有登录"
+		}
+		if !ok {
 			log.Printf("[同步] ○ 已选快速模式但不可用（%s），改用标准模式", reason)
 		} else {
 			progress("快速模式：拉取递归文件列表与目录表…")
 			// 只收视频的调用方（整理库扫描）会传 assets=nil，不能无脑解引用
 			v, a := snapshotFiles(videos), snapshotFiles(assets)
-			complete, err := list115SubtreeFast(cookie, cid, libName, videos, assets, f, skipCids)
+			complete, err := list115SubtreeFast(cookie, cid, libName, videos, assets, f, skipCids, main)
 			if err == nil {
 				return "fast", complete, nil
 			}
@@ -408,7 +418,7 @@ func (h *Handler) collectSyncFiles(
 	// 标准模式是全有全无的：任一目录列失败就直接返回错误，所以无错即完整
 	// 起点位置已在开头备好；仍查不到就不记目录
 	ctl := &walkCtl{}
-	if abs, ok := lookupCachedAbs(cid); ok {
+	if abs, ok := lookupCachedAbs(cid); main && ok {
 		ctl.panAbs = abs
 	}
 	if err := walk115DirCtl(ops, cid, libName, videos, assets, f, skipCids, ctl); err != nil {

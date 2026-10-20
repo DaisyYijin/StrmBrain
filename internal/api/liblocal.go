@@ -172,7 +172,8 @@ func (h *Handler) FreezeLibLocalNames() {
 		o.Local = name
 		opts.Libs[cid] = o
 	}
-	out := marshalLibOpts(opts, parseFullCfg(fullRaw).libCids())
+	// 附加账号的库的选项（层级、刮削）也要留着（acctlibs.go）
+	out := marshalLibOpts(opts, allLibKeys(fullRaw, h.getSettingValue(acctLibsKey)))
 	if err := h.Config.SaveSetting(libOptsKey, out); err != nil {
 		log.Printf("[媒体库] ✗ 记下本地目录名失败（下次启动再试，期间照旧按 115 目录名）: %v", err)
 		return

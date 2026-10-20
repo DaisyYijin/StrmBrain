@@ -94,8 +94,16 @@ func parseLibOpts(raw string) libOpts {
 
 func loadLibOpts() libOpts { return parseLibOpts(settingValueCompat(libOptsKey)) }
 
-// of 某个库的选项（没写过的库返回零值 = 本站整理）
-func (o libOpts) of(cid string) libOpt { return o.Libs[strings.TrimSpace(cid)] }
+// of 某个库的选项（没写过的库返回零值 = 本站整理）。
+// 附加账号的库（key 是 a{账号}:{cid}，acctlibs.go）一律是「我自己整理」：本站不改它的网盘
+func (o libOpts) of(cid string) libOpt {
+	cid = strings.TrimSpace(cid)
+	v := o.Libs[cid]
+	if isAcctLibKey(cid) {
+		v.Mode = libModeSelf
+	}
+	return v
+}
 
 // selfCids 自己整理的库（cid 集合）
 func (o libOpts) selfCids() map[string]bool {

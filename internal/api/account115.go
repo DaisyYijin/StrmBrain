@@ -317,10 +317,20 @@ func (h *Handler) UpdateAccount115(c *gin.Context) {
 }
 
 // DeleteAccount115 DELETE /storage/115/accounts/:id：删行、删 Cookie 文件。
-// 阶段 3 起挂着库的账号要先移除库（这里再加一道拦）
+// 挂着库的账号要先移除库：不然那些库的 STRM 指向一个不存在的账号，播放全挂（acctlibs.go）
 func (h *Handler) DeleteAccount115(c *gin.Context) {
 	s, ok := h.paramAcct(c)
 	if !ok {
+		return
+	}
+	var names []string
+	for _, e := range parseAcctLibs(h.getSettingValue(acctLibsKey)) {
+		if e.Account == s.ID {
+			names = append(names, "「"+e.Local+"」")
+		}
+	}
+	if len(names) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "这个账号还挂着媒体库" + strings.Join(names, "、") + "：先到「媒体库」里移除它们"})
 		return
 	}
 	if err := h.Config.RemoveCookieOf(s.ID); err != nil {

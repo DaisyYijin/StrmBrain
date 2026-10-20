@@ -176,3 +176,20 @@ func uitoa(n uint) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+// 挂着库的附加账号不能删：不然那些库的 STRM 指向一个不存在的账号（acctlibs.go）
+func TestDeleteAccountWithLibs(t *testing.T) {
+	h, r := acctSetup(t)
+	h.DB.Create(&model.Storage{Name: "主人", Type: "115", Main: true})
+	extra := model.Storage{Name: "副号", Type: "115"}
+	h.DB.Create(&extra)
+	_ = h.Config.SaveSetting(acctLibsKey, `[{"account":`+uitoa(extra.ID)+`,"cid":"9","local":"副号电影"}]`)
+	code, out := acctDo(t, r, "DELETE", "/storage/115/accounts/"+uitoa(extra.ID), "")
+	if code != http.StatusBadRequest || !strings.Contains(out["error"].(string), "副号电影") {
+		t.Fatalf("挂着库应拒绝删除：%d %v", code, out)
+	}
+	_ = h.Config.SaveSetting(acctLibsKey, `[]`)
+	if code, _ := acctDo(t, r, "DELETE", "/storage/115/accounts/"+uitoa(extra.ID), ""); code != http.StatusOK {
+		t.Fatalf("移除库之后应能删：%d", code)
+	}
+}

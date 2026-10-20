@@ -38,7 +38,7 @@ func TestFastVsNormalEquivalence(t *testing.T) {
 
 	start := time.Now()
 	var fastVideos, fastAssets []remoteFile
-	complete, err := list115SubtreeFast(cookie, cid, libName, &fastVideos, &fastAssets, filter, nil)
+	complete, err := list115SubtreeFast(cookie, cid, libName, &fastVideos, &fastAssets, filter, nil, true)
 	if err != nil {
 		t.Fatalf("快速模式失败: %v", err)
 	}

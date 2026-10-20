@@ -162,6 +162,8 @@ type fullParams struct {
 	ImageExt  []string
 	DataExt   []string
 	Mode      string // normal(默认) / fast
+	// AcctOnly 只同步附加账号的库（acctlibs.go 的定时补同步、新加库后的首次同步）：不碰主号的库，也不标主号的事件窗口
+	AcctOnly bool
 }
 
 // fullSummary 全量同步结果摘要
@@ -246,9 +248,19 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	}
 	filter.assetExts[".nfo"] = true
 
-	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置。
+	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置；
+	// 附加账号的库排在最后（acctlibs.go），各用各账号的只读通道。
 	// 一个库失败不拦别的库；有库失败时不标记事件窗口（见下），那个库的变化留给增量补
-	cids := libCidsOf(p.Cid, h.loadFullSyncCfg().ExtraLibs)
+	var targets []fullTarget
+	if !p.AcctOnly {
+		for _, cid := range libCidsOf(p.Cid, h.loadFullSyncCfg().ExtraLibs) {
+			targets = append(targets, fullTarget{cid: cid})
+		}
+	}
+	mainLibs := len(targets)
+	for _, e := range loadAcctLibs() {
+		targets = append(targets, fullTarget{acct: e.Account, cid: e.Cid, local: e.Local})
+	}
 	cookie, _ := h.get115Cookie()
 	var videos, assets int
 	var st applyStats
@@ -256,17 +268,27 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	orphanTotal := 0
 	var failed []string
 	seenName := map[string]string{}
-	for i, cid := range cids {
-		if len(cids) > 1 {
-			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(cids)))
+	for i, t := range targets {
+		if len(targets) > 1 {
+			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(targets)))
 		}
-		r, err := h.fullSyncLib(ops, cookie, p, cid, len(cids) > 1, filter, seenName, domain, format, keepExt, skipExist)
+		libOps, libCookie := ops, cookie
+		if t.acct != acctMain {
+			o, err := h.opsFor(t.acct)
+			if err != nil {
+				log.Printf("[同步] ✗ 附加账号的库「%s」同步失败: %v", t.local, err)
+				failed = append(failed, fmt.Sprintf("%s：%v", t.local, err))
+				continue
+			}
+			libOps, libCookie = o, o.cookie
+		}
+		r, err := h.fullSyncLib(libOps, libCookie, p, t, len(targets) > 1, filter, seenName, domain, format, keepExt, skipExist)
 		if err != nil {
-			if len(cids) == 1 {
+			if len(targets) == 1 {
 				return nil, err
 			}
-			log.Printf("[同步] ✗ 媒体库 cid=%s 同步失败，继续同步附加库: %v", cid, err)
-			failed = append(failed, fmt.Sprintf("%s：%v", firstNonEmpty(r.name, "cid="+cid), err))
+			log.Printf("[同步] ✗ 媒体库 %s 同步失败，继续同步其他库: %v", firstNonEmpty(r.name, "cid="+t.cid), err)
+			failed = append(failed, fmt.Sprintf("%s：%v", firstNonEmpty(r.name, "cid="+t.cid), err))
 			continue
 		}
 		videos += r.videos
@@ -283,10 +305,10 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		complete = complete && r.complete
 		orphanTotal += r.orphans
 	}
-	if len(cids) == 0 {
+	if len(targets) == 0 {
 		return nil, fullConfigErr{fmt.Errorf("未配置 115 媒体库目录")}
 	}
-	if len(failed) == len(cids) {
+	if len(failed) == len(targets) {
 		return nil, fmt.Errorf("%d 个媒体库全部同步失败：%s", len(failed), strings.Join(failed, "；"))
 	}
 	if modeUsed != "fast" {
@@ -307,7 +329,9 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	// 全量已覆盖一切：把事件窗口内的生活事件标记为已处理，
 	// 之后的增量同步只处理此后发生的新事件。
 	// 有库没同步成功时不标：那个库窗口内的变化还得靠增量补上
-	if len(failed) > 0 {
+	if mainLibs == 0 {
+		// 只同步了附加账号的库：主号的生活事件一条都没覆盖到，不能标
+	} else if len(failed) > 0 {
 		log.Printf("[同步] ○ 有 %d 个媒体库没同步成功，生活事件窗口不标记为已覆盖（留给增量处理）", len(failed))
 	} else if cookieOnly, err := h.get115Cookie(); err == nil {
 		if n, err := h.markEventsCoveredByFullSync(cookieOnly); err != nil {
@@ -315,6 +339,9 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		} else if n > 0 {
 			log.Printf("[同步] 生活事件窗口已标记为已覆盖: %d 条（增量同步只处理此后新事件）", n)
 		}
+	}
+	if len(targets) > mainLibs {
+		h.markAcctLibsSynced(time.Now()) // 附加账号的库刚同步过：定时补同步从现在算起
 	}
 	SetTaskProgress("")
 	log.Printf("[同步] 全量同步完成（%s模式）：视频 %d 个（新增 STRM %d，已存在 %d，失败 %d），附属文件下载 %d 个，用时 %s",
@@ -334,9 +361,16 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		AssetsDownloaded: st.AssetsDownloaded,
 		AssetsSkipped:    st.AssetsSkipped,
 		AssetsFailed:     st.AssetsFailed,
-		Libs:             len(cids),
+		Libs:             len(targets),
 		Failed:           failed,
 	}, nil
+}
+
+// fullTarget 全量要同步的一个库：主号的库只有 cid；附加账号的库带账号与本地名（acctlibs.go）
+type fullTarget struct {
+	acct  uint
+	cid   string
+	local string
 }
 
 // fullLibResult 一个媒体库的全量结果
@@ -351,11 +385,17 @@ type fullLibResult struct {
 
 // fullSyncLib 同步一个媒体库：取清单 → 落盘 → 失效 STRM 标记（只标这个库的台账）。
 // seenName 记已经同步过的库名：同名的两个库会落进同一棵本地目录树，后一个拒绝
-func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid string, multi bool, filter *syncFilter,
+func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, t fullTarget, multi bool, filter *syncFilter,
 	seenName map[string]string, domain, format string, keepExt, skipExist bool) (fullLibResult, error) {
 	var r fullLibResult
-	// 媒体库的本地目录名（如"俱乐部"），作为 STRM 路径的第一层。定过本地名就不再问 115（liblocal.go）
-	r.name = libDirName(cookie, cid)
+	cid := t.cid
+	// 媒体库的本地目录名（如"俱乐部"），作为 STRM 路径的第一层。定过本地名就不再问 115（liblocal.go）；
+	// 附加账号的库本地名必填，不问 115
+	if t.acct != acctMain {
+		r.name = t.local
+	} else {
+		r.name = libDirName(cookie, cid)
+	}
 	if multi {
 		if r.name == "" {
 			return r, fmt.Errorf("读不出媒体库目录名（可能已删除，或暂时连不上 115）")
@@ -367,9 +407,14 @@ func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid s
 	}
 
 	log.Printf("[同步] ▶ 全量同步开始（媒体库 %s cid=%s → %s）", firstNonEmpty(r.name, "?"), cid, p.LocalPath)
-	// 整理工作区不参与同步（见 orgSkipCids）；打印各槽位配置情况，配错配漏一眼可见
-	skipCids, slots := h.orgSkipCids(cid)
-	vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
+	// 整理工作区不参与同步（见 orgSkipCids）；打印各槽位配置情况，配错配漏一眼可见。
+	// 工作区都在主号上，附加账号的库不用排除
+	var skipCids map[string]bool
+	if t.acct == acctMain {
+		var slots []string
+		skipCids, slots = h.orgSkipCids(cid)
+		vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
+	}
 
 	// 取清单（模式见 collectSyncFiles）；库名作为 STRM 路径第一层
 	var videos, assets []remoteFile
@@ -378,6 +423,15 @@ func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid s
 		return r, fmt.Errorf("遍历 115 目录失败: %w", err)
 	}
 	r.modeUsed, r.complete, r.videos, r.assets = modeUsed, complete, len(videos), len(assets)
+	if t.acct != acctMain {
+		// 附加账号的文件：直链与台账都带账号（acctlibs.go）
+		for i := range videos {
+			videos[i].Acct = t.acct
+		}
+		for i := range assets {
+			assets[i].Acct = t.acct
+		}
+	}
 
 	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
 	r.st = applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
@@ -395,10 +449,10 @@ func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid s
 		default:
 			seen := make(map[string]bool, len(videos)+len(assets))
 			for _, f := range videos {
-				seen[f.Fid] = true
+				seen[f.ledgerFid()] = true
 			}
 			for _, f := range assets {
-				seen[f.Fid] = true
+				seen[f.ledgerFid()] = true
 			}
 			marked, cleared, total := markOrphans(h.DB, r.name, seen)
 			r.orphans = total
@@ -566,10 +620,10 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 	claimed := map[string]string{}
 	for _, f := range videos {
 		name := strmNameFor(f)
-		if owner, ok := claimed[path.Join(f.Path, name)]; ok && owner != f.Fid {
+		if owner, ok := claimed[path.Join(f.Path, name)]; ok && owner != f.ledgerFid() {
 			name = legacyStrmNameOf(f.Name)
 		}
-		claimed[path.Join(f.Path, name)] = f.Fid
+		claimed[path.Join(f.Path, name)] = f.ledgerFid()
 		strmRel, wrote, err := writeStrmNamed(localPath, domain, format, keepExt, skipExist, f, name)
 		if err != nil {
 			log.Printf("[同步] 生成 STRM 失败: %s/%s: %v", f.Path, f.Name, err)
@@ -583,7 +637,7 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 			st.StrmExisting++
 		}
 		videoRows = append(videoRows, model.SyncedFile{
-			FileID: f.Fid, PickCode: f.PickCode,
+			FileID: f.ledgerFid(), PickCode: f.playID(),
 			RelPath: strmRel, Kind: "video", Size: f.Size, Sha1: f.Sha1,
 		})
 	}
@@ -658,7 +712,7 @@ func upsertSyncedFile(db *gorm.DB, f remoteFile, relPath, kind string) {
 	if db == nil || f.Fid == "" {
 		return
 	}
-	sf := model.SyncedFile{FileID: f.Fid, PickCode: f.PickCode, RelPath: relPath, Kind: kind, Size: f.Size, Sha1: f.Sha1}
+	sf := model.SyncedFile{FileID: f.ledgerFid(), PickCode: f.playID(), RelPath: relPath, Kind: kind, Size: f.Size, Sha1: f.Sha1}
 	db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "file_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"pick_code", "rel_path", "kind", "size", "sha1", "updated_at"}),
@@ -927,7 +981,7 @@ func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remo
 // writeStrmNamed 同 writeStrm，文件名由调用方定（同一批里去重同名视频时用）
 func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile, strmName string) (strmRel string, wrote bool, err error) {
 	base := strings.TrimRight(domain, "/")
-	idPart := f.PickCode
+	idPart := f.playID() // 附加账号的文件是 {账号}~{pickcode}（acctlibs.go）
 	if keepExt || isISOName(f.Name) {
 		// ISO 不看开关一律带 .iso：STRM 名不带扩展名之后，直链是本地唯一认得出光盘镜像的地方（strmiso.go）
 		idPart += pathExt(f.Name)

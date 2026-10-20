@@ -30,6 +30,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import { configApi, libraryApi, storageApi } from '@/api'
 import { ApiError } from '@/api/client'
 import type { LibInboxConfirm, LibInboxReq, LibMode, LibOpt, LibPreview, LibrariesView, LibraryView } from '@/api/library'
+import type { Account115 } from '@/api/storage'
 import type { LibScrape } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
@@ -63,6 +64,8 @@ interface DraftLib {
   scrape: LibScrape
   /** 本地目录名（STRM 第一层）。新库空着 = 用 115 目录名；台账里有内容的库不能改（后端 liblocal.go） */
   local: string
+  /** 哪个 115 账号：0 = 主号；附加账号的库只能「我自己整理」（后端 acctlibs.go） */
+  account: number
   /** 按 depth 认出来的片目（不参与「有没有改动」的比较） */
   preview?: LibPreview | null
   previewing?: boolean
@@ -85,6 +88,7 @@ function draftsFrom(v: LibrariesView): DraftLib[] {
     depth: l.depth || 2,
     scrape: l.scrape || 'auto',
     local: l.name,
+    account: l.account || 0,
   }))
 }
 /** 「默认放这里」的库 cid（阶段 3：不一定是首个库；空 = 一个本站整理的库都没有） */
@@ -93,7 +97,7 @@ const serialize = (d: DraftLib[]) =>
   JSON.stringify(
     [fallback.value, ...d.map((x) => ({
       cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null,
-      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape, local: x.local.trim(),
+      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape, local: x.local.trim(), account: x.account,
     }))],
   )
 const dirty = computed(() => serialize(drafts.value) !== snapshot)
@@ -154,8 +158,40 @@ function localPathOf(d: DraftLib) {
 // ---- 添加 ----
 
 function addLib() {
-  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2, scrape: 'auto', local: '' })
+  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2, scrape: 'auto', local: '', account: 0 })
 }
+
+// ---- 附加账号（后端 account115.go / acctlibs.go，STATION_MULTI_ACCOUNT 打开才显示） ----
+
+/** 已登录的附加账号：添加库时可以选 */
+const extraAccounts = ref<Account115[]>([])
+async function loadAccounts() {
+  if (!view.value?.multi_account) return
+  try {
+    extraAccounts.value = (await storageApi.accounts()).data.filter((a) => !a.main && a.logged_in)
+  } catch {
+    extraAccounts.value = []
+  }
+}
+watch(() => view.value?.multi_account, (v) => v && void loadAccounts())
+const accountOpts = computed(() => [
+  { label: '主账号', value: 0 },
+  ...extraAccounts.value.map((a) => ({ label: a.user_name ? `${a.name}（${a.user_name}）` : a.name, value: a.id })),
+])
+/** 新加的库换账号：目录要重选；附加账号的库只能自己整理 */
+function setAccount(d: DraftLib, v: number) {
+  if (v === d.account) return
+  d.account = v
+  d.pick = { cid: '', path: '' }
+  d.cid = ''
+  if (v) {
+    d.mode = 'self'
+    d.inboxes = []
+    d.inboxDraft = undefined
+  }
+}
+/** 附加账号的库在 lib_opts 里的 key（后端 acctLibKey） */
+const acctKey = (account: number, cid: string) => `a${account}:${cid}`
 function dropNew(i: number) {
   drafts.value.splice(i, 1)
 }
@@ -344,19 +380,30 @@ async function resolveNew(): Promise<boolean> {
     let p = d.pick?.path.trim() ?? ''
     if (!p || /^\d+$/.test(p)) {
       try {
-        p = (await storageApi.path115(cid)).path
+        p = (await storageApi.path115(cid, d.account)).path
       } catch {
         p = ''
       }
     }
     d.cid = cid
     d.pick = { cid, path: p }
+    if (d.account && !d.local.trim()) d.local = pickName(d) // 附加账号的库本地名必填（后端没有它的路径缓存）
   }
   return true
 }
 
 function buildReq(list: DraftLib[], confirmed: Set<string>) {
-  const extra_libs = list.slice(1).map((d) => ({ cid: d.cid, path: d.isNew ? (d.pick?.path ?? '') : d.view?.path || '' }))
+  // 主号的库进 full.extra_libs（第一个是首个库，不在这里）；附加账号的库另存 acct_libs
+  const mains = list.filter((d) => !d.account)
+  const extra_libs = mains.slice(1).map((d) => ({ cid: d.cid, path: d.isNew ? (d.pick?.path ?? '') : d.view?.path || '' }))
+  const acct_libs = list
+    .filter((d) => d.account)
+    .map((d) => ({
+      account: d.account,
+      cid: d.isNew ? d.cid : d.view?.raw_cid || '',
+      path: d.isNew ? (d.pick?.path ?? '') : d.view?.path || '',
+      local: d.local.trim() || pickName(d),
+    }))
   const inboxes: LibInboxReq[] = []
   for (const d of list) {
     for (const b of d.inboxes) inboxes.push({ cid: b.cid, name: b.name, lib: d.cid })
@@ -364,16 +411,20 @@ function buildReq(list: DraftLib[], confirmed: Set<string>) {
     if (name && !d.inboxes.length) inboxes.push({ name, lib: d.cid, confirm: confirmed.has(name) })
   }
   const opts: Record<string, LibOpt> = {}
-  for (const d of list) opts[d.cid] = d.mode === 'self' ? { mode: 'self', depth: d.depth, scrape: d.scrape } : { mode: 'organize', scrape: d.scrape }
+  for (const d of list) {
+    const key = d.account && d.isNew ? acctKey(d.account, d.cid) : d.cid
+    opts[key] = d.mode === 'self' ? { mode: 'self', depth: d.depth, scrape: d.scrape } : { mode: 'organize', scrape: d.scrape }
+  }
   // 「默认放这里」：指向这次没保存进去的库时交给后端挑第一个本站整理的
   const fb = list.some((d) => d.cid === fallback.value && d.mode === 'organize') ? fallback.value : ''
   // 本地目录名只带改过的：新库填了才带（不填后端用 115 目录名），老库和现在的不一样才带
   const locals: Record<string, string> = {}
-  for (const d of list) {
+  for (const d of mains) {
     const v = d.local.trim()
     if (v && (d.isNew || v !== d.view?.name)) locals[d.cid] = v
   }
-  return { extra_libs, inboxes, opts, fallback: fb, locals }
+  // 没开多账号时不带 acct_libs：后端沿用现有的（老界面、隐藏状态下都不会误删附加账号的库）
+  return { extra_libs, inboxes, opts, fallback: fb, locals, ...(view.value?.multi_account ? { acct_libs } : {}) }
 }
 
 /** 发请求；同名子目录已存在且不空时问一次，确认了带上 confirm 重发 */
@@ -383,7 +434,8 @@ async function submit(list: DraftLib[], clean: string[] = []): Promise<boolean> 
     try {
       const r = await libraryApi.saveLibraries({ ...buildReq(list, confirmed), clean_local: clean })
       apply(r.data)
-      emit('saved', r.data.libs.slice(1).map((l) => ({ cid: l.cid, path: l.path })))
+      // 只把主号的附加库同步回 full.extra_libs：附加账号的库不在 full 里（acctlibs.go）
+      emit('saved', r.data.libs.filter((l) => !l.account).slice(1).map((l) => ({ cid: l.cid, path: l.path })))
       void staging.reload()
       message.success(r.subs_moved ? `已保存；${r.subs_moved} 个订阅改为转存到转存目录本身` : '已保存')
       for (const id of r.jobs ?? []) await queue.submitted(id)
@@ -520,6 +572,7 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
       <article v-for="(d, i) in drafts" :key="d.cid || `new-${i}`" class="lib">
         <header class="lib-head">
           <h3>{{ libLabel(d) }}</h3>
+          <span v-if="d.account && !d.isNew" class="tag-rest">附加账号：{{ d.view?.account_name || d.account }}</span>
           <span v-if="multi && isDefault(d)" class="tag-rest">默认放这里</span>
           <span v-if="d.isNew" class="tag-new">新加，保存后生效</span>
           <span class="grow" />
@@ -532,13 +585,32 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           </HButton>
         </header>
 
+        <!-- 附加账号（后端 acctlibs.go）：没开 STATION_MULTI_ACCOUNT 或没有登录着的附加账号时不显示 -->
+        <div v-if="d.isNew && view.multi_account && extraAccounts.length" class="row">
+          <div class="row-label">账号</div>
+          <div class="row-body">
+            <HSelect
+              :model-value="d.account"
+              :options="accountOpts"
+              class="depth"
+              aria-label="这个库在哪个 115 账号上"
+              @update:model-value="(v) => setAccount(d, Number(v))"
+            />
+            <p v-if="d.account" class="muted small">
+              附加账号的库只同步、不整理：本站生成 STRM、刮削、播放，不改它网盘上的任何东西。没有增量，靠全量同步和每 6 小时一次的补同步更新。
+            </p>
+          </div>
+        </div>
+
         <div v-if="d.isNew" class="row">
           <div class="row-label">115 目录</div>
           <div class="row-body">
             <Cid115Input
+              :key="`acct-${d.account}`"
               :ref="(el) => (newInputs[i] = el as InstanceType<typeof Cid115Input> | null)"
               v-model="d.pick!"
-              placeholder="选择另一个 115 媒体库目录"
+              :account="d.account || undefined"
+              :placeholder="d.account ? '选择附加账号里的目录' : '选择另一个 115 媒体库目录'"
             />
             <p class="muted small">和已有的库不能互相包含。</p>
           </div>
@@ -570,14 +642,16 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
         <div class="row">
           <div class="row-label">整理</div>
           <div class="row-body">
+            <p v-if="d.account" class="cat-line">我自己整理<span class="muted small">（附加账号的库只能这样：本站不改它的网盘）</span></p>
             <HSegmented
+              v-else
               :model-value="d.mode || undefined"
               :options="MODE_OPTS"
               size="sm"
               :aria-label="`${libLabel(d)} 由谁整理`"
               @update:model-value="(v) => setMode(d, v as LibMode)"
             />
-            <p class="muted small">{{ modeHint(d) }}</p>
+            <p v-if="!d.account" class="muted small">{{ modeHint(d) }}</p>
           </div>
         </div>
 

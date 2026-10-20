@@ -60,7 +60,15 @@ type remoteFile struct {
 	PickCode string `json:"pickcode"` // 下载直链用
 	Sha1     string `json:"sha1"`     // 文件 sha1（整理去重用）
 	IsAsset  bool   `json:"is_asset"` // 附属文件（图片/字幕/nfo 等，需实体落盘）
+	// Acct 附加账号的文件（acctlibs.go）：直链写 {账号}~{pickcode}，台账 fid / pickcode 带账号前缀
+	Acct uint `json:"acct,omitempty"`
 }
+
+// ledgerFid 这个文件在台账里的 FileID（附加账号带前缀，acctlibs.go）
+func (f remoteFile) ledgerFid() string { return acctLedgerFid(f.Acct, f.Fid) }
+
+// playID 这个文件在直链与台账里的播放标识（附加账号是 {账号}~{pickcode}）
+func (f remoteFile) playID() string { return encodePlayID(f.Acct, f.PickCode) }
 
 // syncFilter 全量同步的文件分类过滤器
 type syncFilter struct {

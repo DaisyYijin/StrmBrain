@@ -661,6 +661,10 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 				problems = append(problems, fmt.Sprintf("%s：认不出它在哪个网盘媒体库（库目录「%s」），没有刮削", name, e.LibName))
 				continue
 			}
+			if root.Account != acctMain {
+				problems = append(problems, fmt.Sprintf("%s：在附加账号的库里，本站不往它的网盘上传（取消勾选「上传到网盘」再刮）", name))
+				continue
+			}
 			libCid = root.Cid
 		}
 		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick, lp.strict())

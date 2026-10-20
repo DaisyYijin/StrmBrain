@@ -207,7 +207,7 @@ type subRunner struct {
 	landed func(cid string) bool
 	// dropTask 删掉等不到秒传的离线任务；nil = 不删（测试）
 	dropTask func(hash string) error
-	quota   func() (left, total int, err error) // 115 离线剩余配额
+	quota    func() (left, total int, err error) // 115 离线剩余配额
 	// re0Files RE0 文件预览（付费解锁前核对缺集）；nil = 不预览，按标题判
 	re0Files func(slug string) (*re0Preview, error)
 	// identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
@@ -1264,7 +1264,8 @@ func subLedgerHasSha1(sha1 string) bool {
 		return false
 	}
 	var n int64
-	model.DB.Model(&model.SyncedFile{}).Where("UPPER(sha1) = ? AND orphan_at IS NULL", strings.ToUpper(sha1)).Count(&n)
+	// 附加账号里有不算：订阅是往主号里补（acctlibs.go）
+	model.DB.Model(&model.SyncedFile{}).Where("UPPER(sha1) = ? AND orphan_at IS NULL AND "+ledgerMainOnlySQL, strings.ToUpper(sha1)).Count(&n)
 	return n > 0
 }
 

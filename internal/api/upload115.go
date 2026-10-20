@@ -565,6 +565,7 @@ func monitorOnce(h *Handler) {
 	if len(roots) == 0 || roots[0].Abs == "" {
 		return
 	}
+	acctLibs := loadAcctLibs() // 附加账号的库：本站不往它的网盘上传（acctlibs.go）
 
 	// 扫描监控目录：Emby 刮削产物（标准图片命名 + NFO），只处理最近 24h 内的新文件
 	var imgs []string
@@ -605,6 +606,11 @@ func monitorOnce(h *Handler) {
 		}
 		// 定位 115 目标目录：本地第一层库名对应的媒体库 + 库内相对目录（files/getid 查询）
 		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
+		if targetAbs == "" || acctLibNamed(acctLibs, firstRelSeg(rel)) {
+			// 附加账号的库（acctlibs.go）或认不出目标：不传。空路径交给 files/getid 会落到网盘根
+			skippedMeta++
+			continue
+		}
 		cid, ok := cloudPathCid(cookie, targetAbs)
 		if !ok {
 			// 115 无对应目录（多为播放器自建的 <集名>.mkv/ 本地元数据目录）：
@@ -707,6 +713,7 @@ func (h *Handler) uploadMetadataOnce() {
 	if len(roots) == 0 || roots[0].Abs == "" {
 		return
 	}
+	acctLibs := loadAcctLibs() // 附加账号的库：本站不往它的网盘上传（acctlibs.go）
 
 	// 扫描媒体树里的元数据文件（跳过已上传标记；用台账判定是否已在云端）
 	var files []string
@@ -743,6 +750,9 @@ func (h *Handler) uploadMetadataOnce() {
 		}
 		// 本地第一层库名对应的媒体库 + 库内相对目录
 		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
+		if targetAbs == "" || acctLibNamed(acctLibs, firstRelSeg(rel)) {
+			continue // 附加账号的库（acctlibs.go）或认不出目标：不传，空路径交给 files/getid 会落到网盘根
+		}
 		cid, found := cloudPathCid(cookie, targetAbs)
 		if !found {
 			// 同一文件连续多轮查不到云端目录就停止重试（防每 5 分钟刷屏）

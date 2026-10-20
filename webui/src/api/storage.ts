@@ -82,17 +82,20 @@ export interface DirListResult {
   truncated?: boolean
 }
 
+/** 附加账号的 id 才带上 account（0 / 不传 = 主号，参数保持老样子） */
+const acctParam = (account?: number) => (account ? { account } : {})
+
 /** refresh 跳过后端 5 分钟的目录缓存，给选择器的「刷新」按钮用 */
-export const dirs115 = (cid: string, refresh = false) =>
-  http.get<DirListResult>('/storage/115/dirs', { params: refresh ? { cid, refresh: 1 } : { cid } })
+export const dirs115 = (cid: string, refresh = false, account?: number) =>
+  http.get<DirListResult>('/storage/115/dirs', { params: { cid, ...(refresh ? { refresh: 1 } : {}), ...acctParam(account) } })
 
 /** 把 /影视/电影 这样的路径逐段解析成 cid */
-export const resolve115 = (path: string) =>
-  http.get<{ cid?: string }>('/storage/115/resolve', { params: { path } })
+export const resolve115 = (path: string, account?: number) =>
+  http.get<{ cid?: string }>('/storage/115/resolve', { params: { path, ...acctParam(account) } })
 
 /** 把历史配置中的裸 cid 反查为可读路径 */
-export const path115 = (cid: string) =>
-  http.get<{ cid: string; path: string }>('/storage/115/path', { params: { cid } })
+export const path115 = (cid: string, account?: number) =>
+  http.get<{ cid: string; path: string }>('/storage/115/path', { params: { cid, ...acctParam(account) } })
 
 export const localDirs = (path: string) => http.get<DirListResult>('/storage/local/dirs', { params: { path } })
 

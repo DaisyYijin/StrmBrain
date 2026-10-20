@@ -102,6 +102,8 @@ type syncJobParams struct {
 	ImageExt  []string `json:"image_ext"`
 	DataExt   []string `json:"data_ext"`
 	Mode      string   `json:"mode,omitempty"`
+	// AcctOnly 全量只同步附加账号的库（acctlibs.go）
+	AcctOnly bool `json:"acct_only,omitempty"`
 }
 
 func decodeJobParams(job *model.TaskJob) jobParams {

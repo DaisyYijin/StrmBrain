@@ -103,13 +103,16 @@ func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 func execFullJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	p := decodeJobParams(job).Sync
-	if p == nil || p.Cid == "" {
+	if p == nil || (p.Cid == "" && !p.AcctOnly) {
 		return jobOutcome{}, errors.New("任务参数错误：缺少 115 媒体库 cid")
+	}
+	if p.AcctOnly && len(loadAcctLibs()) == 0 {
+		return jobOutcome{Idle: true}, nil // 排队期间附加账号的库都被移除了
 	}
 	setJobProgress("全量同步", progressKeep, progressKeep, "")
 	sum, err := h.executeFullSync(fullParams{
 		Cid: p.Cid, LocalPath: p.LocalPath,
-		VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt, Mode: p.Mode,
+		VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt, Mode: p.Mode, AcctOnly: p.AcctOnly,
 	})
 	if err != nil {
 		return jobOutcome{}, err

@@ -390,7 +390,8 @@ func (w *washScanner) sameFile(sha1 string) []model.SyncedFile {
 		return rows
 	}
 	var rows []model.SyncedFile
-	model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL", sha1).Find(&rows)
+	// 附加账号的行不参与：不做跨账号去重，让位也动不了别的账号的文件（acctlibs.go）
+	model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerMainOnlySQL, sha1).Find(&rows)
 	w.sha1s[sha1] = rows
 	return rows
 }

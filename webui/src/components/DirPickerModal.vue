@@ -17,6 +17,8 @@ const props = defineProps<{
   initial?: string
   /** 115 模式的现值 cid；有它才定位（路径可能只是旧配置留下的纯数字） */
   initialCid?: string
+  /** 浏览哪个 115 账号：附加账号的 id，不传 = 主号（后端 account115.go） */
+  account?: number
 }>()
 const emit = defineEmits<{
   'update:show': [boolean]
@@ -71,7 +73,7 @@ async function load115(
   loading.value = true
   note.value = ''
   try {
-    const data = await storageApi.dirs115(nextCid, opts?.refresh)
+    const data = await storageApi.dirs115(nextCid, opts?.refresh, props.account)
     if (my !== seq) return
     if (opts?.history === 'push') history.value.push({ cid: cid.value, trail: trail.value && [...trail.value] })
     else if (opts?.history === 'pop') history.value.pop()
@@ -130,7 +132,7 @@ async function loadLocal(p: string, opts?: { fallback?: boolean }) {
 /** 按 cid 反查可读路径；查不出返回 null（只能按 cid 显示） */
 async function trailOfCid(c: string): Promise<string[] | null> {
   try {
-    return segsOf((await storageApi.path115(c)).path)
+    return segsOf((await storageApi.path115(c, props.account)).path)
   } catch {
     return null
   }
@@ -196,7 +198,7 @@ async function goUp() {
     return
   }
   try {
-    const data = await storageApi.resolve115(trailPath(parent))
+    const data = await storageApi.resolve115(trailPath(parent), props.account)
     if (data.cid) load115(data.cid, parent, { history: 'reset' })
   } catch (e) {
     note.value = e instanceof Error ? e.message : '上级目录无法解析'
@@ -224,7 +226,7 @@ async function jump() {
     return
   }
   try {
-    const data = await storageApi.resolve115(v)
+    const data = await storageApi.resolve115(v, props.account)
     if (data.cid) load115(data.cid, segsOf(v), { history: 'reset' })
   } catch (e) {
     // 解析失败只报原因，列表与当前目录保持不动

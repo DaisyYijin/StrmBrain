@@ -372,7 +372,7 @@ func libEpisodeLedger(libName string) episodeLedger {
 		inDir: func(rel string) []model.SyncedFile { return libraryFilesOf(rel, libName) },
 		bySha1: func(sha1 string) []model.SyncedFile {
 			var rows []model.SyncedFile
-			model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL", sha1).Find(&rows)
+			model.DB.Where("sha1 = ? AND sha1 != '' AND orphan_at IS NULL AND "+ledgerMainOnlySQL, sha1).Find(&rows)
 			return rows
 		},
 	}

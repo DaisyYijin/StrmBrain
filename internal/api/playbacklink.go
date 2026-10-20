@@ -38,6 +38,19 @@ var playbackLinks = newPlaybackLinkResolver(proxyDownloadURLFull)
 
 func normalizePlaybackID(id string) string {
 	id = strings.SplitN(id, "/", 2)[0]
+	// 附加账号的标识是 {账号}~{pickcode}（acctlibs.go）：账号段原样留着，缓存键、台账都带着它
+	acct := ""
+	if a, rest, ok := strings.Cut(id, "~"); ok {
+		if a == "" || !isAllDigits(a) {
+			return ""
+		}
+		if n, err := strconv.ParseUint(a, 10, 32); err != nil {
+			return ""
+		} else if n != 0 {
+			acct = strconv.FormatUint(n, 10) + "~"
+		}
+		id = rest
+	}
 	if i := strings.IndexByte(id, '.'); i >= 0 {
 		id = id[:i]
 	}
@@ -49,7 +62,7 @@ func normalizePlaybackID(id string) string {
 			return ""
 		}
 	}
-	return strings.ToLower(id)
+	return acct + strings.ToLower(id)
 }
 
 func playbackPickcode(db *gorm.DB, id string) (string, error) {

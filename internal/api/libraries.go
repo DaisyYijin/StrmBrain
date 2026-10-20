@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -33,7 +34,11 @@ type libraryView struct {
 	PanName string `json:"pan_name"`
 	// LocalLocked 台账里已经有这个库的内容：本地目录名不能再改（librariessave.go 的 planLibLocals 同口径）
 	LocalLocked bool `json:"local_locked"`
-	Default     bool `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
+	// Account 附加账号的库（acctlibs.go）：账号 id（主号为 0）、账号名；Cid 是 a{账号}:{cid}，RawCid 是它在那个账号里的目录 id
+	Account     uint   `json:"account"`
+	AccountName string `json:"account_name,omitempty"`
+	RawCid      string `json:"raw_cid,omitempty"`
+	Default     bool   `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
 	// First 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除
 	First bool `json:"first"`
 	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
@@ -73,12 +78,22 @@ type libNameSource struct {
 	CachedOK bool
 	Cached   model.PathCache
 	Local    string // lib_opts 里定下的本地目录名；空 = 老行为，本地第一层跟 115 目录名走
+	// Account 附加账号的库（acctlibs.go）：Cid 是 a{账号}:{cid}，Local 必有，没有路径缓存，网盘路径只给显示
+	Account uint
 }
 
 // libRootOf 名字与网盘路径。缓存里的是 115 现在的样子；显示路径是选目录那一刻的样子。
 // Name 是本地第一层：定过本地名用本地名，否则就是 115 目录名
 func (s libNameSource) libRootOf() libRoot {
 	r := libRoot{Cid: s.Cid}
+	if s.Account != acctMain {
+		// Abs 留空：panDirOfLocal 据此不往附加账号的网盘上写
+		r.Name, r.Account, r.Self = s.Local, s.Account, true
+		if p := strings.TrimRight(strings.TrimSpace(s.Shown), "/"); p != "" {
+			r.PanName = path.Base(p)
+		}
+		return r
+	}
 	if s.CachedOK {
 		r.PanName, r.Abs = s.Cached.Name, s.Cached.Path
 		if r.PanName == "" && r.Abs != "" {
@@ -124,6 +139,10 @@ func libNameSources(fullRaw string) []libNameSource {
 		s := libNameSource{Cid: cid, Shown: shown[cid], Local: strings.TrimSpace(opts.of(cid).Local)}
 		s.Cached, s.CachedOK = lookupCachedRow(cid)
 		out = append(out, s)
+	}
+	// 附加账号的库排在主号的库后面（acctlibs.go）
+	for _, e := range loadAcctLibs() {
+		out = append(out, libNameSource{Cid: e.key(), Shown: e.Path, Local: e.Local, Account: e.Account})
 	}
 	return out
 }
@@ -245,6 +264,8 @@ type librariesView struct {
 	// Emby 整体状态：没配 / 读失败时给原因，库卡片上就不显示覆盖情况
 	EmbyConfigured bool   `json:"emby_configured"`
 	EmbyError      string `json:"emby_error,omitempty"`
+	// MultiAccount 界面要不要显示附加账号相关的东西（STATION_MULTI_ACCOUNT，account115.go）
+	MultiAccount bool `json:"multi_account"`
 }
 
 // buildLibrariesView 组装库卡片。embyLocs 为 nil 表示没读 Emby（没配或读失败）
@@ -284,6 +305,10 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 			Rules: byLib[r.Cid], Inboxes: inboxes[r.Cid]}
 		if r.Name != "" && root != "" {
 			v.Local = root + "/" + r.Name
+		}
+		if r.Account != acctMain {
+			v.Account, v.Path = r.Account, sources[i].Shown
+			_, v.RawCid, _ = splitAcctLibKey(r.Cid)
 		}
 		if v.Rules == nil {
 			v.Rules = []ruleLibRef{}
@@ -343,7 +368,16 @@ func (h *Handler) librariesNow() librariesView {
 			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()
 		}
 		v.Libs[i].LocalLocked = ledgerHasLib(v.Libs[i].Name)
+		if a := v.Libs[i].Account; a != acctMain && h.DB != nil {
+			var s model.Storage
+			if h.DB.Select("name").First(&s, a).Error == nil {
+				v.Libs[i].AccountName = s.Name
+			} else {
+				v.Libs[i].AccountName = fmt.Sprintf("已删除的账号 %d", a)
+			}
+		}
 	}
+	v.MultiAccount = multiAccountUIEnabled()
 	return v
 }
 

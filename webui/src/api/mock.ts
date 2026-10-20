@@ -478,6 +478,7 @@ function mockLibrariesView() {
       local: `/media/${l.name}`,
       pan_name: l.name,
       local_locked: l.cid !== '300',
+      account: 0,
       default: l.cid === mockFallback(),
       first: i === 0,
       mode: mockOpts[l.cid]?.mode === 'self' ? 'self' : 'organize',
@@ -494,6 +495,7 @@ function mockLibrariesView() {
     // 「动画」是动漫库改名前的名字（演示一键修复）
     rename_fixes: rules.some((r) => r.library === '动画') ? [{ from: '动画', to: '动漫', lib: '200' }] : [],
     names_known: true,
+    multi_account: false,
     staging_root: '301',
     local_root: '/media',
     emby_configured: true,
