@@ -90,8 +90,19 @@ func parseAcctLibs(raw string) []acctLibEntry {
 	return keep
 }
 
-// loadAcctLibs 当前配置的附加账号的库
-func loadAcctLibs() []acctLibEntry { return parseAcctLibs(settingValueCompat(acctLibsKey)) }
+// loadAcctLibs 当前别的账号的库：媒体库表里有库就从表里取（libstore.go），表还空时读老的 acct_libs
+func loadAcctLibs() []acctLibEntry {
+	if libs := loadLibraries(); len(libs) > 0 {
+		var out []acctLibEntry
+		for _, l := range libs {
+			if l.Account != acctMain {
+				out = append(out, acctLibEntry{Account: l.Account, Cid: l.Cid, Path: l.Path, Local: l.Local})
+			}
+		}
+		return out
+	}
+	return parseAcctLibs(settingValueCompat(acctLibsKey))
+}
 
 // acctLibKeysOf 一组附加账号库的 key
 func acctLibKeysOf(list []acctLibEntry) []string {

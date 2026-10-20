@@ -61,7 +61,10 @@ func ledgerTopCounts() (map[string][2]int64, error) {
 func findLibLeftovers(counts map[string][2]int64, libNames []string, layout libCategoryLayout) []libLeftover {
 	keep := map[string]bool{}
 	for _, n := range libNames {
-		keep[n] = true
+		// 库的本地目录可以多级（电影/主号，libstore.go）：它的第一段整段都不算残留。
+		// 代价是「电影/」下不属于任何库的残留这里看不出来 —— 宁可漏报，不能把别的库当残留清掉
+		top, _, _ := strings.Cut(normLibLocal(n), "/")
+		keep[top] = true
 	}
 	for dir := range layout.cats {
 		top, _, _ := strings.Cut(dir, "/")
@@ -80,7 +83,7 @@ func findLibLeftovers(counts map[string][2]int64, libNames []string, layout libC
 
 // libLeftoversNow 当前的残留。认不出各库名字时报错（不下结论）
 func (h *Handler) libLeftoversNow() ([]libLeftover, error) {
-	if h.loadFullSyncCfg().Cid == "" {
+	if len(effectiveLibraries(h.getSettingValue)) == 0 {
 		return nil, nil // 没配媒体库：谈不上残留
 	}
 	cookie, _ := h.get115Cookie()

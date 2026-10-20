@@ -227,8 +227,12 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 // 不在过滤集合内的文件一律不同步。
 // 调用方负责持有 taskMu 与 beginTask/endTask（HTTP 入口与 cron 调度器都要用）
 func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
-	if p.LocalPath == "" {
-		p.LocalPath = defaultLocalPath
+	// 本地根固定（mediaroot.go）：排队时带着的旧路径一律不认（单元测试显式给的临时目录除外）
+	if !mediaRootLegacyForTests || p.LocalPath == "" {
+		p.LocalPath = mediaRoot()
+	}
+	if prob := mediaRootProblem(); prob != "" {
+		return nil, fullConfigErr{fmt.Errorf("%s", prob)}
 	}
 	fullStart := time.Now()
 
@@ -251,15 +255,34 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置；
 	// 附加账号的库排在最后（acctlibs.go），各用各账号的只读通道。
 	// 一个库失败不拦别的库；有库失败时不标记事件窗口（见下），那个库的变化留给增量补
+	// 库清单：媒体库表（libstore.go）。表还空（迁移前）时退回老配置：这次的主库 + full.extra_libs + acct_libs
 	var targets []fullTarget
-	if !p.AcctOnly {
-		for _, cid := range libCidsOf(p.Cid, h.loadFullSyncCfg().ExtraLibs) {
-			targets = append(targets, fullTarget{cid: cid})
+	if libs := loadLibraries(); len(libs) > 0 {
+		for _, l := range libs {
+			if l.Account == acctMain && !p.AcctOnly {
+				targets = append(targets, fullTarget{cid: l.Cid, local: l.Local})
+			}
+		}
+		for _, l := range libs {
+			if l.Account != acctMain {
+				targets = append(targets, fullTarget{acct: l.Account, cid: l.Cid, local: l.Local})
+			}
+		}
+	} else {
+		if !p.AcctOnly {
+			for _, cid := range libCidsOf(p.Cid, h.loadFullSyncCfg().ExtraLibs) {
+				targets = append(targets, fullTarget{cid: cid})
+			}
+		}
+		for _, e := range loadAcctLibs() {
+			targets = append(targets, fullTarget{acct: e.Account, cid: e.Cid, local: e.Local})
 		}
 	}
-	mainLibs := len(targets)
-	for _, e := range loadAcctLibs() {
-		targets = append(targets, fullTarget{acct: e.Account, cid: e.Cid, local: e.Local})
+	mainLibs := 0
+	for _, t := range targets {
+		if t.acct == acctMain {
+			mainLibs++
+		}
 	}
 	cookie, _ := h.get115Cookie()
 	var videos, assets int
@@ -396,9 +419,9 @@ func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, t ful
 	var r fullLibResult
 	cid := t.cid
 	// 媒体库的本地目录名（如"俱乐部"），作为 STRM 路径的第一层。定过本地名就不再问 115（liblocal.go）；
-	// 附加账号的库本地名必填，不问 115
-	if t.acct != acctMain {
-		r.name = t.local
+	// 附加账号的库本地名必填，不问 115；媒体库表里的库都带本地目录（可以多级）
+	if t.local != "" {
+		r.name = normLibLocal(t.local)
 	} else {
 		r.name = libDirName(cookie, cid)
 	}
@@ -514,13 +537,7 @@ func vlog(format string, args ...interface{}) {
 // 目录写 poster/nfo（此前 0755 导致其 Permission denied，回退只存内部库）
 // RelaxedMediaPerms 对存量媒体树补宽松权限（幂等，异步执行不阻塞启动）
 func (h *Handler) RelaxedMediaPerms() {
-	local := defaultLocalPath
-	var fullCfg struct {
-		LocalPath string `json:"local_path"`
-	}
-	if json.Unmarshal([]byte(h.getSettingValue("full")), &fullCfg) == nil && fullCfg.LocalPath != "" {
-		local = fullCfg.LocalPath
-	}
+	local := mediaRoot() // mediaroot.go
 	go func() {
 		dirs, files := relaxMediaPerms(local)
 		if dirs+files > 0 {

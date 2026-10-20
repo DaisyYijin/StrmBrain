@@ -131,7 +131,7 @@ func (h *Handler) FixLibraryRename(c *gin.Context) {
 	log.Printf("[媒体库] ✓ 分类规则里的库名「%s」已改成「%s」（库在 115 上改过名）", fix.From, fix.To)
 
 	// 显示路径刷新只影响下次还会不会被认成「改过名」，失败不算这次修复失败
-	for _, s := range libNameSources(h.getSettingValue("full")) {
+	for _, s := range legacyLibNameSources(h.getSettingValue("full")) {
 		if s.Cid != fix.Lib || !s.CachedOK {
 			continue
 		}

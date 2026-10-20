@@ -31,6 +31,7 @@ var (
 	libStoreMu sync.Mutex
 	libStore   []model.Library
 	libStoreAt time.Time
+	libStoreDB *gorm.DB // 缓存是哪个库读出来的：换了数据库（测试、恢复备份后重启）不能沿用
 )
 
 func forgetLibraries() {
@@ -43,14 +44,17 @@ func forgetLibraries() {
 func loadLibraries() []model.Library {
 	libStoreMu.Lock()
 	defer libStoreMu.Unlock()
-	if libStore != nil && time.Since(libStoreAt) < 30*time.Second {
+	if libStore != nil && libStoreDB == model.DB && time.Since(libStoreAt) < 30*time.Second {
 		return libStore
 	}
 	var out []model.Library
 	if model.DB != nil {
 		model.DB.Order("sort, id").Find(&out)
 	}
-	libStore, libStoreAt = out, time.Now()
+	if out == nil {
+		out = []model.Library{}
+	}
+	libStore, libStoreAt, libStoreDB = out, time.Now(), model.DB
 	return out
 }
 
@@ -300,7 +304,7 @@ func (h *Handler) MigrateLibrariesV2() {
 	h.DB.Where("type = ?", "category_config").First(&rule)
 	fullRaw := h.getSettingValue("full")
 	sources := map[string]libNameSource{}
-	for _, s := range libNameSources(fullRaw) {
+	for _, s := range legacyLibNameSources(fullRaw) {
 		sources[s.Cid] = s
 	}
 	cookie, _ := h.get115Cookie()
@@ -400,4 +404,144 @@ func saveLibrariesTx(tx *gorm.DB, libs []model.Library) ([]model.Library, error)
 		}
 	}
 	return libs, nil
+}
+
+// ==================== 当前生效的媒体库 ====================
+
+// effectiveLibraries 当前生效的媒体库：表里有就用表；表还空（迁移前、测试）按老配置在内存里换算一份
+// （不写库、不发 115 请求，名字认不出的库这时看不到）。get 读 setting（测试注入，正常传 settingValueCompat）
+func effectiveLibraries(get func(string) string) []model.Library {
+	if libs := loadLibraries(); len(libs) > 0 {
+		return libs
+	}
+	if get == nil {
+		get = settingValueCompat
+	}
+	fullRaw := get("full")
+	sources := map[string]libNameSource{}
+	for _, s := range legacyLibNameSources(fullRaw) {
+		sources[s.Cid] = s
+	}
+	libs, _, _ := planLibrariesV2(libsV2In{
+		FullRaw: fullRaw, OptsRaw: get(libOptsKey), AcctRaw: get(acctLibsKey), Legacy: loadLegacyLibScrape(),
+		SchemeID: primarySchemeID(),
+		name: func(cid string) string {
+			if s, ok := sources[cid]; ok {
+				return s.libRootOf().Name
+			}
+			return ""
+		},
+		shown: func(cid string) string {
+			if row, ok := lookupCachedRow(cid); ok {
+				return row.Path
+			}
+			return ""
+		},
+	})
+	return libs
+}
+
+// libKeyOf 库在 lib_opts、整理记录、转存入口这些老地方用的 key：主号的库是 cid，别的账号的库是 a{账号}:{cid}
+func libKeyOf(l model.Library) string {
+	if l.Account != acctMain {
+		return acctLibKey(l.Account, l.Cid)
+	}
+	return l.Cid
+}
+
+// libOfLocalRel 本地相对路径（媒体根下）落在哪个库里：按库的本地目录**整段**最长前缀认（本地目录可以多级）。
+// 返回库、库内相对路径。各库的本地目录互不包含（validateLibraries），所以最多一个库匹配
+func libOfLocalRel(libs []model.Library, rel string) (model.Library, string, bool) {
+	rel = normLibLocal(rel)
+	best, bestLen := model.Library{}, -1
+	for _, l := range libs {
+		local := normLibLocal(l.Local)
+		if local == "" {
+			continue
+		}
+		if rel == local || strings.HasPrefix(rel, local+"/") {
+			if len(local) > bestLen {
+				best, bestLen = l, len(local)
+			}
+		}
+	}
+	if bestLen < 0 {
+		return model.Library{}, "", false
+	}
+	return best, strings.TrimPrefix(strings.TrimPrefix(rel, normLibLocal(best.Local)), "/"), true
+}
+
+// syncLibrariesFromLegacy 老的库卡片（PUT /libraries、媒体库位置）存完之后，把老配置的变化同步进媒体库表。
+// 过渡用：新的媒体库页面上线（V2 阶段 4）之前，老页面还在写 full / lib_opts / acct_libs。
+// 按「账号 + 网盘目录」对号：老配置里有的更新位置 / 本地名 / 刮削 / 层级，没有的删掉，新的加上；
+// 转存文件夹、分类方案这些老配置里没有的字段原样留着
+func (h *Handler) syncLibrariesFromLegacy() {
+	if h.DB == nil {
+		return
+	}
+	var done int64
+	h.DB.Model(&model.Setting{}).Where("key = ?", libsV2MigrateKey).Count(&done)
+	if done == 0 {
+		h.MigrateLibrariesV2() // 还没迁移过：直接迁
+		return
+	}
+	fullRaw := h.getSettingValue("full")
+	sources := map[string]libNameSource{}
+	for _, s := range legacyLibNameSources(fullRaw) {
+		sources[s.Cid] = s
+	}
+	cookie, _ := h.get115Cookie()
+	plan, _, unresolved := planLibrariesV2(libsV2In{
+		FullRaw: fullRaw, OptsRaw: h.getSettingValue(libOptsKey), AcctRaw: h.getSettingValue(acctLibsKey),
+		Legacy: loadLegacyLibScrape(), SchemeID: primarySchemeID(),
+		name: func(cid string) string {
+			if s, ok := sources[cid]; ok {
+				if n := s.libRootOf().Name; n != "" {
+					return n
+				}
+			}
+			return libDirName(cookie, cid)
+		},
+		shown: func(cid string) string {
+			if row, ok := lookupCachedRow(cid); ok {
+				return row.Path
+			}
+			return ""
+		},
+	})
+	if len(unresolved) > 0 {
+		log.Printf("[媒体库] ○ 有 %d 个库认不出名字，这次没同步进媒体库表", len(unresolved))
+		return
+	}
+	var have []model.Library
+	h.DB.Find(&have)
+	byKey := map[string]model.Library{}
+	for _, l := range have {
+		byKey[libKeyOf(l)] = l
+	}
+	seen := map[string]bool{}
+	for _, p := range plan {
+		k := libKeyOf(p)
+		seen[k] = true
+		if old, ok := byKey[k]; ok {
+			old.Local, old.Path, old.Scrape, old.Depth, old.Sort = p.Local, firstNonEmpty(p.Path, old.Path), p.Scrape, p.Depth, p.Sort
+			if old.Name == "" {
+				old.Name = p.Name
+			}
+			if p.SchemeID == 0 {
+				old.SchemeID = 0 // 改成了自己整理
+			} else if old.SchemeID == 0 {
+				old.SchemeID = p.SchemeID
+			}
+			h.DB.Save(&old)
+			continue
+		}
+		h.DB.Create(&p)
+	}
+	for k, l := range byKey {
+		if !seen[k] {
+			h.DB.Delete(&model.Library{}, l.ID)
+		}
+	}
+	forgetLibraries()
 }

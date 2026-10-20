@@ -444,7 +444,11 @@ func loadMainStorage115(db *gorm.DB, out *model.Storage) error {
 // acctLibNamesOf 这个附加账号挂着的库（「本地名」），删账号、换用户前查
 func (h *Handler) acctLibNamesOf(acct uint) []string {
 	var names []string
-	for _, e := range parseAcctLibs(h.getSettingValue(acctLibsKey)) {
+	list := loadAcctLibs()
+	if len(loadLibraries()) == 0 {
+		list = parseAcctLibs(h.getSettingValue(acctLibsKey)) // 媒体库表还空：读老的 acct_libs
+	}
+	for _, e := range list {
 		if e.Account == acct {
 			names = append(names, "「"+e.Local+"」")
 		}

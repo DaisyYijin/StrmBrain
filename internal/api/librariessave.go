@@ -713,6 +713,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	}
 
 	// ---- 收尾 ----
+	h.syncLibrariesFromLegacy() // 老的库卡片存完：同步进媒体库表（libstore.go，V2 阶段 4 之前的过渡）
 	forgetClassifyRules()
 	if plan.OptsChanged || plan.FullChanged || plan.AcctChanged {
 		// 片目认在哪一层变了：海报墙、刮削、对账读的台账聚合都得重算

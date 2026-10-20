@@ -95,13 +95,12 @@ func chunkIDs(ids []uint, size int) [][]uint {
 
 // orphanLocalRoot 本地媒体库根目录（失效条目的 rel_path 相对于它）
 func (h *Handler) orphanLocalRoot() string {
-	var cfg struct {
-		LocalPath string `json:"local_path"`
+	if mediaRootLegacyForTests && os.Getenv("MEDIA_ROOT") == "" {
+		if v := jsonStrField(h.getSettingValue("full"), "local_path"); v != "" {
+			return v // 只有单元测试会走到（mediaroot.go）
+		}
 	}
-	if json.Unmarshal([]byte(h.getSettingValue("full")), &cfg) == nil && cfg.LocalPath != "" {
-		return cfg.LocalPath
-	}
-	return defaultLocalPath
+	return mediaRoot() // mediaroot.go
 }
 
 // orphanDetectEnabled 用户是否在 Strm 管理页打开了失效 STRM 检测（默认关）

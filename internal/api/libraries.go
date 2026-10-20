@@ -82,6 +82,8 @@ type libNameSource struct {
 	Local    string // lib_opts 里定下的本地目录名；空 = 老行为，本地第一层跟 115 目录名走
 	// Account 附加账号的库（acctlibs.go）：Cid 是 a{账号}:{cid}，Local 必有，没有路径缓存，网盘路径只给显示
 	Account uint
+	// Lib 媒体库表里的那一条（libstore.go）；老配置换算出来的没有 ID
+	Lib model.Library
 }
 
 // libRootOf 名字与网盘路径。缓存里的是 115 现在的样子；显示路径是选目录那一刻的样子。
@@ -127,8 +129,28 @@ func (s libNameSource) staleName() string {
 	return ""
 }
 
-// libNameSources 当前配置的各库（主库在前），名字只看缓存与配置，零 115 请求
+// libNameSources 当前生效的各库（libstore.go 的 effectiveLibraries：媒体库表，表还空时按老配置换算），零 115 请求。
+// fullRaw 只在表还空时用来换算（老调用方都传当前的 full 配置）
 func libNameSources(fullRaw string) []libNameSource {
+	libs := effectiveLibraries(func(k string) string {
+		if k == "full" {
+			return fullRaw
+		}
+		return settingValueCompat(k)
+	})
+	out := make([]libNameSource, 0, len(libs))
+	for _, l := range libs {
+		s := libNameSource{Cid: libKeyOf(l), Shown: l.Path, Local: l.Local, Account: l.Account, Lib: l}
+		if l.Account == acctMain {
+			s.Cached, s.CachedOK = lookupCachedRow(l.Cid)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// legacyLibNameSources 老配置（full / lib_opts / acct_libs）里的各库：迁移与表还空时的换算用，别的地方别再调
+func legacyLibNameSources(fullRaw string) []libNameSource {
 	cfg := parseFullCfg(fullRaw)
 	shown := map[string]string{strings.TrimSpace(cfg.Cid): jsonStrField(fullRaw, "cid_path")}
 	for _, e := range cfg.ExtraLibs {
@@ -359,6 +381,10 @@ func (h *Handler) librariesNow() librariesView {
 	v := buildLibrariesView(libNameSources(h.getSettingValue("full")), rows, loadStagingLibs(),
 		h.shareFolderCid(), localMediaRoot(), cfg.PathMapping, locs, loadLibOpts())
 	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
+	// 「115 上改了名」的修复只对还没定本地名的老库有意义：按老配置认（媒体库表里的库本地名都定了）
+	if fixes := libRenameFixes(v.OrphanRules, legacyLibNameSources(h.getSettingValue("full"))); len(fixes) > 0 {
+		v.RenameFixes = fixes
+	}
 	opts := loadLibOpts()
 	legacy := loadLegacyLibScrape()
 	syncStats := parseLibSyncStats(h.getSettingValue(libSyncStatsKey))

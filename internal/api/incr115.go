@@ -233,8 +233,8 @@ func normalizeIncrParams(cid, localPath string, videoExt, imageExt, dataExt []st
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	if localPath == "" {
-		localPath = defaultLocalPath
+	if !mediaRootLegacyForTests || localPath == "" {
+		localPath = mediaRoot() // 本地根固定（mediaroot.go）：请求与排队任务里带的旧路径不认
 	}
 	if cid == "" {
 		cid = "0"
@@ -255,6 +255,10 @@ func normalizeIncrParams(cid, localPath string, videoExt, imageExt, dataExt []st
 //
 //	move/rename/delete 基于本地文件台账（SyncedFile）精确执行
 func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
+	// 媒体目录没挂上时不同步（mediaroot.go）：写进一个容器里的空目录，重启就没了
+	if prob := mediaRootProblem(); prob != "" {
+		return &incrSummary{}, fmt.Errorf("%s", prob)
+	}
 	d, err := h.newIncrDeps()
 	if err != nil {
 		return &incrSummary{}, err

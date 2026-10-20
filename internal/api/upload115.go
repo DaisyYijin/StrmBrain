@@ -689,12 +689,9 @@ func (h *Handler) uploadMetadataOnce() {
 		return
 	}
 	defer metadataRunning.Store(false)
-	local := defaultLocalPath
+	local := mediaRoot() // mediaroot.go
 	fullCfg := h.loadFullSyncCfg()
-	if fullCfg.LocalPath != "" {
-		local = fullCfg.LocalPath
-	}
-	if fullCfg.Cid == "" {
+	if fullCfg.Cid == "" && len(effectiveLibraries(h.getSettingValue)) == 0 {
 		return // 未配置媒体库，无法定位云端目录
 	}
 	cookie, err := h.get115Cookie()

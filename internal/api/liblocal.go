@@ -151,7 +151,8 @@ func (h *Handler) FreezeLibLocalNames() {
 		return
 	}
 	fullRaw := h.getSettingValue("full")
-	sources := libNameSources(fullRaw)
+	// 固化的是老配置里的本地名（媒体库表之前那一套，libstore.go 迁移时读它）
+	sources := legacyLibNameSources(fullRaw)
 	if len(sources) == 0 {
 		return
 	}

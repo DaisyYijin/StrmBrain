@@ -123,29 +123,46 @@ func libRootNamed(roots []libRoot, name string) (libRoot, bool) {
 // splitLibRel 本地相对路径（第一段是库名）→ 库名 + 库内路径
 func splitLibRel(rel string) (lib, rest string) {
 	rel = strings.Trim(strings.ReplaceAll(rel, `\`, "/"), "/")
+	// 库的本地目录可以多级（电影/主号，MULTI-ACCOUNT-V2-PLAN.md §10.1）：先按媒体库表整段最长前缀认，
+	// 认不出（表还空、或不在任何库里）再按第一段（老口径，老库的本地目录都是一段）
+	if l, r, ok := libOfLocalRel(loadLibraries(), rel); ok {
+		return normLibLocal(l.Local), r
+	}
 	lib, rest, _ = strings.Cut(rel, "/")
 	return lib, rest
 }
 
 // resolveConfiguredLibRoots 当前配置的全部媒体库，按 Cookie 解析
 func (h *Handler) resolveConfiguredLibRoots(cookie string) ([]libRoot, error) {
-	cids := h.loadFullSyncCfg().libCids()
-	if len(cids) == 0 {
+	// 媒体库表（libstore.go）：主号的库在前，名字就是本地目录（可以多级）
+	libs := effectiveLibraries(h.getSettingValue)
+	var cids []string
+	localOf := map[string]string{}
+	var extras []acctLibEntry
+	for _, l := range libs {
+		if l.Account != acctMain {
+			extras = append(extras, acctLibEntry{Account: l.Account, Cid: l.Cid, Path: l.Path, Local: l.Local})
+			continue
+		}
+		cids = append(cids, l.Cid)
+		localOf[l.Cid] = l.Local
+	}
+	if len(cids) == 0 && len(extras) == 0 {
 		return nil, fmt.Errorf("未配置媒体库目录")
 	}
-	roots, err := resolveLibRoots(func(cid string) string { return libDirName(cookie, cid) },
+	roots, err := resolveLibRoots(func(cid string) string { return firstNonEmpty(localOf[cid], libDirName(cookie, cid)) },
 		func(cid string) string { return absPathOf(cookie, cid) }, cids)
 	if err != nil {
 		return roots, err
 	}
-	// 附加账号的库（acctlibs.go）：只认本地名，没有网盘路径；本地名不能和别的库撞
+	// 别的账号的库（acctlibs.go）：只认本地名，没有网盘路径；本地名不能和别的库撞
 	taken := map[string]string{}
 	for _, r := range roots {
 		if r.Name != "" {
 			taken[libLocalKey(r.Name)] = r.Cid
 		}
 	}
-	for _, r := range acctLibRoots(loadAcctLibs()) {
+	for _, r := range acctLibRoots(extras) {
 		if prev, ok := taken[libLocalKey(r.Name)]; ok {
 			return nil, fmt.Errorf("附加账号的库「%s」和 cid=%s 的库本地目录名相同，会落进同一个本地目录", r.Name, prev)
 		}

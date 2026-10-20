@@ -213,15 +213,28 @@ type incrLibSet []incrLib
 // resolveIncrLibs 主库 + 配置里的附加库，逐个解析名字与路径。
 // 任何一个解析不出都报错：它里面的事件会被当成库外吞掉、标成已消费
 func resolveIncrLibs(d incrDeps, primary string) (incrLibSet, error) {
-	cids := libCidsOf(primary, parseFullCfg(d.setting("full")).ExtraLibs)
-	if len(cids) == 0 {
+	if primary = strings.TrimSpace(primary); primary == "" || primary == "0" {
+		// 主库是 "0" / 空：沿用老口径报主库无效
 		return nil, fmt.Errorf("媒体库 cid 无效（%s）", primary)
 	}
-	if cids[0] != primary {
-		// 主库是 "0" / 空：沿用老口径报主库无效，不拿附加库顶上（整理的落点还是主库）
-		return nil, fmt.Errorf("媒体库 cid 无效（%s）", primary)
+	// 主号的媒体库（libstore.go 的媒体库表）。别的账号的库没有事件增量，靠全量（acctlibs.go）。
+	// 表还空（迁移前、测试）时按老配置：这次的主库 + full.extra_libs，本地名看 lib_opts、没有再问 115
+	var cids []string
+	opts := libOpts{Libs: map[string]libOpt{}}
+	if libs := loadLibraries(); len(libs) > 0 {
+		for _, l := range libs {
+			if l.Account == acctMain {
+				cids = append(cids, l.Cid)
+				opts.Libs[l.Cid] = libOpt{Local: l.Local}
+			}
+		}
+		if len(cids) == 0 {
+			return nil, fmt.Errorf("没有主账号的媒体库")
+		}
+	} else {
+		cids = libCidsOf(primary, parseFullCfg(d.setting("full")).ExtraLibs)
+		opts = parseLibOpts(d.setting(libOptsKey))
 	}
-	opts := parseLibOpts(d.setting(libOptsKey))
 	out := make(incrLibSet, 0, len(cids))
 	seen := map[string]string{}
 	for _, cid := range cids {

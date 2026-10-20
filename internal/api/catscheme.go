@@ -92,6 +92,7 @@ var (
 	schemeMu    sync.Mutex
 	schemeCache []model.CategoryScheme
 	schemeAt    time.Time
+	schemeDB    *gorm.DB // 换了数据库不沿用
 )
 
 func forgetSchemes() {
@@ -104,14 +105,17 @@ func forgetSchemes() {
 func loadSchemes() []model.CategoryScheme {
 	schemeMu.Lock()
 	defer schemeMu.Unlock()
-	if schemeCache != nil && time.Since(schemeAt) < 10*time.Second {
+	if schemeCache != nil && schemeDB == model.DB && time.Since(schemeAt) < 10*time.Second {
 		return schemeCache
 	}
 	var out []model.CategoryScheme
 	if model.DB != nil {
 		model.DB.Order("id").Find(&out)
 	}
-	schemeCache, schemeAt = out, time.Now()
+	if out == nil {
+		out = []model.CategoryScheme{}
+	}
+	schemeCache, schemeAt, schemeDB = out, time.Now(), model.DB
 	return out
 }
 

@@ -171,11 +171,8 @@ func (h *Handler) loadFullCron() string {
 func (h *Handler) fullParamsFromConfig() fullParams {
 	cfg := h.loadFullSyncCfg()
 	p := fullParams{
-		Cid: cfg.Cid, LocalPath: cfg.LocalPath, Mode: cfg.Mode,
+		Cid: cfg.Cid, LocalPath: mediaRoot(), Mode: cfg.Mode,
 		VideoExt: cfg.VideoExt, ImageExt: cfg.ImageExt, DataExt: cfg.DataExt,
-	}
-	if p.LocalPath == "" {
-		p.LocalPath = defaultLocalPath
 	}
 	// 没选过模式按快速模式（与界面默认一致）；不可用时 collectSyncFiles 自己降级
 	if p.Mode == "" {
@@ -187,12 +184,9 @@ func (h *Handler) fullParamsFromConfig() fullParams {
 // incrParamsFromConfig 从已保存的 full 配置组装增量参数
 func (h *Handler) incrParamsFromConfig() incrParams {
 	cfg := h.loadFullSyncCfg()
-	p := incrParams{Cid: "0", LocalPath: defaultLocalPath, Limit: 1000}
+	p := incrParams{Cid: "0", LocalPath: mediaRoot(), Limit: 1000}
 	if cfg.Cid != "" {
 		p.Cid = cfg.Cid
-	}
-	if cfg.LocalPath != "" {
-		p.LocalPath = cfg.LocalPath
 	}
 	p.VideoExt, p.ImageExt, p.DataExt = cfg.VideoExt, cfg.ImageExt, cfg.DataExt
 	return p

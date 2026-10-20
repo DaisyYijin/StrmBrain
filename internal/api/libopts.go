@@ -232,7 +232,10 @@ func loadLibScrapePolicy() libScrapePolicy {
 func buildLibScrapePolicy(sources []libNameSource, opts libOpts, legacy string) libScrapePolicy {
 	p := libScrapePolicy{byName: map[string]string{}, primary: legacy}
 	for i, s := range sources {
-		mode := opts.of(s.Cid).Scrape
+		mode := s.Lib.Scrape // 媒体库表（libstore.go）
+		if mode == "" {
+			mode = opts.of(s.Cid).Scrape
+		}
 		if mode == "" {
 			mode = legacy
 		}

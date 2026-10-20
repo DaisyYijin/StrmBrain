@@ -139,6 +139,16 @@ func scanLedgerTitlesCached() map[string]*ledgerTitleEntry {
 type libCategoryLayout struct {
 	cats map[string]string
 	self map[string]int
+	// libs 媒体库表里的库（libstore.go，2026-10-20）：本地目录可以多级，按整段最长前缀认库，
+	// 选了分类方案的按那套方案的分类目录认片目，没选的按层级（Depth）认。认不出库的路径退回上面两项（老台账）
+	libs []layoutLib
+}
+
+// layoutLib 一个库在片目认定上的样子
+type layoutLib struct {
+	local string            // 本地目录（媒体根下，归一过）
+	cats  map[string]string // 分类方案的分类目录（库内相对路径）→ 媒体类型；nil = 不分类
+	depth int               // 不分类时片目在第几层（≥1）
 }
 
 // catLayout 只有分类表的布局（测试与不涉及自己整理的库的地方用）
@@ -167,7 +177,46 @@ func loadLibCategoryLayout() libCategoryLayout {
 	}
 	l := buildLibCategoryLayout(rules)
 	l.self = selfLibDepths(settingValueCompat("full"), loadLibOpts())
+	// 按库认（libstore.go）：每个库用自己那套方案的分类目录
+	byScheme := map[uint][]model.CategoryRule{}
+	for _, r := range rules {
+		byScheme[r.SchemeID] = append(byScheme[r.SchemeID], r)
+	}
+	l.libs = layoutLibsOf(effectiveLibraries(nil), byScheme)
 	return l
+}
+
+// layoutLibsOf 媒体库 → 片目认定（纯函数）。选了方案却一条规则都没有（方案被删了）按不分类认
+func layoutLibsOf(libs []model.Library, byScheme map[uint][]model.CategoryRule) []layoutLib {
+	out := make([]layoutLib, 0, len(libs))
+	for _, lib := range libs {
+		ll := layoutLib{local: normLibLocal(lib.Local), depth: lib.Depth}
+		if ll.local == "" {
+			continue
+		}
+		if ll.depth < 1 {
+			ll.depth = 1
+		}
+		if lib.SchemeID != 0 && len(byScheme[lib.SchemeID]) > 0 {
+			ll.cats = buildLibCategoryLayout(byScheme[lib.SchemeID]).cats
+		}
+		out = append(out, ll)
+	}
+	return out
+}
+
+// libOf 本地相对路径落在哪个库（整段最长前缀）。返回库、库目录占几段
+func (l libCategoryLayout) libOf(relPath string) (layoutLib, int, bool) {
+	rel := normLibLocal(relPath)
+	best, bestN := layoutLib{}, -1
+	for _, lib := range l.libs {
+		if rel == lib.local || strings.HasPrefix(rel, lib.local+"/") {
+			if n := strings.Count(lib.local, "/") + 1; n > bestN {
+				best, bestN = lib, n
+			}
+		}
+	}
+	return best, bestN, bestN > 0
 }
 
 // buildLibCategoryLayout 纯函数部分：规则 → 分类目录表。
@@ -208,22 +257,37 @@ func buildLibCategoryLayout(rules []model.CategoryRule) libCategoryLayout {
 // 首段是自己整理的库时只按它声明的层级认（selfTitleOf），不再套分类表，也不退回「不带库名」那一档
 func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, mediaType string, ok bool) {
 	segs := strings.Split(strings.Trim(relPath, "/"), "/")
+	// 媒体库表里的库：按它自己的方案（或层级）认，不再套全局的分类表、不退回「不带库名」
+	if lib, n, hit := l.libOf(relPath); hit {
+		if len(segs) <= n {
+			return "", "", "", "", false
+		}
+		if lib.cats == nil {
+			return selfTitleOfAt(segs, n, lib.depth)
+		}
+		return catTitleOf(segs, []int{n}, func(rel string) (string, bool) { t, ok := lib.cats[rel]; return t, ok })
+	}
 	if depth, self := l.selfDepth(segs[0]); self && len(segs) > 1 {
 		return selfTitleOf(segs, depth)
 	}
+	return catTitleOf(segs, []int{1, 0}, l.catType)
+}
+
+// catTitleOf 按分类目录认片目：offs 是分类目录从第几段开始（库目录占的段数；老台账不带库名时是 0）
+func catTitleOf(segs []string, offs []int, catType func(string) (string, bool)) (key, titleDir, category, mediaType string, ok bool) {
 	last := segs[len(segs)-1]
-	for _, off := range []int{1, 0} {
+	for _, off := range offs {
 		// 平铺：分类段一直到文件的上一层，比任何「分类/标题目录」都长，先看它
 		if n := len(segs) - 1 - off; n >= 1 && isSoloTitleKey(last) {
 			cat := strings.Join(segs[off:off+n], "/")
-			if mt, hit := l.catType(cat); hit && soloAllowed(mt, last) {
+			if mt, hit := catType(cat); hit && soloAllowed(mt, last) {
 				return strings.Join(segs, "/"), soloTitleStem(last), cat, "movie", true
 			}
 		}
 		best := -1
 		// 标题目录之下至少还有一个文件：分类段最多到 len-2
 		for n := 1; off+n <= len(segs)-2; n++ {
-			if _, hit := l.catType(strings.Join(segs[off:off+n], "/")); hit {
+			if _, hit := catType(strings.Join(segs[off:off+n], "/")); hit {
 				best = n
 			}
 		}
@@ -231,7 +295,7 @@ func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, med
 			continue
 		}
 		category = strings.Join(segs[off:off+best], "/")
-		mt, _ := l.catType(category)
+		mt, _ := catType(category)
 		return strings.Join(segs[:off+best+1], "/"), segs[off+best], category, mt, true
 	}
 	return "", "", "", "", false
@@ -242,12 +306,17 @@ func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, med
 // 视频正好落在片目那一层（比如 库/欧美电影/敦刻尔克.strm）按平铺电影算一部，带集号的不算；
 // 比片目层还浅的视频不属于任何片目
 func selfTitleOf(segs []string, depth int) (key, titleDir, category, mediaType string, ok bool) {
-	n := len(segs) - 1 // 库名之后还有几段（含文件名）
+	return selfTitleOfAt(segs, 1, depth)
+}
+
+// selfTitleOfAt 同 selfTitleOf，库目录占 off 段（媒体库表里的库本地目录可以多级）
+func selfTitleOfAt(segs []string, off, depth int) (key, titleDir, category, mediaType string, ok bool) {
+	n := len(segs) - off // 库目录之后还有几段（含文件名）
 	switch {
 	case n > depth:
-		return strings.Join(segs[:depth+1], "/"), segs[depth], strings.Join(segs[1:depth], "/"), "", true
-	case n == depth && isSoloTitleKey(segs[n]) && soloAllowed("", segs[n]):
-		return strings.Join(segs, "/"), soloTitleStem(segs[n]), strings.Join(segs[1:depth], "/"), "movie", true
+		return strings.Join(segs[:off+depth], "/"), segs[off+depth-1], strings.Join(segs[off:off+depth-1], "/"), "", true
+	case n == depth && isSoloTitleKey(segs[len(segs)-1]) && soloAllowed("", segs[len(segs)-1]):
+		return strings.Join(segs, "/"), soloTitleStem(segs[len(segs)-1]), strings.Join(segs[off:off+depth-1], "/"), "movie", true
 	}
 	return "", "", "", "", false
 }
@@ -276,9 +345,12 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 				Key: key, Title: title, Year: year, TmdbID: tmdb,
 				MediaType: mediaType, Category: category,
 			}
-			// key = [库名/]分类/标题：段数比分类多两段说明带着库名。自己整理的库首段一定是库名（深度 1 时没有分类段）
+			// key = [库名/]分类/标题：段数比分类多两段说明带着库名。自己整理的库首段一定是库名（深度 1 时没有分类段）。
+			// 媒体库表里的库：库名就是它的本地目录（可以多级）
 			segs := strings.Split(key, "/")
-			if _, self := layout.selfDepth(segs[0]); self || len(segs) == strings.Count(category, "/")+3 {
+			if lib, _, hit := layout.libOf(key); hit {
+				e.LibName = lib.local
+			} else if _, self := layout.selfDepth(segs[0]); self || len(segs) == strings.Count(category, "/")+3 {
 				e.LibName = segs[0]
 			}
 			out[key] = e

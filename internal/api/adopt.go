@@ -384,10 +384,7 @@ func execAdoptPreviewJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if len(cids) == 0 {
 		return jobOutcome{}, errors.New("还没配置 115 媒体库目录，先到「账号与媒体库 → 媒体库」配好")
 	}
-	localRoot := cfg.LocalPath
-	if localRoot == "" {
-		localRoot = defaultLocalPath
-	}
+	localRoot := mediaRoot() // mediaroot.go
 	scanDir := strings.TrimSpace(params.ScanDir)
 	if scanDir == "" {
 		scanDir = localRoot

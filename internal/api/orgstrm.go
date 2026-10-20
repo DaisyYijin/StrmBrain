@@ -786,11 +786,5 @@ func (s *orgSink) appendToRecord(rec *model.OrganizeRecord, files []orgRecordFil
 // localMediaRoot 本地媒体库根目录（全量同步配置的 local_path）。
 // 不依赖 *Handler：洗版等自由函数也要按它定位已落盘的 strm
 func localMediaRoot() string {
-	var cfg struct {
-		LocalPath string `json:"local_path"`
-	}
-	if json.Unmarshal([]byte(settingValueCompat("full")), &cfg) == nil && cfg.LocalPath != "" {
-		return cfg.LocalPath
-	}
-	return defaultLocalPath
+	return mediaRoot() // 固定为 MEDIA_ROOT（默认 /media），不再读 full.local_path（mediaroot.go）
 }

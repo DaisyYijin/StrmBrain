@@ -94,6 +94,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
+	// 本地媒体根固定为 MEDIA_ROOT（默认 /media）：换了根就改写记录里的旧绝对路径（幂等，mediaroot.go）
+	h.MigrateMediaRoot()
 	// 主账号标上 Main（一次性、幂等，account115.go）：有了附加账号之后「type=115 的第一行」不一定是主号
 	h.MigrateMainAccount()
 	// 各库的本地目录名定下来（幂等、零 115 请求，liblocal.go）：要赶在同步与整理起来之前，
@@ -1790,6 +1792,7 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 	// 换了首个媒体库：新库的本地目录名趁名字还在显示路径里先定下来（liblocal.go）
 	if req.Key == "full" {
 		h.FreezeLibLocalNames()
+		h.syncLibrariesFromLegacy() // 老页面改了首个库：同步进媒体库表（libstore.go，V2 阶段 4 之前的过渡）
 	}
 	// emby 配置保存时同步更新反代缓存
 	if req.Key == "emby" {
