@@ -207,19 +207,17 @@ func (h *Handler) shareReceiveOpt(shareURL, code, target, source string, organiz
 	// 提取码允许为空：无提取码分享直接转存（影巢解锁的资源可能不带访问码）
 	// 目标目录：参数优先，否则取分享同步配置的接收文件夹
 	if target == "" {
-		var cfg struct {
-			Folder string `json:"folder"`
+		var err error
+		if target, err = h.defaultXferTarget(); err != nil {
+			return "", 0, 0, err
 		}
-		if err := json.Unmarshal([]byte(h.getSettingValue("share")), &cfg); err != nil {
-			log.Printf("[上传] ○ 分享配置解析失败: %v", err)
-		}
-		target = cfg.Folder
 	}
 	if target == "" {
 		return "", 0, 0, fmt.Errorf("未配置接收文件夹（分享同步卡）")
 	}
-
-	cookie, err := h.get115Cookie()
+	// 别的账号的库：目标是 a{账号}:{cid}，用那个账号的 Cookie 转存（xfertarget.go）
+	acct, target := splitXferTarget(target)
+	cookie, err := h.cookieOf(acct)
 	if err != nil {
 		return "", 0, 0, err
 	}

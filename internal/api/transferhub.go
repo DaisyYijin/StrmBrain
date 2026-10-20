@@ -25,6 +25,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -1186,6 +1187,11 @@ func (h *Handler) TransferSubmit(c *gin.Context) {
 		return
 	}
 	r, err := h.submitResource(req, "")
+	if errors.Is(err, errXferNeedLib) {
+		// 多个库、没设默认：界面弹「转存到哪个库」再提交一次（xfertarget.go）
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "need_lib": true})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

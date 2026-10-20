@@ -41,14 +41,13 @@ const emit = defineEmits<{ saved: [s: Subscription] }>()
 const { message } = useFeedback()
 const queue = useQueueStore()
 const { state: srcState } = useTransferSources()
-const { items: stagingItems } = useStagingSubs()
+const { items: stagingItems, v2: libsV2 } = useStagingSubs()
 /** 「转存到」：跟随设置 / 转存目录本身 / 各绑定子目录。只在有绑定时显示（按来源分库） */
 const subdirOptions = computed(() => {
-  const out = [
-    { label: '跟随订阅设置', value: '' },
-    { label: '转存目录（按分类选库）', value: 'root' },
-    ...stagingSubChoices(),
-  ]
+  // 媒体库表（V2）：选的是库（只能是主号的库，订阅的包装目录、等秒传还只走主号），跟随 = 订阅设置 / 默认转存库
+  const out = libsV2.value
+    ? [{ label: '跟随订阅设置（默认转存库）', value: '' }, ...stagingSubChoices({ mainOnly: true })]
+    : [{ label: '跟随订阅设置', value: '' }, { label: '转存目录（按分类选库）', value: 'root' }, ...stagingSubChoices()]
   // 选过的子目录后来解绑了：仍显示出来，免得下拉是空的、看不出原来选了什么
   const cur = form.value.subdir
   if (cur && !out.some((o) => o.value === cur)) out.push({ label: '已解绑的子目录（会转存到转存目录）', value: cur })
@@ -251,9 +250,9 @@ async function submit() {
       </template>
 
       <FieldRow
-        v-if="stagingItems.length"
+        v-if="libsV2 ? stagingItems.length > 1 : stagingItems.length"
         label="转存到"
-        hint="选一个库的转存入口：整理时直接落进那个库，不看分类规则。跟随设置 = 订阅设置里的默认值"
+        :hint="libsV2 ? '放进哪个库的转存文件夹（只能是主账号的库）。跟随设置 = 订阅设置里的默认值，没设就用默认转存库' : '选一个库的转存入口：整理时直接落进那个库，不看分类规则。跟随设置 = 订阅设置里的默认值'"
       >
         <HSelect v-model="form.subdir" :options="subdirOptions" aria-label="转存到" />
       </FieldRow>

@@ -186,6 +186,7 @@ type subRunner struct {
 	// subs 绑定了媒体库的转存子目录（stagingsub.go），按订阅选的子目录建包装目录
 	subs     map[string]stagingLib
 	cookie   string
+	libs     []model.Library // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
 	re0Left  int // 今天还能自动解锁多少 RE0 积分，<0 = 不限
 	dianLeft int // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
@@ -273,6 +274,14 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	}
 	cfg := loadSubscribeCfg()
 	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, dianLeft: -1, sleep: subSleep, holdWrap: true}
+	// 媒体库表（V2）：转存目录是库的转存文件夹，默认进哪个库见 subTargetLib（xfertarget.go）
+	if libs := loadLibraries(); len(libs) > 0 {
+		l, err := h.subTargetLib("", cfg.Subdir, libs)
+		if err != nil {
+			return nil, err
+		}
+		r.target, r.libs = l.StagingCid, libs
+	}
 	if r.target == "" {
 		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
@@ -1166,6 +1175,13 @@ func (r *subRunner) releaseHeld() {
 // targetOf 这个订阅的包装目录建在哪：订阅自己选的子目录 > 订阅设置的默认 > 转存目录本身。
 // 子目录已经解绑的退回转存目录本身（照常入库，只是不再按来源分库），记一行日志
 func (r *subRunner) targetOf(sub *model.Subscription) string {
+	if len(r.libs) > 0 {
+		// V2：订阅选的库（lib:<id>）→ 订阅设置的 → 默认转存库；只能是主号的库
+		if l, err := r.h.subTargetLib(sub.Subdir, r.cfg.Subdir, r.libs); err == nil {
+			return l.StagingCid
+		}
+		return r.target
+	}
 	sd := strings.TrimSpace(sub.Subdir)
 	if sd == "" {
 		sd = strings.TrimSpace(r.cfg.Subdir)

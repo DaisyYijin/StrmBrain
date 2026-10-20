@@ -291,6 +291,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/scrape/rules", h.SaveScrapeRules)
 		protected.GET("/scrape/categories", h.ListCategories)
 		protected.POST("/scrape/categories", h.SaveCategories)
+		protected.GET("/transfer/targets", h.GetXferTargets)
+		protected.PUT("/transfer/targets/default", h.SaveXferDefault)
 		protected.GET("/staging/libs", h.GetStagingLibs)
 		protected.PUT("/staging/libs", h.SaveStagingLibs)
 		protected.GET("/staging/subdirs", h.StagingSubdirs)

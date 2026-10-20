@@ -97,7 +97,18 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 	}
 	sub.OfflineMode = f.OfflineMode
 	sd := strings.TrimSpace(f.Subdir)
-	if sd != "" && sd != "root" {
+	if id := parseXferLibValue(sd); id != 0 {
+		// 媒体库表（V2）：选的是库，只能是主号设了转存文件夹的库（xfertarget.go 的 subTargetLib）
+		ok := false
+		for _, l := range organizeLibs(loadLibraries()) {
+			if l.ID == id && l.Account == acctMain {
+				ok = true
+			}
+		}
+		if !ok {
+			return false, errors.New("所选的库不能放订阅（不在了、没设转存文件夹，或不是主账号的库），请重新选择")
+		}
+	} else if sd != "" && sd != "root" {
 		if _, ok := stagingLibMap(loadStagingLibs())[sd]; !ok {
 			return false, errors.New("所选转存子目录不在绑定表里，请重新选择")
 		}

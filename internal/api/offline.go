@@ -52,18 +52,19 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「影视转存」页的输入框里提交（或把链接发给机器人自动转存）", 0, ""
 	}
 
-	cookie, err := h.get115Cookie()
+	// 目标目录：参数优先，否则按默认转存库（V2）/ 共用的转存目录（老口径），xfertarget.go
+	if target == "" {
+		t, err := h.defaultXferTarget()
+		if err != nil {
+			return http.StatusBadRequest, err.Error(), 0, ""
+		}
+		target = t
+	}
+	// 别的账号的库：目标是 a{账号}:{cid}，离线任务提交到那个账号
+	acct, target := splitXferTarget(target)
+	cookie, err := h.cookieOf(acct)
 	if err != nil {
 		return http.StatusBadRequest, err.Error(), 0, ""
-	}
-
-	// 目标目录：参数优先，否则用分享同步配置的接收文件夹
-	if target == "" {
-		var cfg struct {
-			Folder string `json:"folder"`
-		}
-		_ = json.Unmarshal([]byte(h.getSettingValue("share")), &cfg)
-		target = cfg.Folder
 	}
 
 	// 用 web 版离线下载接口（Cookie 认证，表单提交）
@@ -130,7 +131,7 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 			// 看提交的目标目录（可能是绑定了媒体库的转存子目录），不是转存目录根：
 			// 根下挂着绑定子目录时永远「有条目」，试探就失去意义
 			if cid := target; cid != "" {
-				if ops, err := h.newPan115Ops(); err == nil {
+				if ops, err := h.opsFor(acct); err == nil {
 					if entries, _, lerr := ops.listEntries(cid, 0); lerr == nil && stagingTopCount(entries, stagingLibMap(loadStagingLibs())) > 0 {
 						log.Printf("[上传] 秒传命中（目标目录已有 %d 个条目），立即整理", len(entries))
 						h.triggerOrganizeAndSync()

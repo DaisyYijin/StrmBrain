@@ -29,12 +29,13 @@ const spent = ref(0)
 const dianSpent = ref(0)
 const saving = ref(false)
 const notify = ref<string[]>([])
-const { items: stagingItems } = useStagingSubs()
-/** 默认转存到：转存目录本身或某个绑定了媒体库的子目录（按来源分库） */
-const subdirOptions = computed(() => [
-  { label: '转存目录（按分类选库）', value: '' },
-  ...stagingSubChoices(),
-])
+const { items: stagingItems, v2: libsV2 } = useStagingSubs()
+/** 默认转存到：老口径是转存目录本身或某个绑定子目录；V2 是主号的某个库，空 = 默认转存库 */
+const subdirOptions = computed(() =>
+  libsV2.value
+    ? [{ label: '默认转存库', value: '' }, ...stagingSubChoices({ mainOnly: true })]
+    : [{ label: '转存目录（按分类选库）', value: '' }, ...stagingSubChoices()],
+)
 const subdir = computed({
   get: () => cfg.value?.subdir ?? '',
   set: (v: string) => {
@@ -132,7 +133,7 @@ async function save() {
         </FieldRow>
       </AdvancedSection>
       <FieldRow
-        v-if="stagingItems.length"
+        v-if="libsV2 ? stagingItems.length > 1 : stagingItems.length"
         label="默认转存到"
         hint="选一个库的转存入口：订阅的内容整理时直接落进那个库，不看分类规则。单个订阅可以另选；入口在「账号与媒体库 → 媒体库」里开，关掉后退回转存目录"
       >

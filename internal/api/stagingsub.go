@@ -196,6 +196,14 @@ func listAllEntries(ops *pan115Ops, cid string) ([]map[string]interface{}, error
 // （没配转存目录的报错也由它们给，与原来一致）。只认绑定表里的子目录
 func (h *Handler) stagingTarget(sub string) (string, error) {
 	sub = strings.TrimSpace(sub)
+	// 媒体库表（V2）：选的是库（lib:<id>），放进它的转存文件夹；没选按默认转存库（xfertarget.go）
+	if libs := loadLibraries(); len(libs) > 0 {
+		l, err := h.xferLib(sub, libs)
+		if err != nil {
+			return "", err
+		}
+		return xferTargetOf(l), nil
+	}
 	if sub == "" || sub == "root" {
 		return "", nil
 	}
@@ -262,6 +270,21 @@ func stagingLibViews(list []stagingLib, libs []libChoice, root string) []staging
 
 // GetStagingLibs GET /staging/libs
 func (h *Handler) GetStagingLibs(c *gin.Context) {
+	// 媒体库表（V2）：「转存到」选的是库，一个要整理的库一项（值 lib:<id>），不再有转存子目录绑定
+	if all := loadLibraries(); len(all) > 0 {
+		t := h.xferTargetsNow()
+		items := []gin.H{}
+		for _, v := range t["libs"].([]xferLibView) {
+			name := v.Name
+			if t["multi_account"].(bool) && v.AccountName != "" {
+				name += "（" + v.AccountName + "）"
+			}
+			items = append(items, gin.H{"cid": v.Value, "name": name, "lib": v.Value, "lib_name": name, "account": v.Account})
+		}
+		c.JSON(http.StatusOK, gin.H{"root": "", "items": items, "libs": []libChoice{}, "v2": true,
+			"default": t["default"], "need_pick": t["need_pick"]})
+		return
+	}
 	libs := h.libChoices()
 	list := loadStagingLibs()
 	c.JSON(http.StatusOK, gin.H{

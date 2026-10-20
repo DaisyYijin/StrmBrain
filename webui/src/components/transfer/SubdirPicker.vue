@@ -7,8 +7,7 @@ import { useStagingSubs } from '@/composables/stagingSubs'
  * 「转存到」：找资源与链接转存提交前选落进转存目录本身还是某个绑定了媒体库的子目录。
  * 没有任何绑定时不显示（绝大多数用户只有一个库）。选择记在本机，下次打开沿用
  */
-const { items, options, current, setPick } = useStagingSubs()
-const show = computed(() => items.value.length > 0)
+const { options, current, setPick, showPicker: show, needPick } = useStagingSubs()
 const model = computed({
   get: () => current.value,
   set: (v: string) => setPick(v),
@@ -18,7 +17,10 @@ const model = computed({
 <template>
   <label v-if="show" class="subdir-pick">
     <span class="lbl">转存到</span>
-    <HSelect v-model="model" :options="options" aria-label="转存到" />
+    <HSelect v-model="model" :options="options" placeholder="选转存到哪个库" aria-label="转存到" />
+    <RouterLink v-if="needPick && !current" class="hint" :to="{ name: 'media-transfer', query: { tab: 'settings', sec: 'folder' } }">
+      设个默认就不用每次选
+    </RouterLink>
   </label>
 </template>
 
@@ -28,6 +30,10 @@ const model = computed({
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.hint {
+  font-size: 12px;
+  white-space: nowrap;
 }
 .lbl {
   font-size: 13px;

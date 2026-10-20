@@ -14,7 +14,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -265,21 +264,24 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		} else {
 			lines = append(lines, "○ 当前无任务运行")
 		}
-		if cid := h.shareFolderCid(); cid != "" {
-			// 115 目录查询加超时保护：网盘响应慢时不能拖住整个状态回复
+		if dirs := h.watchStagingDirs(); len(dirs) > 0 {
+			// 115 目录查询加超时保护：网盘响应慢时不能拖住整个状态回复。每个库的转存文件夹各数一遍（orgconfigv2.go）
 			type listRes struct {
 				count int
 				ok    bool
 			}
 			ch := make(chan listRes, 1)
 			go func() {
-				if ops, err := h.newPan115Ops(); err == nil {
-					if entries, _, lerr := ops.listEntries(cid, 0); lerr == nil {
-						ch <- listRes{len(entries), true}
+				n := 0
+				for _, d := range dirs {
+					entries, _, lerr := d.ops.listEntries(d.cid, 0)
+					if lerr != nil {
+						ch <- listRes{}
 						return
 					}
+					n += len(entries)
 				}
-				ch <- listRes{}
+				ch <- listRes{n, true}
 			}()
 			select {
 			case r := <-ch:
@@ -468,29 +470,10 @@ func wecomShow(v botView, reply func(...string)) {
 // submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）。
 // source 是提交来源（机器人 / 观影…），整理记录上显示「经谁提交」
 func (h *Handler) submitOfflineLink(rawURL, source string) error {
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		return err
+	// 与网页同一个出口：目标按默认转存库（V2）/ 转存目录，别的账号的库用那个账号提交（xfertarget.go）
+	if status, msg := h.offlineSubmitCore(rawURL, "", source, false); status != http.StatusOK {
+		return fmt.Errorf("%s", msg)
 	}
-	form := url.Values{"url": {rawURL}}
-	if target := h.shareFolderCid(); target != "" {
-		form.Set("wp_path_id", target)
-	}
-	body, err := post115Form("https://115.com/web/lixian/?ac=add_task_url", form, cookie, ua115Unified(), 20*time.Second)
-	if err != nil {
-		return err
-	}
-	var resp struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(body, &resp) != nil || !resp.State {
-		return fmt.Errorf("115 拒绝: %s", truncateStr(string(body), 100))
-	}
-	log.Printf("[机器人] ✓ 离线下载已提交: %s", truncateStr(rawURL, 60))
-	offlineMineAdd(h, rawURL) // 归属标记（企微提交的同样只在本项目内通知）
-	// 来源链接：与 offlineSubmitCore 同样登记，整理记录才认得出这批内容从哪来
-	dlLinkRecord(h, rawURL, "", "", source, nil)
 	return nil
 }
 

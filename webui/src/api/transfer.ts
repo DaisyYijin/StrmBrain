@@ -121,6 +121,8 @@ export interface StagingLib {
   lib_name?: string
   /** 失效原因（库移出配置 / 子目录不在转存目录下） */
   problem?: string
+  /** V2：这个库在哪个账号（订阅只能进主号的库） */
+  account?: number
 }
 
 export interface LibChoice {
@@ -133,7 +135,32 @@ export interface StagingLibs {
   root: string
   items: StagingLib[]
   libs: LibChoice[]
+  /** 媒体库表（V2）：items 是能转存进的库（cid = lib:<id>），没有子目录绑定 */
+  v2?: boolean
+  /** 默认转存库 id（0 = 没设） */
+  default?: number
+  /** 多个库、没设默认：每次都要选 */
+  need_pick?: boolean
 }
+
+/** 转存到哪个库（V2，后端 xfertarget.go） */
+export interface XferLib {
+  value: string
+  id: number
+  name: string
+  account: number
+  account_name?: string
+  staging_path: string
+}
+export interface XferTargets {
+  v2: boolean
+  libs: XferLib[]
+  default: number
+  multi_account: boolean
+  need_pick: boolean
+}
+export const xferTargets = () => http.get<XferTargets>('/transfer/targets')
+export const saveXferDefault = (lib: number) => http.put<XferTargets>('/transfer/targets/default', { lib })
 
 export const stagingLibs = () => http.get<StagingLibs>('/staging/libs')
 export const saveStagingLibs = (items: Pick<StagingLib, 'cid' | 'name' | 'lib'>[]) =>
