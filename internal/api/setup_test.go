@@ -34,7 +34,7 @@ func TestPlanSetupFresh(t *testing.T) {
 	if !setupStepOf(t, steps, "emby").Optional || !setupStepOf(t, steps, "organize").Optional {
 		t.Fatal("Emby 与整理是可选的")
 	}
-	if w := setupStepOf(t, steps, "workspace"); !strings.Contains(w.Detail, "转存、已存在、冗余") {
+	if w := setupStepOf(t, steps, "workspace"); !strings.Contains(w.Detail, "转存/待整理文件夹（在媒体库卡片上设）、已存在、冗余") {
 		t.Fatalf("工作目录要说清缺哪几个：%s", w.Detail)
 	}
 }

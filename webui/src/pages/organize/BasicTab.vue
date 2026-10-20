@@ -19,7 +19,6 @@ import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSett
 import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { confirmUnsaved } from '@/composables/confirmUnsaved'
-import { useStagingDir } from '@/composables/stagingDir'
 import { ORG_BASIC_DEFAULTS } from './orgBasic'
 import PipelineFlow from './PipelineFlow.vue'
 
@@ -52,13 +51,8 @@ onMounted(() => { void checkTmdb() })
 /** 本页只用得上两个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
 const { model, saving: orgSaving, save, load, dirty: settingDirty, changed } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
 
-/**
- * 转存/待整理目录不在 org-basic 里，存在 setting `share`（2026-10-12 与转存合并，后端 stagingdir.go）。
- * 「影视转存 → 设置」里也能改同一个值
- */
-const staging = useStagingDir()
-const stagingValue = staging.value
-const saving = computed(() => orgSaving.value || staging.saving.value)
+/** 转存/待整理文件夹改成每个媒体库各设一个（V2，「账号与媒体库 → 媒体库」），这一页不再有 */
+const saving = computed(() => orgSaving.value)
 
 type DirKey = 'existing' | 'redundant'
 const DIRS: { key: DirKey; label: string; tip: string }[] = [
@@ -168,7 +162,7 @@ const dirsDirty = computed(() =>
 
 /** 整理跑的配置全部从库里读，所以本页任何一处没保存都要拦 */
 const dirty = computed(
-  () => settingDirty.value || dirsDirty.value || staging.dirty.value || cron.value.trim() !== cronSaved.value,
+  () => settingDirty.value || dirsDirty.value || cron.value.trim() !== cronSaved.value,
 )
 
 /** 两个目录都要在保存前确认 cid 可信；任一失配就整体拦下 */
@@ -195,8 +189,6 @@ async function resolveAll(): Promise<boolean> {
 
 async function saveAll(): Promise<boolean> {
   if (!(await resolveAll())) return false
-  // 转存/待整理是另一个 setting，改过才存；后端会校验它和已存在 / 冗余互不包含
-  if (staging.dirty.value && !(await staging.save())) return false
   if (!(await saveCron())) return false
   // org-basic 是整对象覆盖存：先把库里最新的拉回来，再盖上本页的字段，
   // 库里有而本页不管的字段（后端另写的）就不会被打开本页时的旧值还原
@@ -242,7 +234,7 @@ const DUP_ACTIONS = [
   { label: '超时后留推荐的，没有推荐就都保留', value: 'recommend' as const },
 ]
 
-const runHint = '确定开始整理？会扫描转存/待整理目录并搬移文件。'
+const runHint = '确定开始整理？会扫描各媒体库的转存/待整理文件夹并搬移文件。'
 
 async function runOrganize() {
   if (!(await checkTmdb())) return
@@ -376,13 +368,7 @@ const TRIGGERS: { name: string; text: string }[] = [
       </SectionCard>
 
       <!-- ==== 右：在哪些目录之间搬 ==== -->
-      <SectionCard title="工作目录" hint="整理从转存/待整理目录取素材，按结果搬到媒体库 / 已存在 / 冗余">
-        <FieldRow
-          label="转存/待整理"
-          tip="转存、离线下载、订阅的内容落在这里，手动要整理的也放这里；守望者每分钟看一次，有内容就整理。必须与媒体库互不包含。「影视转存 → 设置」里改的是同一个目录。"
-        >
-          <Cid115Input :ref="(el) => (staging.input.value = el as never)" v-model="stagingValue" placeholder="115 目录 cid" />
-        </FieldRow>
+      <SectionCard title="工作目录" hint="洗版判输的移到已存在，用不上的移到冗余；所有媒体库共用这一套">
         <FieldRow v-for="d in DIRS" :key="d.key" :label="d.label" :tip="d.tip">
           <Cid115Input
             :ref="(el) => (inputs[d.key] = el as never)"
@@ -393,8 +379,8 @@ const TRIGGERS: { name: string; text: string }[] = [
         <p class="dir-note">
           <Info :size="14" />
           <span>
-            媒体库目录在「<RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }">账号与媒体库</RouterLink>」。
-            第一次用之前，先配好二级分类策略并跑一次全量同步。
+            媒体库和每个库的转存/待整理文件夹在「<RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }">账号与媒体库 → 媒体库</RouterLink>」：
+            放进哪个库的转存文件夹，就整理进哪个库。别的账号在自己网盘的同一路径下各建一份已存在 / 冗余（整理时自动创建）。
           </span>
         </p>
       </SectionCard>
@@ -402,7 +388,7 @@ const TRIGGERS: { name: string; text: string }[] = [
 
     <!-- 两张卡共用一次保存；「开始整理」挨着保存放，改过没保存时整条高亮 -->
     <div class="save-bar" :class="{ 'is-dirty': dirty }">
-      <span class="save-note">{{ dirty ? '有未保存的改动' : '整理会扫描转存/待整理目录并搬移网盘文件' }}</span>
+      <span class="save-note">{{ dirty ? '有未保存的改动' : '整理会扫描各媒体库的转存/待整理文件夹并搬移网盘文件' }}</span>
       <HButton variant="primary" v-if="tmdbReady === false" size="sm" @click="configureTmdb">配置 TMDB 后开始整理</HButton>
       <HButton variant="tertiary" v-else-if="tmdbReady === null || checkingTmdb" size="sm" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</HButton>
       <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->

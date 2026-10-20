@@ -345,6 +345,17 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/files/library/episodes", h.SubmitFileEpisodes)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
 		// 媒体库卡片：汇总读（零 115 请求）+ 合并写（附加库 / 转存入口 / 移除库，libraries.go）
+		// 媒体库页面（一个库一条，libapiv2.go）与分类方案（catschemeapi.go），V2 阶段 4
+		protected.GET("/media-libs", h.ListMediaLibs)
+		protected.POST("/media-libs", h.CreateMediaLib)
+		protected.PUT("/media-libs/:id", h.UpdateMediaLib)
+		protected.DELETE("/media-libs/:id", h.DeleteMediaLib)
+		protected.POST("/media-libs/:id/move", h.MoveMediaLib)
+		protected.POST("/media-libs/notice/dismiss", h.DismissMediaLibNotice)
+		protected.GET("/category/schemes/:id", h.GetScheme)
+		protected.POST("/category/schemes", h.CreateScheme)
+		protected.PUT("/category/schemes/:id", h.UpdateScheme)
+		protected.DELETE("/category/schemes/:id", h.DeleteScheme)
 		protected.GET("/libraries", h.GetLibraries)
 		protected.GET("/libraries/preview", h.PreviewLibrary)
 		protected.PUT("/libraries", h.SaveLibraries)
@@ -1793,7 +1804,6 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 	// 换了首个媒体库：新库的本地目录名趁名字还在显示路径里先定下来（liblocal.go）
 	if req.Key == "full" {
 		h.FreezeLibLocalNames()
-		h.syncLibrariesFromLegacy() // 老页面改了首个库：同步进媒体库表（libstore.go，V2 阶段 4 之前的过渡）
 	}
 	// emby 配置保存时同步更新反代缓存
 	if req.Key == "emby" {

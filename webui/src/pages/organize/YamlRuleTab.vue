@@ -14,8 +14,6 @@ import WashHelp from './WashHelp.vue'
 import RuleBuilder from './RuleBuilder.vue'
 import RuleOutline from './RuleOutline.vue'
 import { lintCategory, lintWash, outlineCategory, outlineWash } from './ruleLint'
-import { withDest, type DestLib } from './ruleDest'
-import { libraryApi } from '@/api'
 import { ApiError } from '@/api/client'
 
 /** 二级分类与洗版两个页签结构完全一致，只有接口、文案和体检口径不同 */
@@ -103,28 +101,12 @@ async function confirmLibChange(changes: LibChange[]) {
   }
 }
 
-/** 多个媒体库时大纲上标出每条规则落进哪个库（只有二级分类；一个库时不显示，是噪音） */
-const destLibs = ref<DestLib[]>([])
-async function loadDestLibs() {
-  if (props.kind !== 'category') return
-  try {
-    const v = await libraryApi.getLibraries()
-    // 名字认不全时按名字写的规则会被误标「认不出」：宁可不标
-    destLibs.value = v.names_known && v.libs.length > 1 ? v.libs.map((l) => ({ cid: l.cid, name: l.name, default: l.default, self: l.mode === 'self' })) : []
-  } catch {
-    destLibs.value = []
-  }
-}
-
 // 体检与大纲都是纯文本推导，跟着输入实时更新；判定权仍在后端，这里只提示不拦截
 const issues = computed(() => (props.kind === 'category' ? lintCategory(yaml.value) : lintWash(yaml.value)))
 const errors = computed(() => issues.value.filter(i => i.level === 'error').length)
 const warns = computed(() => issues.value.filter(i => i.level === 'warn').length)
-const outline = computed(() => {
-  if (props.kind !== 'category') return outlineWash(yaml.value)
-  const groups = outlineCategory(yaml.value)
-  return destLibs.value.length ? withDest(groups, yaml.value, destLibs.value) : groups
-})
+// 规则落进哪个库不再看规则（library 键作废，放进哪个库的转存文件夹就进哪个库），大纲不标库
+const outline = computed(() => (props.kind === 'category' ? outlineCategory(yaml.value) : outlineWash(yaml.value)))
 
 const LEVEL_TEXT = { error: '错误', warn: '不生效', info: '提示' }
 
@@ -134,7 +116,6 @@ function jump(line: number) {
 
 onMounted(() => {
   void read()
-  void loadDestLibs()
 })
 </script>
 

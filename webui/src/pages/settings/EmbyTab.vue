@@ -35,8 +35,13 @@ const banner = ref<BannerState | null>(null)
 const testing = ref(false)
 const pathProbe = ref('')
 const embyMediaRoot = ref('')
-/** 映射本地这一侧，空 = 跟随本地媒体库目录（后端 embyPathRoots 同口径） */
+/** 映射本地这一侧，空 = 跟随本地媒体根（后端 embyPathRoots 同口径） */
 const localPath = ref('')
+/**
+ * 本地媒体根固定（MEDIA_ROOT，默认 /media），映射本地一侧默认就是它、只填 Emby 那一侧。
+ * Emby 只挂了媒体根下的某个子目录（Emby /Movies ⇄ 本地 /media/电影）时才要改本地一侧：收在「改本地一侧」里
+ */
+const localCustom = ref(false)
 
 const norm = (p: string) => p.trim().replace(/\\/g, '/').replace(/(.)\/+$/, '$1')
 const isAbs = (p: string) => p.startsWith('/') || /^[A-Za-z]:/.test(p)
@@ -66,6 +71,7 @@ watch(
     const m = splitMapping(rule, root)
     embyMediaRoot.value = m.emby
     localPath.value = m.local
+    if (m.local && m.local !== root) localCustom.value = true
   },
   { immediate: true },
 )
@@ -98,6 +104,7 @@ function applySuggest(root: string, local: string, how: string) {
   }
   embyMediaRoot.value = root
   localPath.value = l
+  if (l) localCustom.value = true
   detectNote.value = `${how}已填入 ${desc}，确认无误后点「保存」`
 }
 
@@ -326,10 +333,23 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
       </template>
 
       <div class="map">
-        <label class="cell">
-          <span class="cell-label">本地路径（留空 = 本地媒体库目录）</span>
+        <label v-if="localCustom" class="cell">
+          <span class="cell-label">
+            本地路径（留空 = 本地媒体根）
+            <HButton variant="ghost" size="sm" class="text-btn" @click="((localPath = ''), (localCustom = false))">恢复默认</HButton>
+          </span>
           <HInput v-model="localPath" :placeholder="mediaRoot || '/media'" />
         </label>
+        <div v-else class="cell">
+          <span class="cell-label">
+            本地媒体根
+            <HHelpTip text="本站的 STRM 都在这个目录下（由容器环境变量 MEDIA_ROOT 决定，默认 /media，界面上不能改）。Emby 只挂了它下面的某个子目录时，点「改本地一侧」。" />
+          </span>
+          <div class="root-ro">
+            <code>{{ mediaRoot || '/media' }}</code>
+            <HButton variant="ghost" size="sm" class="text-btn" @click="localCustom = true">改本地一侧</HButton>
+          </div>
+        </div>
         <span class="arrow">→</span>
         <label class="cell">
           <span class="cell-label">Emby 媒体库目录</span>
@@ -358,9 +378,9 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
       <p v-if="localSideWarn" class="side-warn">{{ localSideWarn }}</p>
       <p v-if="detectNote" class="detect-note">{{ detectNote }}</p>
       <p class="map-foot">
-        本地媒体库目录：<code>{{ mediaRoot || '未设置' }}</code>
+        每个媒体库在 Emby 里该填的路径，见「账号与媒体库 → 媒体库」的库卡片
         <HButton variant="ghost" size="sm" class="text-btn" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
-          前往「账号与媒体库」修改
+          去看看
         </HButton>
       </p>
     </SectionCard>
@@ -370,6 +390,12 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 </template>
 
 <style scoped>
+.root-ro {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
 .tab {
   display: flex;
   flex-direction: column;

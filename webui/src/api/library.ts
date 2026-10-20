@@ -184,3 +184,90 @@ export const saveLibraries = (req: LibSaveReq) =>
 /** 库在 115 上改了名：把分类规则里写的旧名换成新名（新名由后端认，只传旧名） */
 export const fixRename = (from: string) =>
   http.post<{ message: string; data: LibrariesView }>('/libraries/fix-rename', { from })
+
+// ---- 媒体库页面（V2：一个库一条，后端 libapiv2.go / catschemeapi.go） ----
+
+/** 一张库卡片 */
+export interface MediaLib {
+  id: number
+  name: string
+  account: number
+  account_name: string
+  cid: string
+  path: string
+  /** 媒体根下的相对路径 */
+  local: string
+  /** 媒体根 + 本地目录 */
+  local_abs: string
+  staging_cid: string
+  staging_path: string
+  /** 0 = 不分类 */
+  scheme_id: number
+  scheme_name: string
+  /** 只同步、不分类的库：片目在第几层 */
+  depth: number
+  scrape: LibScrape
+  /** 台账里已经有这个库的内容：本地目录不能再改 */
+  local_locked: boolean
+  last_sync?: LibSyncStat
+  problem?: string
+  /** 设了转存文件夹：本站往里整理 */
+  organize: boolean
+  emby?: LibEmbyState
+}
+
+export interface SchemeView {
+  id: number
+  name: string
+  used_by: string[]
+  movie: number
+  tv: number
+}
+
+export interface AcctOption {
+  id: number
+  name: string
+  main: boolean
+}
+
+export interface MediaLibsView {
+  media_root: string
+  libs: MediaLib[]
+  schemes: SchemeView[]
+  accounts: AcctOption[]
+  multi_account: boolean
+  notice: string[]
+  existing: string
+  redundant: string
+  emby_configured: boolean
+  emby_error?: string
+  root_problem?: string
+}
+
+/** 新建 / 修改一个库 */
+export interface MediaLibReq {
+  name: string
+  account: number
+  cid: string
+  path: string
+  local: string
+  staging_cid: string
+  staging_path: string
+  scheme_id: number
+  depth: number
+  scrape: LibScrape
+}
+
+export const getMediaLibs = () => http.get<MediaLibsView>('/media-libs')
+export const createMediaLib = (req: MediaLibReq) => http.post<MediaLibsView>('/media-libs', req)
+export const updateMediaLib = (id: number, req: MediaLibReq) => http.put<MediaLibsView>(`/media-libs/${id}`, req)
+export const deleteMediaLib = (id: number) => http.del<MediaLibsView>(`/media-libs/${id}`)
+export const moveMediaLib = (id: number, dir: -1 | 1) => http.post<MediaLibsView>(`/media-libs/${id}/move`, { dir })
+export const dismissMediaLibNotice = () => http.post<{ ok: boolean }>('/media-libs/notice/dismiss', {})
+
+export const getScheme = (id: number) => http.get<{ id: number; name: string; yaml: string }>(`/category/schemes/${id}`)
+export const createScheme = (name: string, copyFrom: number) =>
+  http.post<{ id: number; schemes: SchemeView[] }>('/category/schemes', { name, copy_from: copyFrom })
+export const updateScheme = (id: number, body: { name?: string; yaml?: string }) =>
+  http.put<{ message: string; schemes: SchemeView[] }>(`/category/schemes/${id}`, body)
+export const deleteScheme = (id: number) => http.del<{ schemes: SchemeView[] }>(`/category/schemes/${id}`)

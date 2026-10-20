@@ -76,7 +76,7 @@ func planSetup(in setupInputs) []setupStep {
 
 	var lack []string
 	if in.Share == "" {
-		lack = append(lack, "转存")
+		lack = append(lack, "转存/待整理文件夹（在媒体库卡片上设）")
 	}
 	if in.Existing == "" {
 		lack = append(lack, "已存在")
@@ -213,6 +213,13 @@ func (h *Handler) SetupStatus(c *gin.Context) {
 			in.Existing = s.cid
 		case "redundant":
 			in.Redundant = s.cid
+		}
+	}
+	// 媒体库表（V2）：有库就算选了目录；转存文件夹每个库自己设，有一个库设了就算
+	if libs := loadLibraries(); len(libs) > 0 {
+		in.LibCid, in.Share = libs[0].Cid, ""
+		if org := organizeLibs(libs); len(org) > 0 {
+			in.Share = org[0].StagingCid
 		}
 	}
 

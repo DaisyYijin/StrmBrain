@@ -299,6 +299,9 @@ func (h *Handler) InitWorkspaceDirs(c *gin.Context) {
 	var missing []wsSlot
 	for _, s := range slots[1:] {
 		if s.cid == "" && !isLibSlot(s.key) {
+			if s.key == "share" && len(loadLibraries()) > 0 {
+				continue // 媒体库表（V2）：转存文件夹每个库自己设，不再建共用的那一个
+			}
 			missing = append(missing, s)
 		}
 	}

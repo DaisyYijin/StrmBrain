@@ -53,6 +53,12 @@ func (h *Handler) MigrateMediaRoot() {
 		return
 	}
 	newRoot := mediaRoot()
+	// 老代码读 full.local_path 当本地根（显示、拼路径）：跟着改成现在的根（在算旧根之后，见下面的 defer）
+	defer func() {
+		if !mediaRootLegacyForTests && h.getSettingValue("full") != "" {
+			_ = h.mergeSettingFields("full", map[string]string{"local_path": newRoot})
+		}
+	}()
 	old := strings.TrimSpace(h.getSettingValue(mediaRootAppliedKey))
 	if old == "" {
 		old = jsonStrField(h.getSettingValue("full"), "local_path")

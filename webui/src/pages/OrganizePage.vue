@@ -9,8 +9,8 @@ import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
 import OrganizeOverview from './organize/OrganizeOverview.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
+import SchemesTab from './organize/SchemesTab.vue'
 import { organizeApi } from '@/api'
-import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('basic')
@@ -48,17 +48,7 @@ const tabs = computed(() => [
       <RecognizeTab v-else-if="tab === 'recognize'" />
       <AiTab v-else-if="tab === 'ai'" />
       <RenameTab v-else-if="tab === 'rename'" />
-      <YamlRuleTab
-        v-else-if="tab === 'category'"
-        key="category"
-        kind="category"
-        title="二级分类策略"
-        hint="分类名即 115 目录名"
-        note="分类名即 115 目录名，整理时目录不存在会自动创建。规则从上往下匹配，先命中的先停；不想手写 YAML 就用右上角的「添加分类规则」。"
-        :load="organizeApi.getCategories"
-        :persist="organizeApi.saveCategories"
-        :fallback="DEFAULT_CATEGORY_YAML"
-      />
+      <SchemesTab v-else-if="tab === 'category'" key="category" />
       <YamlRuleTab
         v-else-if="tab === 'wash'"
         key="wash"

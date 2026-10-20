@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
@@ -7,21 +7,18 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HTabs from '@/components/hero/HTabs.vue'
-import { ChevronRight, Info, QrCode, ShieldCheck } from '@lucide/vue'
+import { ChevronRight, QrCode, ShieldCheck } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
-import LibraryCards from '@/components/accounts/LibraryCards.vue'
+import MediaLibs from '@/components/accounts/MediaLibs.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import ExtraAccounts from '@/components/accounts/ExtraAccounts.vue'
-import Cid115Input from '@/components/Cid115Input.vue'
-import LocalPathInput from '@/components/LocalPathInput.vue'
 import { configApi, libraryApi, organizeApi, storageApi } from '@/api'
-import type { LibLeftover } from '@/api/library'
+import type { LibLeftover, MediaLibsView } from '@/api/library'
 import { useQueueStore } from '@/stores/queue'
-import { useFullSetting } from '@/pages/strm/fullSetting'
 import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
 import type { StorageCheck } from '@/types/storage'
@@ -29,7 +26,6 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const { message, dialog } = useFeedback()
-const media = useFullSetting()
 
 /**
  * 两个页签：account（账号与连接设置）/ library（媒体库位置与工作目录）。
@@ -40,49 +36,16 @@ const TAB_ITEMS = computed(() => [
   { value: 'account', label: '115 账号' },
   { value: 'library', label: '媒体库', dot: libUnset.value },
 ])
-/** 媒体库还没保存过：读完配置之后才下结论，免得进页面先闪一下引导 */
-const libUnset = computed(() => !media.loading.value && (!media.saved.value.cid || media.saved.value.cid === '0'))
+/** 媒体库表（MediaLibs 读完 / 改完告诉这里）：一个库都没有时引导去建 */
+const libs = ref<MediaLibsView | null>(null)
+const libUnset = computed(() => !!libs.value && !libs.value.libs.length)
 /** 账号还没绑定：媒体库页签里选不了 115 目录，提示先回账号页签扫码 */
 const accountUnbound = computed(() => !accountLoading.value && !account.value)
-const cidInput = ref<InstanceType<typeof Cid115Input> | null>(null)
-const cidValue = ref({ cid: '', path: '' })
-
-watch(
-  () => [media.model.value.cid, media.model.value.cid_path] as const,
-  async ([cid, savedPath]) => {
-    if (!cid) {
-      cidValue.value = { cid: '', path: '' }
-      return
-    }
-    const displayPath = savedPath || cid
-    if (cid !== cidValue.value.cid || displayPath !== cidValue.value.path) {
-      cidValue.value = { cid, path: displayPath }
-    }
-    // 兼容旧配置：过去只保存 cid，进入页面时自动反查一次可读路径。
-    if (!savedPath) {
-      try {
-        const resolved = await storageApi.path115(cid)
-        if (media.model.value.cid === cid && resolved.path) {
-          cidValue.value = { cid, path: resolved.path }
-        }
-      } catch {
-        // Cookie 暂不可用时保留 cid；重新选择目录或下次保存仍可补齐。
-      }
-    }
-  },
-  { immediate: true },
-)
-
-/**
- * 其他媒体库（full.extra_libs）由下面的库卡片管（LibraryCards，PUT /libraries）。
- * 它存完之后这边手里的 full 要跟上：「保存媒体库位置」是整存 full 的，拿着旧的 extra_libs 一存就把刚加的库冲掉了
- */
-const libCards = ref<InstanceType<typeof LibraryCards> | null>(null)
-async function onLibsSaved(extras: { cid: string; path: string }[]) {
-  if (media.dirty.value) media.model.value.extra_libs = extras
-  else await media.load()
+function onLibsChanged(v: MediaLibsView) {
+  libs.value = v
   void loadLeftovers()
 }
+
 /**
  * 移出配置的媒体库在本地留下的 STRM 与台账（后端 libleft.go）。删掉一个附加库、或 115 上给库改了名之后出现；
  * 只列出来，用户点了才清，清理也只动本地
@@ -145,25 +108,23 @@ async function loadMissingWs() {
 const wsSlots = computed<WsSlot[]>(() => {
   const org = wsRaw.value?.org ?? {}
   const share = wsRaw.value?.share ?? {}
-  const lib = media.saved.value
+  void share
   const slot = (key: WsSlot['key'], cid?: string, path?: string): WsSlot => ({
     key,
     configured: !!cid && cid !== '0',
     path: path || (cid ? `cid ${cid}` : ''),
   })
+  // 媒体库与各库的转存文件夹在左边的库卡片里（V2），这里只剩所有库共用的已存在 / 冗余
   return [
-    slot('library', lib.cid, lib.cid_path),
-    ...(lib.extra_libs ?? []).filter((e) => e.cid && e.cid !== lib.cid).map((e) => ({ ...slot('library', e.cid, e.path), extra: true })),
-    slot('share', share.folder, share.folder_path),
     slot('existing', org.existing, org.existing_path),
     slot('redundant', org.redundant, org.redundant_path),
   ]
 })
 /** 一键创建时的子目录名（与后端 wsSubDirs 一致），不是界面上的槽位名 */
-const LABELS: Record<string, string> = { share: '转存', existing: '已存在', redundant: '冗余' }
+const LABELS: Record<string, string> = { existing: '已存在', redundant: '冗余' }
 /** 媒体库以外还缺的；媒体库没保存时后端会拒绝一键创建，按钮也不出 */
 const missingWs = computed(() =>
-  wsRaw.value ? wsSlots.value.filter((s) => s.key !== 'library' && !s.configured).map((s) => LABELS[s.key]) : [],
+  wsRaw.value ? wsSlots.value.filter((s) => !s.configured).map((s) => LABELS[s.key]) : [],
 )
 
 /** 待整理并进转存时被弃用的旧目录（后端 stagingdir.go）；点「知道了」清掉 */
@@ -290,33 +251,6 @@ async function saveAndScan() {
   if (await save()) qrShow.value = true
 }
 
-async function saveMedia() {
-  const cid = (await cidInput.value?.ensureCid()) ?? ''
-  if (!cid || cid === '0') {
-    message.error('目录路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
-    return
-  }
-  if (!media.model.value.local_path.trim()) {
-    message.error('请填写本地媒体库根目录')
-    return
-  }
-  media.model.value.cid = cid
-  let readablePath = cidValue.value.path.trim()
-  if (!readablePath || /^\d+$/.test(readablePath)) {
-    try {
-      readablePath = (await storageApi.path115(cid)).path
-    } catch {
-      readablePath = ''
-    }
-  }
-  media.model.value.cid_path = readablePath
-  // extra_libs 原样带回去（库卡片存完会同步到 media.model，见 onLibsSaved）
-  if (await media.save()) {
-    void loadLeftovers()
-    void libCards.value?.reload() // 默认库换了目录：卡片上的名字、本地目录跟着变
-  }
-}
-
 function reset() {
   form.value = {
     cookie_path: DEFAULT_COOKIE_PATH,
@@ -351,8 +285,8 @@ onMounted(() => {
 
         <!-- 没设媒体库时同步、整理、刮削都跑不起来，在账号页签就引导过去 -->
         <HAlert v-if="libUnset" status="warning" title="还没有设置媒体库">
-          <template v-if="accountUnbound">先扫码登录 115 账号，再到「媒体库」页签选择 115 媒体库目录和本地 STRM 根目录。</template>
-          <template v-else>同步、整理、刮削都要先知道 115 媒体库目录和本地 STRM 根目录，请到「媒体库」页签设置。</template>
+          <template v-if="accountUnbound">先扫码登录 115 账号，再到「媒体库」页签添加媒体库。</template>
+          <template v-else>同步、整理、刮削都要先有媒体库（115 目录 → 本地目录），请到「媒体库」页签添加。</template>
           <template #actions>
             <HButton v-if="accountUnbound" variant="primary" size="sm" @click="qrShow = true">
               <template #icon><QrCode :size="15" /></template>
@@ -440,52 +374,26 @@ onMounted(() => {
         <div class="cols">
           <!-- ==== 左：媒体库位置（表单） ==== -->
           <div class="col">
-            <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
-              <p class="media-note">
-                <Info :size="14" />全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共用这一处位置配置。
-              </p>
+            <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
+              这些目录是删掉的媒体库留下的，同步不再管它们，海报墙和 Emby 里还看得到。
+              <ul class="leftover-list">
+                <li v-for="l in leftovers" :key="l.name">
+                  <span>
+                    <b>{{ l.name }}</b>：台账 {{ l.files }} 行（视频 {{ l.videos }} 个）<template v-if="!l.local">，本地目录已不在</template>
+                  </span>
+                  <HButton variant="tertiary" size="sm" @click="cleanLeftover(l)">清理本地</HButton>
+                </li>
+              </ul>
+            </HAlert>
 
-              <FieldRow
-                label="首个媒体库"
-                required
-                tip="115 上的一个目录，在下面的媒体库卡片里排第一、不能移除。它由谁整理、刮不刮、是不是「默认放这里」都在卡片上改。要再加别的 115 目录，用下面的「添加媒体库」。"
-              >
-                <Cid115Input ref="cidInput" v-model="cidValue" />
-              </FieldRow>
-
-              <HAlert v-if="leftovers.length" status="warning" title="本地还有不在配置里的媒体库" class="leftovers">
-                这些目录是移出配置的媒体库（或 115 上改过名的库）留下的，同步不再管它们，海报墙和 Emby 里还看得到。
-                <ul class="leftover-list">
-                  <li v-for="l in leftovers" :key="l.name">
-                    <span>
-                      <b>{{ l.name }}</b>：台账 {{ l.files }} 行（视频 {{ l.videos }} 个）<template v-if="!l.local">，本地目录已不在</template>
-                    </span>
-                    <HButton variant="tertiary" size="sm" @click="cleanLeftover(l)">清理本地</HButton>
-                  </li>
-                </ul>
-              </HAlert>
-
-              <FieldRow
-                label="本地媒体库根目录"
-                required
-                tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
-              >
-                <LocalPathInput v-model="media.model.value.local_path" />
-              </FieldRow>
-
-              <FormActions>
-                <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
-              </FormActions>
-            </SectionCard>
-
-            <LibraryCards v-if="!libUnset" ref="libCards" @saved="onLibsSaved" />
+            <MediaLibs @changed="onLibsChanged" />
           </div>
 
           <!-- ==== 右：工作目录一览（宽屏吸顶，左边表单滚动时一直看得见） ==== -->
           <div class="col col-side">
             <WorkspaceCard
               :slots="wsSlots"
-              :can-create="!!media.saved.value.cid && missingWs.length > 0"
+              :can-create="!!libs?.libs.length && missingWs.length > 0"
               :creating="creatingWs"
               :legacy="wsLegacy"
               @create="createWs"
