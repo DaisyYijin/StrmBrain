@@ -4,9 +4,10 @@ package api
 //
 // 命中已存在时不再一律移「已存在」：
 //   1. 取库内该片的现有文件名（SyncedFile 台账，记录在 TargetPath 之下）
-//   2. 与待整理文件按优先级规则逐条比较（制作组/分辨率/来源/效果）
-//   3. replace 无优先级时新替旧，有优先级时新版更好才替换；旧版按配置
-//      移到冗余/已存在/115 回收站，新版正常入库；有规则但平局则新版移已存在
+//   2. 与待整理文件比谁更好（washquality.go）：先比命中优先级规则的第几条，
+//      同一条（或没配规则）再按默认画质 分辨率 → 片源 → HDR → 视频编码
+//   3. 新版更好才替换：旧版按配置移到冗余/已存在/115 回收站，新版正常入库；
+//      全部打平则新版移已存在
 
 import (
 	"fmt"
@@ -188,19 +189,13 @@ func extractVideoEncode(name string) string { return ParseResourceInfo(name).Vid
 func extractAudioEncode(name string) string { return ParseResourceInfo(name).AudioEncode }
 
 // washDecision 洗版判定：返回是否替换（新版本优于库内版本）
+// 比较口径见 washquality.go 的 washCompare：规则分高的赢，同分按默认画质先后比，全平不换
 func washDecision(newName string, libraryNames []string, rules []washRule) bool {
-	if len(rules) == 0 || len(libraryNames) == 0 {
+	if len(libraryNames) == 0 {
 		return false
 	}
-	oldName := libraryNames[0]
-	for _, r := range rules {
-		newHit := ruleMatch(newName, r)
-		oldHit := ruleMatch(oldName, r)
-		if newHit != oldHit {
-			return newHit // 首条能分出高下的规则决定胜负
-		}
-	}
-	return false // 规则无法判定
+	c, _ := washCompare(newName, libraryNames[0], rules)
+	return c > 0
 }
 
 // libraryFilesOf 从台账取某片目录下的现有文件（含大小，max/min_size 模式用）。
@@ -542,9 +537,9 @@ func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washSt
 		}
 	}
 
-	// 未配置优先级时明确采用新替旧；有规则时仍保留平局不换的行为。
+	// 没配优先级时按默认画质比（2026-10-20 前是一律新替旧）；全部打平不换
 	newWins := func(oldName string) bool {
-		return (mode == "replace" && len(st.PriorityLevel) == 0) || washDecision(newName, []string{oldName}, st.PriorityLevel)
+		return washDecision(newName, []string{oldName}, st.PriorityLevel)
 	}
 	if len(libFiles) == 0 {
 		return plan // 库内无该片的文件
@@ -608,13 +603,16 @@ func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washSt
 		}
 	}
 	oldName := ledgerName(best)
-	// max_size/min_size：规则分不出高下（平局）时保守不替换——
+	// 全部打平时保守不替换、也不拿体积分胜负——
 	// 新文件在网盘移动前拿不到可靠大小，误删更优版本代价比保守大
-	if !newWins(oldName) {
-		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（mode=%s），按已存在处理",
-			media.Title, shortLogName(newName), shortLogName(oldName), mode))
+	if c, why := washCompare(newName, oldName, st.PriorityLevel); c <= 0 {
+		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（%s），按已存在处理",
+			media.Title, shortLogName(newName), shortLogName(oldName), why))
 		plan.decision = washNotBetter
 		return plan
+	} else {
+		onLog(fmt.Sprintf("✦ 《%s》洗版判定：新版 %s 优于库内 %s（%s）",
+			media.Title, shortLogName(newName), shortLogName(oldName), why))
 	}
 
 	// 让位集合 = 新版真的赢过的那些候选 + 跟着它们命名的字幕。

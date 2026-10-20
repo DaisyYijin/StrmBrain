@@ -82,7 +82,7 @@ func TestWashRecycleAndIncrementalDoNotDeleteNewVersion(t *testing.T) {
 			}
 		}
 	}
-	got := runWashReplaceWithNotify(&pan115Ops{suppress: true}, &OrgConfig{}, &TmdbMedia{MediaType: "tv"}, "剧.S01E01.1080p.mkv", "剧集/X", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, rows, quiet, notify)
+	got := runWashReplaceWithNotify(&pan115Ops{suppress: true}, &OrgConfig{}, &TmdbMedia{MediaType: "tv"}, "剧.S01E01.2160p.DV.mkv", "剧集/X", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, rows, quiet, notify)
 	if got != washReplaced || requests != 1 || notifications != 1 {
 		t.Fatalf("结果 %s，请求 %d，通知 %d", got, requests, notifications)
 	}
@@ -121,23 +121,32 @@ func TestWashRecycleAndIncrementalDoNotDeleteNewVersion(t *testing.T) {
 	}
 }
 
+// 没配优先级时按默认画质比（2026-10-20 前是一律新替旧），scope 照样生效
 func TestWashNoPriorityStillRespectsScope(t *testing.T) {
 	for _, tc := range []struct {
 		media, name, scope, mode string
 		want                     []string
+		result                   string // 空 = 有让位时 washFailed（washFailOps 搬移必败）、没有时 washSkip
 	}{
-		{"movie", "片.1080p.mkv", "all", "replace", []string{"a", "b"}},
-		{"movie", "片.1080p.mkv", "group", "replace", []string{"b"}},
-		{"movie", "片.1080p.mkv", "all", "", []string{"a", "b"}},
-		{"tv", "剧.S01E01.1080p.mkv", "all", "replace", []string{"a"}},
-		{"tv", "剧.S01E03.1080p.mkv", "all", "replace", nil},
+		{"movie", "片.2160p.DV.mkv", "all", "replace", []string{"a", "b"}, ""},
+		{"movie", "片.2160p.DV.mkv", "group", "replace", []string{"a"}, ""},
+		{"movie", "片.1080p.DV.mkv", "group", "replace", []string{"b"}, ""},
+		{"movie", "片.2160p.DV.mkv", "all", "", []string{"a", "b"}, ""},
+		{"tv", "剧.S01E01.2160p.DV.mkv", "all", "replace", []string{"a"}, ""},
+		{"tv", "剧.S01E03.1080p.mkv", "all", "replace", nil, ""},
+		// 画质比不过库里最好的那份 / 打平：不换
+		{"movie", "片.1080p.mkv", "all", "replace", nil, washNotBetter},
+		{"tv", "剧.S01E01.2160p.mkv", "all", "replace", nil, washNotBetter},
 	} {
 		ops := &washFailOps{}
 		rows := []model.SyncedFile{{FileID: "a", RelPath: "剧.S01E01.2160p.strm"}, {FileID: "b", RelPath: "剧.S01E02.1080p.strm"}}
 		got := runWashReplace(ops, &OrgConfig{}, &TmdbMedia{MediaType: tc.media}, tc.name, "片", &washStrategy{Mode: tc.mode, Scope: tc.scope}, rows, quiet)
-		wantResult := washFailed
-		if tc.want == nil {
-			wantResult = washSkip
+		wantResult := tc.result
+		if wantResult == "" {
+			wantResult = washFailed
+			if tc.want == nil {
+				wantResult = washSkip
+			}
 		}
 		if got != wantResult || !reflect.DeepEqual(ops.moved, tc.want) {
 			t.Fatalf("%+v: %s %v", tc, got, ops.moved)
@@ -152,7 +161,7 @@ func TestWashRecycleFailurePreservesLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	notified := false
-	got := runWashReplaceWithNotify(&washFailOps{}, &OrgConfig{}, &TmdbMedia{MediaType: "movie"}, "片.1080p.mkv", "片", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, []model.SyncedFile{row}, quiet, func(...string) { notified = true })
+	got := runWashReplaceWithNotify(&washFailOps{}, &OrgConfig{}, &TmdbMedia{MediaType: "movie"}, "片.2160p.DV.mkv", "片", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, []model.SyncedFile{row}, quiet, func(...string) { notified = true })
 	if got != washFailed || notified {
 		t.Fatal("回收站失败仍继续整理或通知")
 	}
@@ -184,7 +193,7 @@ func TestWashLocalCleanupFailureKeepsLedgerAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	notified := false
-	got := runWashReplaceWithNotify(&washSuccessOps{}, &OrgConfig{}, &TmdbMedia{MediaType: "movie"}, "新版.mkv", "片", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, []model.SyncedFile{row}, quiet, func(...string) { notified = true })
+	got := runWashReplaceWithNotify(&washSuccessOps{}, &OrgConfig{}, &TmdbMedia{MediaType: "movie"}, "新版.HDR.mkv", "片", &washStrategy{Mode: "replace", OldVersionTarget: "delete"}, []model.SyncedFile{row}, quiet, func(...string) { notified = true })
 	if got != washFailed || notified {
 		t.Fatal("本地删除失败后仍继续入库或通知")
 	}

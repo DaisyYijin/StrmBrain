@@ -371,7 +371,7 @@ watch(show, v => {
         <div class="levels">
           <div class="levels-head">
             <span>优先级阶梯</span>
-            <em>replace 不填时新替旧；填写后从上到下比较，同一级条件是「且」，一个条件里多选是「或」</em>
+            <em>不填时按默认画质比（分辨率 → 片源 → HDR → 编码）；填写后命中越靠上的一级分越高，同级再按默认画质比。同一级条件是「且」，一个条件里多选是「或」</em>
           </div>
 
           <div v-for="(lv, i) in levels" :key="i" class="level">

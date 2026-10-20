@@ -20,9 +20,12 @@ import { WASH_FIELDS, WASH_MODES, WASH_RULES, WASH_STRATEGY_FIELDS } from './cat
   - resource_pix: "1080p"</pre>
       <p class="note">
         整理时先按 <code>media_type</code> / <code>category</code> 选中第一条命中的策略，
-        再拿新文件和库内同一部（剧集是同一集）的文件，沿 <code>priority_level</code>
-        从上往下比：第一条能分出高下的决定胜负，新版赢才替换，全平手就保守不换。
-        <code>mode: replace</code> 未填写优先级时，同一影片（剧集同一集）直接新替旧。
+        再拿新文件和库内同一部（剧集是同一集）的文件比谁更好，新版赢才替换，全部打平就保守不换。
+        <strong>不填 <code>priority_level</code></strong> 时按默认画质比：分辨率 → 片源 → HDR → 视频编码，
+        前面分出高下就不看后面（2160p &gt; 1080p，REMUX &gt; BluRay &gt; WEB-DL，DV &gt; HDR10+ &gt; HDR10 &gt; HDR）。
+        <strong>填了</strong>就是高级设置：先比命中第几条（越靠上分越高，没命中最低），
+        命中同一条再按默认画质比；这条里写了的字段最多按命中的值算，比如只写了
+        <code>resource_effect: "HDR10+,HDR"</code>，DV 的资源不会因为是 DV 胜过 HDR10+。
         <code>old_version_target: delete</code> 将旧版移入 115 回收站；替换后清理旧 STRM 并通知 Emby。
       </p>
     </section>

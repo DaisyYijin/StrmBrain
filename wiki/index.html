@@ -715,7 +715,7 @@ tv:
   category: ''             # 限定二级分类（逗号分隔，空=所有）
   old_version_target: redundant   # 旧版去向：redundant=冗余 / existing=已存在
                            # （delete 也按冗余处理，不做网盘真删除）
-  priority_level:          # ★ 优先级规则，从上到下，第一条能分出高下的定胜负
+  priority_level:          # ★ 可选的高级设置：命中越靠上的一条分越高；同分再按默认画质比
   - resource_team: "WiKi"          # 发布组
     resource_effect: "!DV.HDR,!DV" # 特效；! 前缀=排除
   - resource_pix: "2160p"          # 分辨率
@@ -745,8 +745,10 @@ tv:
   <h3>判定算法说明</h3>
   <ol class="steps">
     <li>取库内同片文件作为「旧版」：剧集取<strong>同一集</strong>的文件，电影取第一个视频文件（跳过海报/NFO）</li>
-    <li>逐条过优先级规则：新版命中且旧版未命中 → <strong>新版胜</strong>；反之旧版胜；都中/都不中 → 看下一条</li>
-    <li>规则全部平局：保守判定新版不优（不折腾）</li>
+    <li>配了 <code>priority_level</code>：先算分，命中越靠上的一条分越高、一条都没命中最低，<strong>分高的胜</strong></li>
+    <li>分数相同（命中同一条、都没命中，或者没配优先级）：按默认画质比 —— 分辨率 → 片源（REMUX &gt; BluRay &gt; WEB-DL &gt; WEBRip &gt; HDTV）→ HDR（DV &gt; HDR10+ &gt; HDR10 &gt; HDR）→ 视频编码（H265 / AV1 &gt; H264），前面分出高下就不看后面；名字里没写分辨率 / 片源 / 编码的那一项不比，没写 HDR 算 SDR</li>
+    <li>命中的那条规则里写了的字段，最多按命中的值算：写的是 <code>HDR10+,HDR</code> 时，DV.HDR 的资源按 HDR 算，输给 HDR10+</li>
+    <li>全部打平：保守判定新版不优（不折腾），不拿体积分胜负</li>
     <li>新版胜 → 旧版移走、清对应台账，新版正常入库；旧版胜 → 新版进「已存在」</li>
     <li><code>scope: group</code> 时先比分组：分辨率不同的版本直接共存，同组内才按规则比</li>
   </ol>

@@ -226,7 +226,7 @@ export const CATEGORY_FIELD_KEYS = [
 export const WASH_MODES: [string, string][] = [
   ['coexist', '共存，两个版本都留着，新版照常入库'],
   ['skip', '跳过，库内已有就不再收新的'],
-  ['replace', '无优先级时新替旧；有优先级时新版更优才替换'],
+  ['replace', '新版更好才替换，全部打平不换（怎么比见下面「匹配规则」）'],
   ['max_size', '按 replace 处理；体积比较尚未实现'],
   ['min_size', '按 replace 处理；体积比较尚未实现'],
 ]
@@ -236,7 +236,7 @@ export const WASH_STRATEGY_FIELDS: [string, string][] = [
   ['scope', 'all = 同一影片（剧集同一集）跨分辨率比较；group = 只比较同分辨率'],
   ['media_type', 'movie / tv，留空匹配所有'],
   ['category', '限定二级分类名，逗号分隔，留空匹配所有'],
-  ['priority_level', '可选；replace 留空时新替旧，填写后从上到下比较'],
+  ['priority_level', '可选，高级设置；不填就按默认画质比（分辨率 → 片源 → HDR → 视频编码）'],
   ['old_version_target', '旧版去向：redundant 冗余目录 / existing 已存在目录 / delete 115 回收站'],
 ]
 
@@ -261,10 +261,13 @@ export const WASH_LEVEL_FIELD_KEYS = [
 
 export const WASH_RULES: [string, string][] = [
   ['策略匹配', '顶层策略从上到下，按 media_type / category 命中第一条就用它'],
-  ['优先级', 'priority_level 从上到下，第一条能分出高下的决定胜负'],
+  ['默认比法', '分辨率 → 片源 → HDR → 视频编码，前面分出高下就不看后面：2160p > 1080p，REMUX > BluRay > WEB-DL > WEBRip > HDTV，DV > HDR10+ > HDR10 > HDR，H265 / AV1 > H264'],
+  ['没写的', '分辨率 / 片源 / 编码有一边名字里没写就不比这一项（不知道不算更差）；HDR 没写算 SDR'],
+  ['优先级', 'priority_level 从上到下算分：命中越靠上的一条分越高，一条都没命中最低；分高的赢'],
+  ['同分时', '命中同一条（或都没命中）再按默认比法比；这条规则里写了的字段，最多按命中的那个值算，没写 DV 的规则里 DV 不占便宜'],
   ['多条件', '同一条优先级下多个条件为「且」关系'],
-  ['多值', '逗号分隔：正值命中任一即算符合，! 前缀命中任一即排除'],
-  ['判不出时', '有优先级但全平手 → 新版按「已存在」处理；replace 未填优先级 → 新替旧'],
+  ['多值', '逗号分隔：正值命中任一即算符合，! 前缀命中任一即排除；先后顺序不影响比较'],
+  ['判不出时', '全部打平 → 新版按「已存在」处理，不拿体积分胜负'],
   ['剧集', '只与同一集比较；库内没有这一集时直接入库，不做洗版'],
 ]
 

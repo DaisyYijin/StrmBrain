@@ -683,7 +683,8 @@ func InitDefaultCategories(db *gorm.DB) error {
 const DefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace替换 / max_size最大 / min_size最小
 # scope：all=全局只留一个最优 / group=按分辨率分组各留一个（如1080p/2160p各一）
 # old_version_target：旧版去向 redundant冗余 / existing已存在 / delete移入115回收站（默认冗余）
-# replace 不配置 priority_level 时新替旧；有优先级时新版更优才替换，平局不换
+# replace：新版更好才替换，全部打平不换。不配 priority_level 时按默认画质比（分辨率 → 片源 → HDR → 视频编码）；
+# 配了就先比命中第几条（越靠上越好），命中同一条再按默认画质比
 # 优先级字段说明：
 #   resource_pix: 分辨率（2160p, 1080p, 720p）
 #   resource_type: 资源质量（BluRay, WEB-DL, HDTV）

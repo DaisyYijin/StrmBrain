@@ -431,7 +431,7 @@ export function lintWash(src: string): RuleIssue[] {
     }
 
     if (!st.levels.length && mode !== 'coexist' && mode !== 'skip') {
-      issues.push({ line: st.line, level: 'info', text: mode === 'replace' ? '没有 priority_level：同一影片（剧集同一集）采用新替旧' : '没有 priority_level：此模式跳过洗版' })
+      issues.push({ line: st.line, level: 'info', text: mode === 'replace' ? '没有 priority_level：按默认画质比（分辨率 → 片源 → HDR → 视频编码），新版更好才替换' : '没有 priority_level：此模式跳过洗版' })
     }
     for (let i = 0; i < st.levels.length; i++) {
       const lv = st.levels[i]
@@ -586,7 +586,7 @@ export function outlineWash(src: string): OutlineGroup[] {
       `旧版去 ${target === 'delete' ? '115 回收站' : target === 'existing' ? '已存在' : '冗余'}`,
     ]
     if (category) bits.push(`限分类 ${category}`)
-    if (mode === 'replace' && !st.levels.length) bits.push('无优先级，新替旧')
+    if (mode === 'replace' && !st.levels.length) bits.push('无优先级，按默认画质比')
     return {
       title: st.name,
       subtitle: bits.join(' · '),

@@ -381,6 +381,11 @@ git tag v26.10.9 && git push origin v26.10.9
       replace 就是让规范路径上的新副本接管；**没配策略** → `washNoStrategy` 退回纯去重。
       `orphan_at` 非空的台账行一律不参与去重，否则一行陈旧记录能把一部片永久钉死在「已存在」。
     - 两种「已存在」的文案必须分开（`washExistsMsg`）：策略判输了和撞了 sha1 是两回事。
+    - **谁更好**（`washquality.go` 的 `washCompare`，2026-10-20 起，维护者定的）：先比规则分（命中 `priority_level` 第几条，越靠上越高，没命中最低；MoviePilot pri_order / P115StrgmSub 同样「严格更高才换」），
+      同分再按默认画质 分辨率 → 片源 → HDR → 视频编码 先后比（MediaSync115 `_score_video_file` 同序，不比体积）；没配规则只有后一层（原来是一律新替旧）。
+      命中的那条里写了的字段最多按命中的值算（写 `HDR10+,HDR` 时 DV.HDR 按 HDR 算），逗号先后不参与；分辨率 / 片源 / 编码有一边没写不比这一项，HDR 没写算 SDR。
+      全平不换（否则两份差不多的来回互顶、每次删一份网盘文件）。现场：规则写 `resource_pix: "2160p,1080p"`，库里 1080p WEB-DL 与新来的 2160p DV WEB-DL 同命中一条，原来平局不换。
+      日志里的理由（「都命中第 3 条规则，分辨率：2160p > 1080p」）也出自它，改比法时一起改。找资源 / 订阅 / 同集多份的排名（`resWashRank` / `washRankIn`）仍只看命中第几条，没接这套。测试 `washquality_test.go`。
     - 测试：`washbatch_test.go`（批量、分组、去重、缓存、失效行）、
       `wash_regression_test.go` / `washflow_test.go` / `wash_recycle_test.go`。
 
@@ -567,7 +572,7 @@ git tag v26.10.9 && git push origin v26.10.9
 | 加一个环境变量 | `internal/config/config.go` 的 `Load()` |
 | 改文件名识别/解析 | 片名/年份/季集在 `tmdb.go` 的 `parseFileName`，画质串在 `resource.go`，TMDB 候选校验在 `tmdbmatch.go`。**搜索结果不许再「取第一条」**：每条候选都要过 `choose` 的片名校验（标题/原名相等 → 别名译名相等 → 包含且年份相符），对不上就判未识别。改动前后跑 `recognize_corpus_test.go`，语料在 `testdata/recognize_corpus.txt`（解析）与 `testdata/recognize_match.json`（假 TMDB + 期望条目），新踩到的坑样本往里加。文件名只有集号时季号是缺省的 1（`SeasonGuessed`），目录名上明写的季号要经 `applySeasonHint` 盖过它，新增按文件解析季号的地方记得一起调用（目录里的每一集统一走 `parseVideoInDir`：替换规则 → 所在子目录季号 → 条目季号）。路径上下文合并在 `recognizepath.go`；目录条目里每一集的落点在 `orgseason.go`（`episodeParses` 每集只解析一次，洗版判定 / 改名 / 按季分组搬移 / 落盘同读这一份，**别再退回「按主视频算一个季目录整包搬」**，那会把多季合集全挤进一季）；NFO / 图片按剧 / 季 / 集三级分落点（`placeMeta` / `metaRel`：集名.nfo、集名-thumb.jpg 跟视频，season.nfo 进季目录，tvshow.nfo 与 poster 进标题目录，重新整理同口径），`orgSink.commit` 的附属文件一律落在传入的 mediaRel，剧级的由调用方以 rootRel 单独提交，本地与网盘必须同布局；容器目录（剧名/Season N）直属的剧级元数据由 `adoptContainerMeta` 在子条目处理完后搬进标题目录；全剧连续编号的集号换算（`S07E166` → `S07E22`）在 `absepisode.go`，参考项目都不自动换，这里只在 TMDB 各季集数能坐实时才换，判定条件见文件头，测试 `absepisode_test.go` / `orgseason_test.go`；季范围 `S01-S07` / `第1-7季` 是合集标志、不是第 1 季；双集文件（`S04E01-02` / `E01-E02` / `第1-2集`）记在 `ParsedName.EpisodeEnd`，只认相邻两集（MoviePilot 同口径），改名写成 `S04E01-E02`、集 NFO 一个文件放两段 `<episodedetails>`，洗版与单集文件互不替换，要展开集号用 `episodeList()`；识别记忆在 `recogmemory.go`（`RecognizeMemory` 表，**只在人工改指定时写**，别改成自动识别也写，会把一次误识别固化下去；管理界面是识别规则页下方的 `webui/src/components/organize/RecognizeMemoryCard.vue`）。其余测试 `recognize_test.go` / `paren_test.go` / `eprange_test.go` |
 | 改重命名模板变量 | `internal/api/rename.go`（变量体系与 CMS 对齐） |
-| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashConfig`；默认 YAML 首次写入，已有配置（含空配置）不覆盖，保存后立即失效缓存。**判定（`decideWash`）与执行（`applyWashPlans`）是分开的**，改之前先读 §6.13 |
+| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashConfig`；两份比谁好在 `washquality.go`（§6.13）；默认 YAML 首次写入，已有配置（含空配置）不覆盖，保存后立即失效缓存。**判定（`decideWash`）与执行（`applyWashPlans`）是分开的**，改之前先读 §6.13 |
 | 接一个新资源站 | 站点的配置 / 登录 / 底层搜索照 `re0.go` 或 `mukaku.go` 写；再在 `transferhub.go` 的 `resSources` 加一个适配（`ready` 说明为什么不能用、`search` 返回 `ResourceItem`，归一与过滤由 `resNormalize` 统一做）；前端只加一张配置卡片 `webui/src/components/transfer/sources/*.vue` 挂进 `pages/transfer/SettingsTab.vue`（`SOURCES` 加一项），搜索与提交不用改 |
 | 改资源订阅 | 先读模块地图「资源订阅」一行与 `docs/115-station-notes/SUBSCRIBE-PLAN.md`；缺集在 `submissing.go`、挑资源在 `subpick.go`、分享按集挑在 `shareepisode.go`、执行在 `subrun.go`、结算排期在 `subsettle.go`、接口在 `subapi.go`；前端 `pages/transfer/SubsTab.vue` + `composables/subscriptions.ts` + `components/subscribe/` |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
