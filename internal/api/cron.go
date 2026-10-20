@@ -213,7 +213,7 @@ func StartSyncScheduler(h *Handler) {
 			now := time.Now()
 			h.backupTick(now)      // 定时备份（backup.go），后台跑，不占这一分钟
 			h.shareOutTick()       // 贴链接转存的分享，整理完发到 RE0 / 癫影（shareout.go），后台跑
-			h.acctLibSyncTick(now) // 附加账号的库没有增量，隔一段时间补一次只同步它们的全量（acctlibs.go）
+			h.acctLibSyncTick(now) // 附加账号的库隔一段时间补一次只同步它们的全量，给增量兜底（acctlibs.go / incracct.go）
 
 			if cron := h.loadFullCron(); cron != "" && CronMatch(cron, now) {
 				h.runScheduledFullSync()
@@ -284,6 +284,10 @@ func (h *Handler) runIncrPollTick() {
 	// 这里再打一行摘要就是同一轮内容出现两遍，排查时反而更难分清轮次
 	if _, err := h.executeIncrementalSync(p); err != nil {
 		log.Printf("[轮询] 增量同步失败: %v", err)
+	}
+	// 别的账号的库：各自的生活事件，同一把锁里接着跑（每个账号 60 秒一轮，incracct.go）
+	if mediaRootProblem() == "" {
+		h.runAcctIncrRounds(p)
 	}
 	// 任务队列据此判断增量是不是被饿着了（见 taskqueue.go waitIncrWindow）
 	markIncrRun()

@@ -253,7 +253,7 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	filter.assetExts[".nfo"] = true
 
 	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置；
-	// 附加账号的库排在最后（acctlibs.go），各用各账号的只读通道。
+	// 附加账号的库排在最后（acctlibs.go），各用各账号的通道。
 	// 一个库失败不拦别的库；有库失败时不标记事件窗口（见下），那个库的变化留给增量补
 	// 库清单：媒体库表（libstore.go）。表还空（迁移前）时退回老配置：这次的主库 + full.extra_libs + acct_libs
 	var targets []fullTarget

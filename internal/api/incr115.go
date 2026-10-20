@@ -271,13 +271,22 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *incrSummary, err error) {
 	defer SetTaskProgress("") // 结束清进度（含错误路径）
 	sum = &incrSummary{}
+	// acct 哪个账号的增量（incracct.go）：别的账号不动主号的状态页快照、门禁与停滞计数
+	acct := incrAcctOf(d)
 	// 每一轮都记一份快照给状态页——包括熔断和失败的那些轮，
 	// 「为什么没动静」正是要靠它们回答
-	defer func() { noteIncrRound(sum, err) }()
+	defer func() {
+		if acct == acctMain {
+			noteIncrRound(sum, err)
+		}
+	}()
 
 	// 轮次号：日志里所有 [同步#N] 都属于这一轮。
 	// 同一批内容连着出现在几个轮次号里 = 事件没消费掉在重放（见 incrtrace.go）
 	lg := newIncrRound()
+	if acct != acctMain {
+		lg.tag = fmt.Sprintf("[同步#%d·账号%d]", lg.id, acct)
+	}
 	sum.Round = lg.id
 	incrStart := time.Now()
 
@@ -304,7 +313,21 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		Folder string `json:"folder"`
 	}
 	_ = json.Unmarshal([]byte(d.setting("share")), &shareCfgRaw)
-	for _, cid := range []string{shareCfgRaw.Folder, orgCfgRaw.Existing, orgCfgRaw.Redundant} {
+	excludeCids := []string{shareCfgRaw.Folder, orgCfgRaw.Existing, orgCfgRaw.Redundant}
+	if acct != acctMain {
+		// 别的账号：它自己网盘里的已存在 / 冗余（orgconfigv2.go 的 acct_ws，整理时建的）
+		all := map[string]acctWS{}
+		_ = json.Unmarshal([]byte(d.setting(acctWorkspaceKey)), &all)
+		ws := all[fmt.Sprint(acct)]
+		excludeCids = []string{ws.Existing, ws.Redundant}
+	}
+	// 各库的转存/待整理文件夹（V2）同样不是库内容（validateLibraries 不许它们放进库里，这里只是保险）
+	for _, l := range loadLibraries() {
+		if l.Account == acct && l.StagingCid != "" {
+			excludeCids = append(excludeCids, l.StagingCid)
+		}
+	}
+	for _, cid := range excludeCids {
 		if cid != "" {
 			if a := d.absPath(cid); a != "" {
 				excludedAbs = append(excludedAbs, strings.TrimSuffix(a, "/"))
@@ -354,7 +377,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			return sum, fmt.Errorf("拉取生活事件失败（已重试 3 次）: %w", lastErr)
 		}
 	}
-	noteLifeRound(len(events))
+	if acct == acctMain {
+		noteLifeRound(len(events))
+	}
 	sum.EventsTotal = len(events)
 
 	batch := make([]model.SyncEvent, 0, len(events))
@@ -366,7 +391,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		// pick_code 与 file_category 一起落库：此前 pick_code 只在内存 map 里活一轮，
 		// 上轮中断残留的事件重新消费时它已经丢了，零遍历优化白白失效
 		batch = append(batch, model.SyncEvent{
-			EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
+			EventID: acctEventID(acct, ev.ID), Account: acct, Type: ev.Type, FileID: ev.FileID,
 			FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size, EventTime: ts,
 			PickCode: ev.PickCode, FileCat: ev.FileCat,
 		})
@@ -380,7 +405,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 会永久滞留 pending，无人再消费。
 	// 这条查询会把本轮刚插入的行一起捞出来（它们状态也是 pending），必须去重
 	var stale []model.SyncEvent
-	h.DB.Where("status = ?", "pending").Order("event_time").Find(&stale)
+	h.DB.Where("status = ? AND account = ?", "pending", acct).Order("event_time").Find(&stale)
 	pending = mergePendingEvents(stale, pending)
 	sum.EventsPending = len(pending)
 	// 溯源第一行：本轮要处理的事件是**从哪来的**。
@@ -792,6 +817,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				Path:     path.Join(libName, base),
 				Size:     ev.Size,
 				PickCode: ev.PickCode,
+				Acct:     acct, // 别的账号：台账 Account 与直链 /d/{账号}~{pickcode}（incracct.go）
 			}
 			preciseDone++
 			ext := strings.ToLower(path.Ext(ev.FileName))
@@ -1121,9 +1147,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 一行说清这一轮干了什么、贵在哪、最后有没有消费掉。空转轮次照旧静默
 	// （30 秒一轮，不能刷屏），但只要动过手就一定留一行 —— 出问题时
 	// 把相邻几个轮次号的账单排在一起，是重放还是真有变化一眼就分得出来
-	h.DB.Model(&model.SyncEvent{}).Where("status = ?", "pending").Count(&sum.PendingLeft)
+	h.DB.Model(&model.SyncEvent{}).Where("status = ? AND account = ?", "pending", acct).Count(&sum.PendingLeft)
 	// 停滞检测放在账单之前：账单要报「已经连续几轮没消费」（见 incrtrace.go）
-	if len(pending) > 0 || !sum.Consumed {
+	if acct == acctMain && (len(pending) > 0 || !sum.Consumed) {
 		sum.StallRounds = noteIncrRoundOutcome(lg, sum.Consumed, sum.NotConsumed, sum.PendingLeft)
 	}
 	if len(pending) > 0 || sum.ListCalls > 0 {

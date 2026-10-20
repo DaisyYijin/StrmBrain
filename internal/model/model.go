@@ -168,6 +168,9 @@ type SyncEvent struct {
 	Size      int64      `json:"size"`
 	EventTime int64      `json:"event_time"`                              // unix 秒
 	Status    string     `json:"status" gorm:"size:20;default:'pending'"` // pending / applied
+	// Account 哪个 115 账号的事件（0 = 主账号，2026-10-20 V2）。别的账号的 EventID 带前缀 a{账号}:，
+	// 事件 id 跨账号会不会撞没验证过，按最坏情况分开
+	Account   uint       `json:"account" gorm:"index;default:0"`
 	CreatedAt time.Time  `json:"created_at"`
 	AppliedAt *time.Time `json:"applied_at"`
 }

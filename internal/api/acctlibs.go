@@ -28,7 +28,7 @@ import (
 //   - 洗版 / sha1 去重、订阅「库里已有」只看同一个账号的行（ledgerAcctSQL）；
 //   - 不写 PathCache（按路径查时不分账号）。
 //
-// 只靠全量同步更新（没有生活事件增量），另有 acctLibSyncTick 每 6 小时补一次只同步它们的全量。
+// 2026-10-20 V2 起也走生活事件增量（incracct.go）；acctLibSyncTick 每 6 小时补一次只同步它们的全量，留着兜底。
 
 const acctLibsKey = "acct_libs"
 
@@ -204,7 +204,7 @@ func firstRelSeg(rel string) string {
 
 // ---- 定时补同步 ----
 
-// acctLibSyncEvery 附加账号的库多久补一次全量（没有生活事件增量，只靠它与手动 / 定时全量）。
+// acctLibSyncEvery 附加账号的库多久补一次全量（增量之外的兜底：别的账号的事件流没用真账号验证过）。
 // 快速模式一个库几次请求，6 小时一次对风控没有压力；LitePan 的 STRM 任务默认扫描间隔也是 360 分钟
 const acctLibSyncEvery = 6 * time.Hour
 

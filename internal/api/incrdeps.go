@@ -80,6 +80,9 @@ type realIncrDeps struct {
 	h      *Handler
 	cookie string
 	ops    *pan115Ops
+	// acct 哪个账号（0 = 主账号）。别的账号（incracct.go）：路径不走 PathCache、游标与通道状态按账号分开存
+	acct    uint
+	absMemo map[string]string // 别的账号一轮里查过的目录路径
 
 	// 回收站列表，一轮只读一次（recycledParent）
 	rbLoaded  bool
@@ -103,7 +106,7 @@ func (h *Handler) newIncrDeps() (*realIncrDeps, error) {
 func (d *realIncrDeps) newLifeFetcher() *lifeFetcher {
 	return &lifeFetcher{
 		cookie: d.cookie,
-		load:   func(k string) string { return d.h.getSettingValue(k) },
+		load:   d.setting,
 		save:   d.saveSetting,
 	}
 }
@@ -112,7 +115,13 @@ func (d *realIncrDeps) lifeEvents(cur lifeCursor, max int) ([]lifeEvent, lifeCur
 	return d.newLifeFetcher().fetch(cur, max)
 }
 
-func (d *realIncrDeps) ensureLifeGate() { d.newLifeFetcher().ensureLifeGate() }
+func (d *realIncrDeps) ensureLifeGate() {
+	if d.acct != acctMain {
+		acctLifeGate(d.acct, d.cookie) // 别的账号各开一次「115 生活」，不动主号的门禁状态
+		return
+	}
+	d.newLifeFetcher().ensureLifeGate()
+}
 
 func (d *realIncrDeps) dirName(cid string) string {
 	info, err := get115DirInfo(d.cookie, cid)
@@ -123,6 +132,9 @@ func (d *realIncrDeps) dirName(cid string) string {
 }
 
 func (d *realIncrDeps) absPath(cid string) string {
+	if d.acct != acctMain {
+		return d.acctAbs(cid)
+	}
 	return absPathOf(d.cookie, cid)
 }
 
@@ -131,12 +143,38 @@ func (d *realIncrDeps) relPath(cid, rootCid string) (string, bool, error) {
 }
 
 func (d *realIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, ctl *walkCtl) error {
+	if d.acct != acctMain {
+		// 别的账号：遍历不写路径缓存（walkCtl.panAbs 会记目录），列出来的文件记上账号
+		nv, na := len(*videos), len(*assets)
+		if ctl != nil {
+			saved := ctl.panAbs
+			ctl.panAbs = "" // 深度上限与让路照旧，只是不记路径缓存
+			defer func() { ctl.panAbs = saved }()
+		}
+		err := walk115DirCtl(d.ops, cid, basePath, videos, assets, f, nil, ctl)
+		for i := nv; i < len(*videos); i++ {
+			(*videos)[i].Acct = d.acct
+		}
+		for i := na; i < len(*assets); i++ {
+			(*assets)[i].Acct = d.acct
+		}
+		return err
+	}
 	return walk115DirCtl(d.ops, cid, basePath, videos, assets, f, nil, ctl)
 }
 
-func (d *realIncrDeps) invalidateDirCache() { forgetAllDirPaths() }
+func (d *realIncrDeps) invalidateDirCache() {
+	if d.acct != acctMain {
+		d.absMemo = map[string]string{}
+		return
+	}
+	forgetAllDirPaths()
+}
 
 func (d *realIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
+	if d.acct != acctMain {
+		return "", false // 别的账号没有路径缓存：拿不到旧位置，调用方回退重遍历（不猜）
+	}
 	old, ok := lookupCachedAbs(fileID)
 	if !ok || old == newAbs {
 		return "", false
@@ -146,12 +184,15 @@ func (d *realIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
 }
 
 func (d *realIncrDeps) dirGone(fileID string) string {
+	if d.acct != acctMain {
+		return "" // 同上：只能靠回收站与名字认
+	}
 	abs, _ := lookupDirAbsAnyAge(fileID)
 	forgetDirSubtree(fileID)
 	return abs
 }
 
-func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(key) }
+func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(acctRuntimeKey(d.acct, key)) }
 
 func (d *realIncrDeps) strmConfig() (string, string, bool, bool) { return d.h.getStrmConfig() }
 
@@ -160,7 +201,7 @@ func (d *realIncrDeps) saveSetting(key, val string) {
 	if d.h.Config == nil {
 		return
 	}
-	d.h.Config.SaveSetting(key, val)
+	d.h.Config.SaveSetting(acctRuntimeKey(d.acct, key), val)
 }
 
 // downloadAsset 取直链 → 下载 → 落盘；本地已存在时返回 errAssetExists
@@ -183,6 +224,15 @@ func (d *realIncrDeps) downloadAsset(f remoteFile, localPath string) error {
 
 func (d *realIncrDeps) applyResults(videos, assets []remoteFile, localPath, domain, format string,
 	keepExt, skipExist bool, dirLabel string) applyStats {
+	if d.acct != acctMain {
+		// 事件直推的文件（零遍历）也要记上账号：台账 Account 与直链 /d/{账号}~{pickcode} 都靠它
+		for i := range videos {
+			videos[i].Acct = d.acct
+		}
+		for i := range assets {
+			assets[i].Acct = d.acct
+		}
+	}
 	return applySyncResults(d.h.DB, d.ops, videos, assets, localPath, domain, format, keepExt, skipExist, dirLabel)
 }
 
@@ -221,14 +271,18 @@ func resolveIncrLibs(d incrDeps, primary string) (incrLibSet, error) {
 	// 表还空（迁移前、测试）时按老配置：这次的主库 + full.extra_libs，本地名看 lib_opts、没有再问 115
 	var cids []string
 	opts := libOpts{Libs: map[string]libOpt{}}
+	acct := incrAcctOf(d)
 	if libs := loadLibraries(); len(libs) > 0 {
 		for _, l := range libs {
-			if l.Account == acctMain {
+			if l.Account == acct {
 				cids = append(cids, l.Cid)
 				opts.Libs[l.Cid] = libOpt{Local: l.Local}
 			}
 		}
 		if len(cids) == 0 {
+			if acct != acctMain {
+				return nil, fmt.Errorf("账号 %d 没有媒体库", acct)
+			}
 			return nil, fmt.Errorf("没有主账号的媒体库")
 		}
 	} else {
