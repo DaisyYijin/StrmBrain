@@ -157,17 +157,17 @@ type UploadMark struct {
 
 // SyncEvent 115 生活事件落库（增量同步两阶段：先落库去重，再应用到本地）
 type SyncEvent struct {
-	ID        uint       `json:"id" gorm:"primaryKey"`
-	EventID   string     `json:"event_id" gorm:"uniqueIndex;size:64;not null"` // 115 事件 id（单调递增，可作游标）
-	Type      string     `json:"type" gorm:"size:40"`
-	FileID    string     `json:"file_id" gorm:"index;size:64"`
-	FileName  string     `json:"file_name" gorm:"size:500"`
-	Cid       string     `json:"cid" gorm:"size:64"`
-	PickCode  string     `json:"pick_code" gorm:"size:64"`    // 事件自带；有则零遍历直推 STRM，不必重遍历目录
-	FileCat   string     `json:"file_category" gorm:"size:4"` // "0"=目录 "1"=文件
-	Size      int64      `json:"size"`
-	EventTime int64      `json:"event_time"`                              // unix 秒
-	Status    string     `json:"status" gorm:"size:20;default:'pending'"` // pending / applied
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	EventID   string `json:"event_id" gorm:"uniqueIndex;size:64;not null"` // 115 事件 id（单调递增，可作游标）
+	Type      string `json:"type" gorm:"size:40"`
+	FileID    string `json:"file_id" gorm:"index;size:64"`
+	FileName  string `json:"file_name" gorm:"size:500"`
+	Cid       string `json:"cid" gorm:"size:64"`
+	PickCode  string `json:"pick_code" gorm:"size:64"`    // 事件自带；有则零遍历直推 STRM，不必重遍历目录
+	FileCat   string `json:"file_category" gorm:"size:4"` // "0"=目录 "1"=文件
+	Size      int64  `json:"size"`
+	EventTime int64  `json:"event_time"`                              // unix 秒
+	Status    string `json:"status" gorm:"size:20;default:'pending'"` // pending / applied
 	// Account 哪个 115 账号的事件（0 = 主账号，2026-10-20 V2）。别的账号的 EventID 带前缀 a{账号}:，
 	// 事件 id 跨账号会不会撞没验证过，按最坏情况分开
 	Account   uint       `json:"account" gorm:"index;default:0"`

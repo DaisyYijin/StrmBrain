@@ -192,7 +192,9 @@ func (d *realIncrDeps) dirGone(fileID string) string {
 	return abs
 }
 
-func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(acctRuntimeKey(d.acct, key)) }
+func (d *realIncrDeps) setting(key string) string {
+	return d.h.getSettingValue(acctRuntimeKey(d.acct, key))
+}
 
 func (d *realIncrDeps) strmConfig() (string, string, bool, bool) { return d.h.getStrmConfig() }
 
