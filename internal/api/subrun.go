@@ -187,8 +187,8 @@ type subRunner struct {
 	subs     map[string]stagingLib
 	cookie   string
 	libs     []model.Library // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
-	re0Left  int // 今天还能自动解锁多少 RE0 积分，<0 = 不限
-	dianLeft int // 癫影同上（两个站的积分各算各的）
+	re0Left  int             // 今天还能自动解锁多少 RE0 积分，<0 = 不限
+	dianLeft int             // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
 	stopPaid map[string]bool
 	// 离线：offlineStop 非空 = 这一轮不再提交离线（原因）；offlineLeft 本月还能提交几个、quotaLeft 115 剩余配额，<0 = 不限 / 没查
