@@ -10,6 +10,8 @@ const props = defineProps<{
   channel: QrChannel
   device: string
   appId: string
+  /** 附加账号的 id：登录成功后存到这个账号（只走 Cookie 通道）；不传 = 主号 */
+  account?: number
 }>()
 const emit = defineEmits<{ 'update:show': [boolean]; success: [] }>()
 
@@ -42,7 +44,7 @@ async function open(isAuto = false) {
     const body =
       props.channel === 'openapi'
         ? { type: '115', app_id: props.appId.trim() }
-        : { type: '115', device: props.device }
+        : { type: '115', device: props.device, account: props.account || undefined }
     const data = await storageApi.createQrCode(props.channel, body)
     if (!data.qrcode) {
       failed.value = true

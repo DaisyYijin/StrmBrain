@@ -297,7 +297,7 @@ func (h *Handler) get115Cookie() (string, error) {
 	}
 	// 回退到数据库（兼容旧数据）
 	var storage model.Storage
-	if err := h.DB.Where("type = ?", "115").First(&storage).Error; err != nil || storage.Cookie == "" {
+	if err := loadMainStorage115(h.DB, &storage); err != nil || storage.Cookie == "" {
 		return "", fmt.Errorf("尚未绑定 115 账号，请先在「115账号」页扫码登录")
 	}
 	return storage.Cookie, nil
@@ -309,7 +309,7 @@ func (h *Handler) get115UA() string {
 	if device == "" {
 		// 回退到数据库
 		var storage model.Storage
-		if err := h.DB.Where("type = ?", "115").First(&storage).Error; err == nil && storage.Device != "" {
+		if err := loadMainStorage115(h.DB, &storage); err == nil && storage.Device != "" {
 			device = storage.Device
 		}
 	}

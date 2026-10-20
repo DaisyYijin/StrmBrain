@@ -48,6 +48,8 @@ type qrSession struct {
 	app    string
 	device string
 	at     time.Time // 创建时间：生成新码时清理陈旧会话（放弃轮询的条目不再泄漏）
+	// acct 登录给哪个账号（account115.go）：0 = 主号，否则是附加账号的 Storage.ID
+	acct uint
 }
 
 var (
@@ -205,12 +207,19 @@ func httpGetJSON(api string, query url.Values, timeout time.Duration) ([]byte, e
 // POST /storage/qrcode  body: { "type": "115", "device": "115android" }
 func (h *Handler) CreateQrCode(c *gin.Context) {
 	var req struct {
-		Type   string `json:"type"`
-		Device string `json:"device"`
+		Type    string `json:"type"`
+		Device  string `json:"device"`
+		Account uint   `json:"account"` // 0 = 主号；附加账号传它的 id（account115.go）
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
+	}
+	if req.Account != acctMain {
+		if _, err := h.extraAccount(req.Account); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// 1. 获取 token
@@ -241,7 +250,7 @@ func (h *Handler) CreateQrCode(c *gin.Context) {
 			delete(qrSessions, uid)
 		}
 	}
-	qrSessions[token.Data.Uid] = qrSession{app: app, device: req.Device, at: time.Now()}
+	qrSessions[token.Data.Uid] = qrSession{app: app, device: req.Device, at: time.Now(), acct: req.Account}
 	qrMu.Unlock()
 	log.Printf("[系统] ▶ 扫码登录二维码已生成（uid=%s，设备=%s，有效期约 2 分钟）", truncateStr(token.Data.Uid, 12), req.Device)
 
@@ -417,11 +426,24 @@ func (h *Handler) fetchQrLoginCookie(uid string) (string, string, string, string
 	return cookie, username, sess.device, "", nil
 }
 
-// fetchAndSaveCookie 扫码登录主号：取 Cookie 并落盘（SaveCookie + Storage）
+// fetchAndSaveCookie 扫码登录：取 Cookie 并落盘。会话是给附加账号生成的就存到那个账号，否则是主号（SaveCookie + Storage）
 func (h *Handler) fetchAndSaveCookie(uid string) (string, string, string, error) {
+	qrMu.RLock()
+	acct := qrSessions[uid].acct
+	qrMu.RUnlock()
 	cookie, username, device, warning, err := h.fetchQrLoginCookie(uid)
 	if err != nil {
 		return "", "", "", err
+	}
+	if acct != acctMain {
+		w, err := h.saveExtraCookie(acct, cookie, device, username)
+		if err != nil {
+			return "", "", "", err
+		}
+		return cookie, username, firstNonEmpty(w, warning), nil
+	}
+	if dup := h.acctDupOf(acctMain, cookie); dup != "" {
+		return "", "", "", fmt.Errorf("这个 115 账号已经是%s了：先在账号列表里删掉它，再用它登录主账号", dup)
 	}
 	// 写入 Cookie 到文件 + 保存设备类型 + 更新 Storage 表元数据
 	h.Config.SaveCookie(cookie)
@@ -433,7 +455,7 @@ func (h *Handler) fetchAndSaveCookie(uid string) (string, string, string, error)
 // upsert115Storage 保存/更新 115 账号配置
 func (h *Handler) upsert115Storage(cookie, device, username string) {
 	var storage model.Storage
-	err := h.DB.Where("type = ?", "115").First(&storage).Error
+	err := loadMainStorage115(h.DB, &storage)
 	if err != nil {
 		// 不存在则创建
 		storage = model.Storage{
@@ -442,6 +464,7 @@ func (h *Handler) upsert115Storage(cookie, device, username string) {
 			Cookie: cookie,
 			Device: device,
 			Status: "online",
+			Main:   true,
 		}
 		if storage.Name == "" {
 			storage.Name = "115主号"

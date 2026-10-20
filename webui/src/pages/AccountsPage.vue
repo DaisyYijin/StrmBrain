@@ -15,6 +15,7 @@ import AccountHero from '@/components/accounts/AccountHero.vue'
 import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
 import LibraryCards from '@/components/accounts/LibraryCards.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
+import ExtraAccounts from '@/components/accounts/ExtraAccounts.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
 import { configApi, libraryApi, organizeApi, storageApi } from '@/api'
@@ -423,6 +424,9 @@ onMounted(() => {
             <HButton variant="tertiary" @click="reset">重置配置</HButton>
           </FormActions>
         </SectionCard>
+
+        <!-- 附加 115 账号：后端没开 STATION_MULTI_ACCOUNT 时不显示（MULTI-ACCOUNT-PLAN.md 阶段 2） -->
+        <ExtraAccounts v-if="!accountUnbound" />
       </div>
 
       <div v-else key="library" class="pane">

@@ -27,12 +27,16 @@ type Storage struct {
 	Status     string  `json:"status" gorm:"size:20;default:'offline'"`
 	FileCount  int64   `json:"file_count" gorm:"default:0"`
 	// 115 开放平台（OpenAPI）
-	OpenapiEnabled bool      `json:"openapi_enabled" gorm:"default:false"`
-	AppID          string    `json:"app_id" gorm:"size:100"`
-	AppKey         string    `json:"app_key" gorm:"size:100"`
-	AppSecret      string    `json:"-" gorm:"size:100"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	OpenapiEnabled bool   `json:"openapi_enabled" gorm:"default:false"`
+	AppID          string `json:"app_id" gorm:"size:100"`
+	AppKey         string `json:"app_key" gorm:"size:100"`
+	AppSecret      string `json:"-" gorm:"size:100"`
+	// Main 主账号（2026-10-20，MULTI-ACCOUNT-PLAN.md §4）：整理、转存、订阅、机器人都只用它。
+	// 其余 type=115 的行是附加账号，Name 是用户起的名字、UserName 是 115 用户名
+	Main      bool      `json:"main" gorm:"default:false"`
+	UserName  string    `json:"user_name" gorm:"size:100"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type StrmFile struct {

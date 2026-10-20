@@ -199,7 +199,7 @@ func Set115Interval(d time.Duration) {
 // 优先级：数据库设置 > STATION115_INTERVAL 环境变量 > 默认 1 秒
 func Apply115Interval(db *gorm.DB) {
 	var storage model.Storage
-	if err := db.Where("type = ?", "115").First(&storage).Error; err != nil || storage.Interval <= 0 {
+	if err := loadMainStorage115(db, &storage); err != nil || storage.Interval <= 0 {
 		return
 	}
 	Set115Interval(time.Duration(storage.Interval * float64(time.Second)))

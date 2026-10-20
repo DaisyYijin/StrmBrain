@@ -30,13 +30,38 @@ export type QrChannel = 'cookie' | 'openapi'
 
 const qrBase = (ch: QrChannel) => (ch === 'openapi' ? '/storage/open/qrcode' : '/storage/qrcode')
 
-export const createQrCode = (ch: QrChannel, body: { type: string; device?: string; app_id?: string }) =>
+/** account：附加账号的 id（只走 Cookie 通道）；不带 = 主号 */
+export const createQrCode = (ch: QrChannel, body: { type: string; device?: string; app_id?: string; account?: number }) =>
   http.post<QrCode>(qrBase(ch), body)
 
 export const qrStatus = (
   ch: QrChannel,
   body: { uid?: string; time?: number | string; sign?: string },
 ) => http.post<QrStatusResult>(`${qrBase(ch)}/status`, body)
+
+// ---- 附加 115 账号（后端 account115.go，MULTI-ACCOUNT-PLAN.md 阶段 2） ----
+
+/** 账号列表的一行。主号 id 恒为 0；状态与用户名是上次登录 / 检测时记下的（零 115 请求） */
+export interface Account115 {
+  id: number
+  /** 主号是 115 用户名；附加账号是用户起的名字 */
+  name: string
+  user_name: string
+  main: boolean
+  /** online / offline / invalid */
+  status: string
+  device: string
+  logged_in: boolean
+}
+
+/** enabled：界面要不要显示附加账号（后端环境变量 STATION_MULTI_ACCOUNT，阶段 3 完成前默认关） */
+export const accounts = () => http.get<{ data: Account115[]; enabled: boolean }>('/storage/115/accounts')
+export const createAccount = (name: string) => http.post<{ data: Account115 }>('/storage/115/accounts', { name })
+export const renameAccount = (id: number, name: string) => http.put(`/storage/115/accounts/${id}`, { name })
+export const deleteAccount = (id: number) => http.del(`/storage/115/accounts/${id}`)
+/** 检测附加账号；带 cookie 就是手动导入，有效才保存 */
+export const checkAccount = (id: number, cookie?: string) =>
+  http.post<StorageCheck & { warning?: string }>(`/storage/115/accounts/${id}/check`, cookie ? { cookie } : {})
 
 // ---- 目录浏览 ----
 

@@ -201,6 +201,36 @@ func (c *Config) SaveCookie(cookie string) error {
 	return os.WriteFile(c.CookieFile(), []byte(cookie), 0600)
 }
 
+// ===== 附加 115 账号的 Cookie（115-cookie-{id}.txt，MULTI-ACCOUNT-PLAN.md §4.2）=====
+// 主号仍是 115-cookie.txt。放在配置目录第一层，备份（只打包第一层）自动带上
+
+// CookieFileOf 附加账号的 Cookie 文件
+func (c *Config) CookieFileOf(id uint) string {
+	return filepath.Join(c.ConfigDir, fmt.Sprintf("115-cookie-%d.txt", id))
+}
+
+// LoadCookieOf 读取附加账号的 Cookie
+func (c *Config) LoadCookieOf(id uint) (string, error) {
+	data, err := os.ReadFile(c.CookieFileOf(id))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// SaveCookieOf 写入附加账号的 Cookie
+func (c *Config) SaveCookieOf(id uint, cookie string) error {
+	return os.WriteFile(c.CookieFileOf(id), []byte(cookie), 0600)
+}
+
+// RemoveCookieOf 删除附加账号的 Cookie 文件（删账号时）
+func (c *Config) RemoveCookieOf(id uint) error {
+	if err := os.Remove(c.CookieFileOf(id)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // Load115Device 读取 115 登录设备类型（115-device.txt）
 func (c *Config) Load115Device() string {
 	data, err := os.ReadFile(filepath.Join(c.ConfigDir, "115-device.txt"))

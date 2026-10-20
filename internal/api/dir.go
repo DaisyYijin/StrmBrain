@@ -43,13 +43,20 @@ func (h *Handler) List115Dirs(c *gin.Context) {
 	// 用户刚在 115 上新建的文件夹，没有它要等缓存过期才看得到。
 	// 只跳过读缓存，结果照常写回，后续普通打开拿到的就是新列表
 	refresh := c.Query("refresh") == "1"
-	if e, ok := dirCacheGet(cid); ok && !refresh {
+	// ?account= 浏览附加账号（account115.go）；缓存键按账号分开
+	acct, err := acctOfQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	key := dirCacheKey(acct, cid)
+	if e, ok := dirCacheGet(key); ok && !refresh {
 		c.JSON(http.StatusOK, gin.H{"data": e.dirs, "cid": cid, "count": e.count, "origin": e.origin, "channel": "cache"})
 		return
 	}
 
-	// 统一操作通道：OpenAPI 优先，Cookie 回退。
-	ops, err := h.newPan115Ops()
+	// 统一操作通道：主号 OpenAPI 优先、Cookie 回退；附加账号只走 Cookie
+	ops, err := h.opsFor(acct)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -60,7 +67,7 @@ func (h *Handler) List115Dirs(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	dirCachePut(cid, dirs, count, origin)
+	dirCachePut(key, dirs, count, origin)
 
 	c.JSON(http.StatusOK, gin.H{"data": dirs, "cid": cid, "channel": ops.channelName(), "count": count, "origin": origin})
 }
@@ -87,14 +94,15 @@ func dirCachePut(cid string, dirs []gin.H, count int, origin string) {
 
 // cachedListDirs 目录选择器用的读：先看缓存，没有再列并写回
 func cachedListDirs(ops *pan115Ops, cid string) ([]gin.H, error) {
-	if e, ok := dirCacheGet(cid); ok {
+	key := dirCacheKey(ops.acct, cid)
+	if e, ok := dirCacheGet(key); ok {
 		return e.dirs, nil
 	}
 	dirs, count, origin, err := ops.listDirs(cid)
 	if err != nil {
 		return nil, err
 	}
-	dirCachePut(cid, dirs, count, origin)
+	dirCachePut(key, dirs, count, origin)
 	return dirs, nil
 }
 
@@ -138,7 +146,12 @@ func (h *Handler) Resolve115Path(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "路径为空"})
 		return
 	}
-	ops, err := h.newPan115Ops()
+	acct, err := acctOfQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ops, err := h.opsFor(acct)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -174,12 +187,22 @@ func (h *Handler) Resolve115CID(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "cid 为空"})
 		return
 	}
-	cookie, err := h.get115Cookie()
+	acct, err := acctOfQuery(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	p := absPathOf(cookie, cid)
+	cookie, err := h.cookieOf(acct)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var p string
+	if acct == acctMain {
+		p = absPathOf(cookie, cid)
+	} else if abs, err := acctDirAbs(cookie, cid); err == nil {
+		p = abs // 附加账号不写路径缓存（account115.go 文件头）
+	}
 	if p == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "无法解析该 cid 对应的目录路径"})
 		return

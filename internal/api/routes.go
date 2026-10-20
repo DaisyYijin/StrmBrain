@@ -94,6 +94,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
+	// 主账号标上 Main（一次性、幂等，account115.go）：有了附加账号之后「type=115 的第一行」不一定是主号
+	h.MigrateMainAccount()
 	// 各库的本地目录名定下来（幂等、零 115 请求，liblocal.go）：要赶在同步与整理起来之前，
 	// 否则这一轮还按 115 目录名落盘
 	h.FreezeLibLocalNames()
@@ -178,6 +180,12 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/storage", h.CreateStorage)
 		protected.DELETE("/storage/:id", h.DeleteStorage)
 		protected.POST("/storage/check", h.CheckStorage)
+		// 附加 115 账号（account115.go，MULTI-ACCOUNT-PLAN.md 阶段 2）
+		protected.GET("/storage/115/accounts", h.ListAccounts115)
+		protected.POST("/storage/115/accounts", h.CreateAccount115)
+		protected.PUT("/storage/115/accounts/:id", h.UpdateAccount115)
+		protected.DELETE("/storage/115/accounts/:id", h.DeleteAccount115)
+		protected.POST("/storage/115/accounts/:id/check", h.CheckAccount115)
 
 		// 115 扫码登录
 		protected.POST("/storage/qrcode", h.CreateQrCode)
@@ -652,10 +660,19 @@ func (h *Handler) AuthMiddleware() gin.HandlerFunc {
 
 // ==================== 存储管理（占位） ====================
 
+// ListStorage 只列主号（与其它类型）：老前端拿 type=115 的第一行当主号，附加账号在 /storage/115/accounts
 func (h *Handler) ListStorage(c *gin.Context) {
 	var storages []model.Storage
 	h.DB.Find(&storages)
-	c.JSON(http.StatusOK, gin.H{"data": storages})
+	main, _ := mainStorage115(h.DB)
+	out := make([]model.Storage, 0, len(storages))
+	for _, s := range storages {
+		if s.Type == "115" && s.ID != main.ID {
+			continue
+		}
+		out = append(out, s)
+	}
+	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
 func (h *Handler) CreateStorage(c *gin.Context) {
@@ -670,9 +687,16 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "启用 OPENAPI 必须填写开放平台 AppID；没有 AppID 请选择「禁用」，Cookie 通道功能完整"})
 		return
 	}
-	// upsert：按 type 去重，存在则更新（保留已有 Cookie 和账号名）
+	// upsert：按 type 去重，存在则更新（保留已有 Cookie 和账号名）。
+	// 115 只认主号那一行：附加账号走 /storage/115/accounts（account115.go）
 	var existing model.Storage
-	if err := h.DB.Where("type = ?", storage.Type).First(&existing).Error; err == nil {
+	var findErr error
+	if storage.Type == "115" {
+		findErr = loadMainStorage115(h.DB, &existing)
+	} else {
+		findErr = h.DB.Where("type = ?", storage.Type).First(&existing).Error
+	}
+	if findErr == nil {
 		updates := map[string]interface{}{
 			"cookie_path":     storage.CookiePath,
 			"device":          storage.Device,
@@ -699,6 +723,7 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 	if storage.Name == "" {
 		storage.Name = "115主号"
 	}
+	storage.Main = storage.Type == "115"
 	h.DB.Create(&storage)
 	if storage.Type == "115" {
 		Apply115Interval(h.DB)
@@ -708,6 +733,21 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 
 func (h *Handler) DeleteStorage(c *gin.Context) {
 	id := c.Param("id")
+	var s model.Storage
+	if err := h.DB.First(&s, id).Error; err == nil && s.Type == "115" {
+		main, _ := mainStorage115(h.DB)
+		if s.ID != main.ID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "附加账号请在账号列表里删除"})
+			return
+		}
+		var n int64
+		h.DB.Model(&model.Storage{}).Where("type = ? AND id <> ?", "115", s.ID).Count(&n)
+		if n > 0 {
+			// 删了主号，下次启动 MigrateMainAccount 会把某个附加账号顶成主号，整理和转存就落到它上面去了
+			c.JSON(http.StatusBadRequest, gin.H{"error": "还有附加账号，先删掉附加账号再删主账号"})
+			return
+		}
+	}
 	h.DB.Delete(&model.Storage{}, id)
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
@@ -736,7 +776,7 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 		}
 		var storage model.Storage
 		name := "OpenAPI"
-		if err := h.DB.Where("type = ?", "115").First(&storage).Error; err == nil && storage.Name != "" {
+		if err := loadMainStorage115(h.DB, &storage); err == nil && storage.Name != "" {
 			name = storage.Name
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -765,6 +805,31 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 		return
 	}
 
+	resp2, userName := probe115Cookie(cookie)
+	manual := strings.TrimSpace(req.Cookie) != ""
+	if userName != "" && manual {
+		if dup := h.acctDupOf(acctMain, cookie); dup != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "这个 115 账号已经是" + dup + "了：先在账号列表里删掉它，再用它登录主账号"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, resp2)
+	if userName == "" {
+		return
+	}
+
+	// 手动导入的 Cookie 检测通过后自动保存（绕过被风控的扫码登录接口）
+	if manual {
+		h.Config.SaveCookie(cookie)
+		h.Config.Save115Device("web")
+		h.upsert115Storage(cookie, "web", userName)
+		log.Printf("[系统] 已导入并保存手动提供的 Cookie，账号=%s", userName)
+	}
+}
+
+// probe115Cookie 用一份 Cookie 读 115 用户信息与容量（主号的「检测」与附加账号共用）。
+// 返回给前端的结果，以及有效时的 115 用户名（无效为空）
+func probe115Cookie(cookie string) (gin.H, string) {
 	log.Printf("[系统] 检测 Cookie（长度=%d）", len(cookie))
 
 	// 用 web 端用户信息接口校验 Cookie（my.115.com nav，115driver ApiUserInfo 同款）
@@ -773,11 +838,10 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 	body, err := httpGet115UA(navAPI, nil, cookie, ua115Unified(), 15*time.Second)
 	if err != nil {
 		log.Printf("[系统] 调用失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{
+		return gin.H{
 			"valid":   false,
 			"message": "调用 115 接口失败：" + err.Error(),
-		})
-		return
+		}, ""
 	}
 
 	var resp struct {
@@ -786,11 +850,10 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 		Data  json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		c.JSON(http.StatusOK, gin.H{
+		return gin.H{
 			"valid":   false,
 			"message": "解析 115 响应失败",
-		})
-		return
+		}, ""
 	}
 	// state=false 时 data 可能是 []，仅在 state=true 时解析用户信息
 	var userName string
@@ -821,11 +884,10 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 		if msg == "" {
 			msg = "Cookie 无效或已过期"
 		}
-		c.JSON(http.StatusOK, gin.H{
+		return gin.H{
 			"valid":   false,
 			"message": msg + "，请重新扫码登录",
-		})
-		return
+		}, ""
 	}
 
 	// 容量信息（webapi files/index_info，115driver GetInfo 同款）
@@ -877,15 +939,7 @@ func (h *Handler) CheckStorage(c *gin.Context) {
 	for k, v := range accInfo {
 		resp2[k] = v
 	}
-	c.JSON(http.StatusOK, resp2)
-
-	// 手动导入的 Cookie 检测通过后自动保存（绕过被风控的扫码登录接口）
-	if strings.TrimSpace(req.Cookie) != "" {
-		h.Config.SaveCookie(cookie)
-		h.Config.Save115Device("web")
-		h.upsert115Storage(cookie, "web", userName)
-		log.Printf("[系统] 已导入并保存手动提供的 Cookie，账号=%s", userName)
-	}
+	return resp2, userName
 }
 
 // pan115Capacity 115 容量信息（仪表盘用，5 分钟内存缓存）
@@ -1041,7 +1095,7 @@ func (h *Handler) SystemGuide(c *gin.Context) {
 	guide := gin.H{}
 	// 1. 115 账号
 	var storage model.Storage
-	guide["pan115"] = h.DB.Where("type = ?", "115").First(&storage).Error == nil && (storage.Cookie != "" || storage.AppID != "")
+	guide["pan115"] = loadMainStorage115(h.DB, &storage) == nil && (storage.Cookie != "" || storage.AppID != "")
 	// 2. TMDB
 	var tmdbCfg model.TmdbConfig
 	guide["tmdb"] = h.DB.First(&tmdbCfg).Error == nil && tmdbCfg.ApiKey != ""

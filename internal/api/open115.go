@@ -114,7 +114,7 @@ func newOpen115(cfg *config.Config, appID string) *open115Client {
 // open115FromDB 从数据库读取启用状态，未启用或未授权返回 nil
 func open115FromDB(db *gorm.DB, cfg *config.Config) *open115Client {
 	var storage model.Storage
-	if err := db.Where("type = ?", "115").First(&storage).Error; err != nil {
+	if err := loadMainStorage115(db, &storage); err != nil {
 		return nil
 	}
 	if !storage.OpenapiEnabled || strings.TrimSpace(storage.AppID) == "" {
@@ -427,7 +427,7 @@ func (h *Handler) CreateOpenQrCode(c *gin.Context) {
 	appID := strings.TrimSpace(req.AppID)
 	if appID == "" {
 		var storage model.Storage
-		if err := h.DB.Where("type = ?", "115").First(&storage).Error; err == nil {
+		if err := loadMainStorage115(h.DB, &storage); err == nil {
 			appID = strings.TrimSpace(storage.AppID)
 		}
 	}
@@ -560,10 +560,10 @@ func (h *Handler) OpenQrCodeStatus(c *gin.Context) {
 // upsertOpenStorage 更新 Storage 表的 OpenAPI 配置
 func (h *Handler) upsertOpenStorage(appID string) {
 	var storage model.Storage
-	if err := h.DB.Where("type = ?", "115").First(&storage).Error; err != nil {
+	if err := loadMainStorage115(h.DB, &storage); err != nil {
 		h.DB.Create(&model.Storage{
 			Name: "OpenAPI", Type: "115", Status: "online",
-			OpenapiEnabled: true, AppID: appID,
+			OpenapiEnabled: true, AppID: appID, Main: true,
 		})
 		return
 	}
@@ -878,6 +878,8 @@ type pan115Ops struct {
 	// 只有整理链路会打开（executeOrganize / redoOrganize 构造后立即置位）：
 	// 整理已经自己落了 STRM，绕一圈回来的生活事件不该再被增量处理一遍
 	suppress bool
+	// acct 账号（account115.go）：0 = 主号；附加账号的通道只读，写操作一律拒绝（errAcctReadOnly）
+	acct uint
 }
 
 // newPan115Ops 构造操作通道：OpenAPI 启用且已授权则优先
@@ -946,6 +948,9 @@ func (o *pan115Ops) listDirs(cid string) ([]gin.H, int, string, error) {
 
 // mkdir 创建目录
 func (o *pan115Ops) mkdir(parent, name string) (string, error) {
+	if o.acct != acctMain {
+		return "", errAcctReadOnly
+	}
 	var (
 		cid string
 		err error
@@ -976,6 +981,9 @@ func (o *pan115Ops) markCreated(cid string) {
 // 建好 / 找到的目录顺手记进路径缓存（不发请求）：用户之后在网盘上删掉整理建的
 // 季目录时，删除事件只能靠这一条认出它是哪部剧的「Season 0」（2026-10-10 现场）
 func (o *pan115Ops) ensurePath(parent, dirPath string) (string, error) {
+	if o.acct != acctMain {
+		return "", errAcctReadOnly
+	}
 	var (
 		cid string
 		err error
@@ -1035,6 +1043,9 @@ func (o *pan115Ops) openEnsurePath(parent, dirPath string) (string, error) {
 // rename 重命名网盘文件（字幕随视频新名对齐用）。
 // OpenAPI 暂无重命名接口：回退 Cookie 通道（未配置 Cookie 时明确报错）
 func (o *pan115Ops) rename(fid, newName string) error {
+	if o.acct != acctMain {
+		return errAcctReadOnly
+	}
 	if o.open != nil && o.cookie == "" {
 		return fmt.Errorf("OpenAPI 通道暂不支持重命名，且未配置 Cookie 无法回退（账号与媒体库 → 二维码登录可补 Cookie）")
 	}
@@ -1054,6 +1065,9 @@ func (o *pan115Ops) rename(fid, newName string) error {
 // renameBatch 批量重命名；OpenAPI 模式同样回退 Cookie 通道。
 // 返回真正改名成功的项目，避免分批请求中途失败后把部分成功误当成全部失败。
 func (o *pan115Ops) renameBatch(names map[string]string) (map[string]string, error) {
+	if o.acct != acctMain {
+		return nil, errAcctReadOnly
+	}
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -1074,6 +1088,9 @@ func (o *pan115Ops) renameBatch(names map[string]string) (map[string]string, err
 
 // moveFiles 移动文件
 func (o *pan115Ops) moveFiles(targetCid string, fids []string) error {
+	if o.acct != acctMain {
+		return errAcctReadOnly
+	}
 	var err error
 	if o.open != nil {
 		err = o.open.moveFiles(targetCid, fids)
@@ -1096,6 +1113,9 @@ func (o *pan115Ops) moveFiles(targetCid string, fids []string) error {
 
 // deleteFiles 删除文件/目录（两通道都是删进 115 回收站，可还原）
 func (o *pan115Ops) deleteFiles(fids []string) error {
+	if o.acct != acctMain {
+		return errAcctReadOnly
+	}
 	if len(fids) == 0 {
 		return nil
 	}
@@ -1151,7 +1171,7 @@ func cfgCookie(db *gorm.DB, cfg *config.Config) string {
 		return ck
 	}
 	var storage model.Storage
-	if err := db.Where("type = ?", "115").First(&storage).Error; err == nil {
+	if err := loadMainStorage115(db, &storage); err == nil {
 		return storage.Cookie
 	}
 	return ""
