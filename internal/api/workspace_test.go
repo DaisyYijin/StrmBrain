@@ -26,10 +26,10 @@ func (f *fakeResolve) fn(cid string, fresh bool) (string, error) {
 
 func wsSlotsOf(lib, share, existing, redundant string) []wsSlot {
 	return []wsSlot{
-		{"library", "115 媒体库目录", lib},
-		{"share", "转存/待整理目录", share},
-		{"existing", "已存在目录", existing},
-		{"redundant", "冗余目录", redundant},
+		{key: "library", label: "115 媒体库目录", cid: lib},
+		{key: "share", label: "转存/待整理目录", cid: share},
+		{key: "existing", label: "已存在目录", cid: existing},
+		{key: "redundant", label: "冗余目录", cid: redundant},
 	}
 }
 

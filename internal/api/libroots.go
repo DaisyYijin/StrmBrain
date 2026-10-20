@@ -14,10 +14,11 @@ import (
 // 主库仍是 full.cid：老配置不用迁移，回退到旧版本也只是少同步几个库；
 // 第 2 期整理按分类规则分库时，没指定库的规则也落在主库。
 //
-// 本地这一侧天生就支持多库：STRM 路径是 LocalPath/<115 库目录名>/分类/片目，
+// 本地这一侧天生就支持多库：STRM 路径是 LocalPath/<库的本地目录名>/分类/片目，
 // 台账 key、海报墙、Emby 路径映射都已经按「第一段是库名」处理。所以多库的硬约束只有一条：
-// **库目录名不能重名**，否则两个库落进同一棵本地目录树（保存时 checkWorkspaceSlots 拦，
-// 同步时 resolveLibRoots 再拦一道：网盘上事后改名也会撞上）。
+// **本地目录名不能重名**，否则两个库落进同一棵本地目录树（保存时 checkWorkspaceSlots / planLibrariesSave 拦，
+// 同步时 resolveLibRoots 再拦一道）。本地目录名没定过的库沿用 115 目录名（liblocal.go），
+// 这种库在网盘上事后改名照样会撞上。
 //
 // 读库清单一律走这里（fullSyncCfg.libCids / libCidsOf），别再自己 Unmarshal full 取 cid。
 
@@ -68,8 +69,10 @@ func parseFullCfg(raw string) fullSyncCfg {
 // libRoot 解析过的一个媒体库
 type libRoot struct {
 	Cid  string
-	Name string // 115 目录名 = 本地第一层
-	Abs  string // 网盘绝对路径
+	Name string // 本地第一层：定过本地目录名用它，否则是 115 目录名（liblocal.go）
+	// PanName 115 上现在的目录名，只给界面显示；认库、拼本地路径一律用 Name
+	PanName string
+	Abs     string // 网盘绝对路径
 	// Self 自己整理的库（libopts.go）：本站不往里整理，分类规则选到它就报错
 	Self bool
 	// Default 「默认放这里」的库：没写 library 的规则落进它（libOpts.fallbackOf）。
@@ -91,10 +94,10 @@ func resolveLibRoots(dirName, absPath func(cid string) string, cids []string) ([
 			if r.Name == "" || r.Abs == "" {
 				return nil, fmt.Errorf("媒体库目录（cid=%s）读不出名字或位置（可能已删除，或暂时连不上 115）", cid)
 			}
-			if prev, ok := byName[r.Name]; ok {
-				return nil, fmt.Errorf("两个媒体库目录同名「%s」（cid=%s 与 %s）：本地第一层就是库目录名，同名会落进同一个本地目录，请在 115 上把其中一个改名", r.Name, prev, cid)
+			if prev, ok := byName[libLocalKey(r.Name)]; ok {
+				return nil, fmt.Errorf("两个媒体库的本地目录名都是「%s」（cid=%s 与 %s），会落进同一个本地目录，请到「账号与媒体库 → 媒体库」给其中一个改本地目录名", r.Name, prev, cid)
 			}
-			byName[r.Name] = cid
+			byName[libLocalKey(r.Name)] = cid
 		}
 		out = append(out, r)
 	}
@@ -127,12 +130,8 @@ func (h *Handler) resolveConfiguredLibRoots(cookie string) ([]libRoot, error) {
 	if len(cids) == 0 {
 		return nil, fmt.Errorf("未配置媒体库目录")
 	}
-	roots, err := resolveLibRoots(func(cid string) string {
-		if info, err := get115DirInfo(cookie, cid); err == nil {
-			return info.n
-		}
-		return ""
-	}, func(cid string) string { return absPathOf(cookie, cid) }, cids)
+	roots, err := resolveLibRoots(func(cid string) string { return libDirName(cookie, cid) },
+		func(cid string) string { return absPathOf(cookie, cid) }, cids)
 	markLibRoles(roots, loadLibOpts())
 	return roots, err
 }
@@ -181,8 +180,9 @@ func panDirOfLocal(roots []libRoot, relDir string) string {
 
 // ==================== 第 2 期：分类规则指定媒体库 ====================
 //
-// 分类规则 YAML 里一类可以写 library: <库目录名或 cid>，这一类整理进那个库；不写进主库。
-// 写库目录名而不是 cid：YAML 是给人看、给人改的，cid 一串数字看不出是哪个库。
+// 分类规则 YAML 里一类可以写 library: <库的本地目录名或 cid>，这一类整理进那个库；不写进主库。
+// 写目录名而不是 cid：YAML 是给人看、给人改的，cid 一串数字看不出是哪个库。
+// 认的是本地目录名（libRoot.Name，liblocal.go）：定下来之后 115 上改名不会让规则认不出库
 // 认不出（库被移出配置、改了名）一律报错停下，不退回主库 —— 退回去等于把片子放进用户没指定的库，
 // 事后要挪还得重新整理一遍
 

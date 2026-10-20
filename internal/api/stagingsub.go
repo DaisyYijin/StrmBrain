@@ -227,12 +227,12 @@ func (h *Handler) libChoices() []libChoice {
 	cookie, _ := h.get115Cookie()
 	out := make([]libChoice, 0, len(cids))
 	for i, cid := range cids {
-		name := ""
-		if row, ok := lookupCachedRow(cid); ok {
-			name = row.Name
-		} else if cookie != "" {
-			if info, err := get115DirInfo(cookie, cid); err == nil {
-				name = info.n
+		name := libLocalName(cid)
+		if name == "" {
+			if row, ok := lookupCachedRow(cid); ok {
+				name = row.Name
+			} else {
+				name = libDirName(cookie, cid)
 			}
 		}
 		out = append(out, libChoice{Cid: cid, Name: name, Primary: i == 0})

@@ -94,6 +94,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
+	// 各库的本地目录名定下来（幂等、零 115 请求，liblocal.go）：要赶在同步与整理起来之前，
+	// 否则这一轮还按 115 目录名落盘
+	h.FreezeLibLocalNames()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 
@@ -1711,6 +1714,10 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 		return
 	}
 	log.Printf("[配置] ✓ 已保存：%s", req.Key)
+	// 换了首个媒体库：新库的本地目录名趁名字还在显示路径里先定下来（liblocal.go）
+	if req.Key == "full" {
+		h.FreezeLibLocalNames()
+	}
 	// emby 配置保存时同步更新反代缓存
 	if req.Key == "emby" {
 		UpdateEmbyConfig(req.Value)

@@ -476,6 +476,8 @@ function mockLibrariesView() {
       name: l.name,
       path: l.path,
       local: `/media/${l.name}`,
+      pan_name: l.name,
+      local_locked: l.cid !== '300',
       default: l.cid === mockFallback(),
       first: i === 0,
       mode: mockOpts[l.cid]?.mode === 'self' ? 'self' : 'organize',

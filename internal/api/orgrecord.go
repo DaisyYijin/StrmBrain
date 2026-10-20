@@ -57,7 +57,9 @@ func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink, inL
 		}
 	}
 	if r.LibCid != "" {
-		if row, ok := lookupCachedRow(r.LibCid); ok {
+		if n := libLocalName(r.LibCid); n != "" {
+			d.LibName = n
+		} else if row, ok := lookupCachedRow(r.LibCid); ok {
 			d.LibName = row.Name
 		} else {
 			d.LibName = "cid " + r.LibCid

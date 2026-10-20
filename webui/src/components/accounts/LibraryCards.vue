@@ -61,6 +61,8 @@ interface DraftLib {
   depth: number
   /** 刮不刮（阶段 2）；新加的库默认自动刮新片 */
   scrape: LibScrape
+  /** 本地目录名（STRM 第一层）。新库空着 = 用 115 目录名；台账里有内容的库不能改（后端 liblocal.go） */
+  local: string
   /** 按 depth 认出来的片目（不参与「有没有改动」的比较） */
   preview?: LibPreview | null
   previewing?: boolean
@@ -82,6 +84,7 @@ function draftsFrom(v: LibrariesView): DraftLib[] {
     mode: l.mode === 'self' ? 'self' : 'organize',
     depth: l.depth || 2,
     scrape: l.scrape || 'auto',
+    local: l.name,
   }))
 }
 /** 「默认放这里」的库 cid（阶段 3：不一定是首个库；空 = 一个本站整理的库都没有） */
@@ -90,7 +93,7 @@ const serialize = (d: DraftLib[]) =>
   JSON.stringify(
     [fallback.value, ...d.map((x) => ({
       cid: x.cid, pick: x.pick?.cid ?? '', path: x.pick?.path ?? '', inboxes: x.inboxes, draft: x.inboxDraft ?? null,
-      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape,
+      mode: x.mode, depth: x.mode === 'self' ? x.depth : 0, scrape: x.scrape, local: x.local.trim(),
     }))],
   )
 const dirty = computed(() => serialize(drafts.value) !== snapshot)
@@ -129,15 +132,29 @@ const defaultName = computed(() => {
 const noOrganize = computed(() => drafts.value.length > 0 && !drafts.value.some((d) => d.mode === 'organize'))
 const stagingRoot = computed(() => view.value?.staging_root ?? '')
 
+/** 选中的 115 目录的名字：新库的本地目录名不填就用它 */
+function pickName(d: DraftLib) {
+  return d.pick?.path ? d.pick.path.split('/').filter(Boolean).pop() || '' : ''
+}
+
 function libLabel(d: DraftLib) {
-  if (d.isNew) return d.pick?.path ? d.pick.path.split('/').filter(Boolean).pop() || '新的媒体库' : '新的媒体库'
+  if (d.isNew) return d.local.trim() || pickName(d) || '新的媒体库'
   return d.view?.name || `cid ${d.cid}`
+}
+
+/** 本地目录名能不能改：新库、或台账里还没有内容的库 */
+const localEditable = (d: DraftLib) => d.isNew || !d.view?.local_locked
+/** 本地目录名的完整路径（给提示用） */
+function localPathOf(d: DraftLib) {
+  const root = view.value?.local_root ?? ''
+  const name = d.local.trim() || pickName(d)
+  return root && name ? `${root}/${name}` : ''
 }
 
 // ---- 添加 ----
 
 function addLib() {
-  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2, scrape: 'auto' })
+  drafts.value.push({ cid: '', isNew: true, pick: { cid: '', path: '' }, inboxes: [], mode: '', depth: 2, scrape: 'auto', local: '' })
 }
 function dropNew(i: number) {
   drafts.value.splice(i, 1)
@@ -350,7 +367,13 @@ function buildReq(list: DraftLib[], confirmed: Set<string>) {
   for (const d of list) opts[d.cid] = d.mode === 'self' ? { mode: 'self', depth: d.depth, scrape: d.scrape } : { mode: 'organize', scrape: d.scrape }
   // 「默认放这里」：指向这次没保存进去的库时交给后端挑第一个本站整理的
   const fb = list.some((d) => d.cid === fallback.value && d.mode === 'organize') ? fallback.value : ''
-  return { extra_libs, inboxes, opts, fallback: fb }
+  // 本地目录名只带改过的：新库填了才带（不填后端用 115 目录名），老库和现在的不一样才带
+  const locals: Record<string, string> = {}
+  for (const d of list) {
+    const v = d.local.trim()
+    if (v && (d.isNew || v !== d.view?.name)) locals[d.cid] = v
+  }
+  return { extra_libs, inboxes, opts, fallback: fb, locals }
 }
 
 /** 发请求；同名子目录已存在且不空时问一次，确认了带上 confirm 重发 */
@@ -517,13 +540,31 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
               v-model="d.pick!"
               placeholder="选择另一个 115 媒体库目录"
             />
-            <p class="muted small">和已有的库不能互相包含，目录名也不能重名（本地 STRM 第一层就是库目录名）。</p>
+            <p class="muted small">和已有的库不能互相包含。</p>
           </div>
         </div>
         <p v-else class="lib-path">
-          115：{{ d.view?.path || d.cid }}<template v-if="d.view?.local"><span class="sep">·</span>本地：{{ d.view.local }}</template>
+          115：{{ d.view?.path || d.cid }}<template v-if="d.view?.local"><span class="sep">→</span>本地：{{ d.view.local }}</template>
+          <template v-if="d.view?.pan_name && d.view.pan_name !== d.view.name">（115 上现在叫「{{ d.view.pan_name }}」，不影响本地）</template>
           <template v-if="d.view?.first"><span class="sep">·</span>在上面「媒体库位置」里改</template>
         </p>
+
+        <!-- 本地目录名：只在还能改的时候出现；有内容之后上面那行「本地：」就是它（MULTI-ACCOUNT-PLAN.md §3） -->
+        <div v-if="localEditable(d)" class="row">
+          <div class="row-label">本地目录名</div>
+          <div class="row-body">
+            <HInput
+              v-model="d.local"
+              class="local-name"
+              :placeholder="pickName(d) || '默认用 115 目录名'"
+              :input-attrs="{ 'aria-label': `${libLabel(d)} 的本地目录名` }"
+            />
+            <p class="muted small">
+              STRM 生成在 <code v-if="localPathOf(d)">{{ localPathOf(d) }}</code><template v-else>本地根目录下的这个文件夹</template>；
+              不填就用 115 目录名，各库不能重名。同步进来内容之后就不能再改，115 上改名也不影响它。
+            </p>
+          </div>
+        </div>
 
         <!-- 谁来整理（LIBRARY-ROLES-PLAN.md） -->
         <div class="row">
@@ -870,6 +911,11 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 }
 .depth {
   width: 240px;
+  margin-bottom: 4px;
+}
+.local-name {
+  width: 240px;
+  max-width: 100%;
   margin-bottom: 4px;
 }
 .titles {

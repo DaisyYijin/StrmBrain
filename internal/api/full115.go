@@ -354,20 +354,16 @@ type fullLibResult struct {
 func (h *Handler) fullSyncLib(ops *pan115Ops, cookie string, p fullParams, cid string, multi bool, filter *syncFilter,
 	seenName map[string]string, domain, format string, keepExt, skipExist bool) (fullLibResult, error) {
 	var r fullLibResult
-	// 媒体库根目录名（如"俱乐部"），作为 STRM 路径的第一层
-	if cookie != "" {
-		if info, err := get115DirInfo(cookie, cid); err == nil {
-			r.name = info.n
-		}
-	}
+	// 媒体库的本地目录名（如"俱乐部"），作为 STRM 路径的第一层。定过本地名就不再问 115（liblocal.go）
+	r.name = libDirName(cookie, cid)
 	if multi {
 		if r.name == "" {
 			return r, fmt.Errorf("读不出媒体库目录名（可能已删除，或暂时连不上 115）")
 		}
-		if prev, ok := seenName[r.name]; ok {
-			return r, fmt.Errorf("与媒体库 cid=%s 同名「%s」，本地会落进同一个目录，请在 115 上把其中一个改名", prev, r.name)
+		if prev, ok := seenName[libLocalKey(r.name)]; ok {
+			return r, fmt.Errorf("与媒体库 cid=%s 的本地目录名都是「%s」，会落进同一个本地目录，请到「账号与媒体库 → 媒体库」给其中一个改本地目录名", prev, r.name)
 		}
-		seenName[r.name] = cid
+		seenName[libLocalKey(r.name)] = cid
 	}
 
 	log.Printf("[同步] ▶ 全量同步开始（媒体库 %s cid=%s → %s）", firstNonEmpty(r.name, "?"), cid, p.LocalPath)

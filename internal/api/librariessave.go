@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strings"
 
 	"115-station/internal/model"
@@ -36,6 +37,9 @@ type libSaveReq struct {
 	Opts map[string]libOpt `json:"opts"`
 	// Fallback 「默认放这里」的库 cid（阶段 3）。只在带 Opts 时生效；空或不是本站整理的库 → 第一个本站整理的库
 	Fallback string `json:"fallback"`
+	// Locals 要设的本地目录名（库 cid → 名字，liblocal.go）。只带用户填过的；没带的库沿用现在的，
+	// 新库没带就取 115 目录名。台账里已经有内容的库不能改
+	Locals map[string]string `json:"locals"`
 }
 
 // libInboxReq 一个转存入口：Cid 是已有的子目录；Cid 为空 = 按 Name 在转存目录下建（同名的已存在就复用）
@@ -60,8 +64,11 @@ type libSaveDeps struct {
 	listRoot func() ([]dirEntry, error)
 	// countItems 一个子目录里有几项（只对同名已存在的调用）
 	countItems func(cid string) (int, error)
-	// dirOf 查一个目录的父目录与名字（只对不在旧绑定表里的已有子目录调用）
+	// dirOf 查一个目录的父目录与名字（只对不在旧绑定表里的已有子目录调用；
+	// 新加的库缓存与显示路径里都没有名字时，也用它取 115 目录名当本地目录名）
 	dirOf func(cid string) (dirInfo, error)
+	// ledgerHas 台账里有没有以这个名字为第一段的行（零 115 请求；为 nil 按没有）
+	ledgerHas func(name string) bool
 }
 
 // libSaveInput 规划所需的现状
@@ -86,6 +93,8 @@ type libSavePlan struct {
 	Clean       []string        // 要清本地的库名
 	OptsJSON    string          // 要写的 lib_opts
 	OptsChanged bool
+	// Locals 保存后各库的本地目录名（库 cid → 名字）；只有一个库、又读不出名字的老部署可能缺
+	Locals map[string]string
 	// ToSelf 这次改成自己整理的库（原来是本站整理）：指向它的规则回默认库、入口解绑，与移除库同一套收尾
 	ToSelf []libRoot
 	// Fallback 保存后「默认放这里」的库（空 = 一个本站整理的库都没有）
@@ -142,7 +151,11 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 	oldOpts := parseLibOpts(in.OptsRaw)
 	opts := libOpts{Libs: map[string]libOpt{}}
 	if req.Opts == nil {
-		opts = oldOpts // 老客户端不带：沿用（marshalLibOpts 会去掉已移除的库）
+		// 老客户端不带：沿用（marshalLibOpts 会去掉已移除的库）。拷一份：后面要往里写本地目录名，别改到 oldOpts
+		opts.Fallback = oldOpts.Fallback
+		for cid, o := range oldOpts.Libs {
+			opts.Libs[cid] = o
+		}
 	}
 	for cid, o := range req.Opts {
 		cid = strings.TrimSpace(cid)
@@ -169,6 +182,9 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 		if nextSet[l.Cid] && opts.of(l.Cid).self() && !oldOpts.of(l.Cid).self() {
 			plan.ToSelf = append(plan.ToSelf, l)
 		}
+	}
+	if err := planLibLocals(&plan, &opts, oldOpts, in, req, primary, extras, next, deps); err != nil {
+		return plan, nil, err
 	}
 	if req.Opts != nil {
 		opts.Fallback = strings.TrimSpace(req.Fallback)
@@ -301,6 +317,70 @@ func planLibrariesSave(in libSaveInput, req libSaveReq, deps libSaveDeps) (libSa
 	return plan, nil, nil
 }
 
+// planLibLocals 定下保存后各库的本地目录名，写进 opts（liblocal.go）。
+//
+// 已定过的沿用（老客户端不带 locals、Opts 整份替换都冲不掉它）；用户填了新名字的，只在这个库的台账一行都没有时能改：
+// 改本地名等于把整棵 STRM 树换个地方，台账、整理记录、Emby 里的路径全都对不上了。
+// 新名字在台账里已经有内容（多半是移除过的库留下的）也不行，不然两拨内容混在一个目录里
+func planLibLocals(plan *libSavePlan, opts *libOpts, oldOpts libOpts, in libSaveInput, req libSaveReq,
+	primary string, extras []libRootEntry, next []string, deps libSaveDeps) error {
+	has := func(name string) bool { return deps.ledgerHas != nil && name != "" && deps.ledgerHas(name) }
+	inUse := map[string]string{} // 现在实际在用的本地第一层（定过的本地名，或 115 目录名）
+	for _, l := range in.OldLibs {
+		inUse[l.Cid] = strings.TrimSpace(l.Name)
+	}
+	shown := map[string]string{primary: jsonStrField(in.FullRaw, "cid_path")}
+	for _, e := range extras {
+		shown[e.Cid] = e.Path
+	}
+	if opts.Libs == nil {
+		opts.Libs = map[string]libOpt{}
+	}
+	plan.Locals = map[string]string{}
+	used := map[string]string{}
+	for _, cid := range next {
+		cur := firstNonEmpty(strings.TrimSpace(oldOpts.of(cid).Local), inUse[cid])
+		name := cur
+		if want := strings.TrimSpace(req.Locals[cid]); want != "" && want != cur {
+			if err := checkLibLocalName(want); err != nil {
+				return err
+			}
+			if has(cur) {
+				return fmt.Errorf("媒体库「%s」里已经有同步进来的内容，本地目录名不能再改（改了整棵 STRM 树、台账与 Emby 里的路径都会对不上）", cur)
+			}
+			if has(want) {
+				return fmt.Errorf("本地已经有「%s」目录的内容（可能是移除过的库留下的），换个名字，或先在「媒体库」的残留提示里清理掉", want)
+			}
+			name = want
+		}
+		if name == "" {
+			if p := strings.TrimRight(strings.TrimSpace(shown[cid]), "/"); strings.HasPrefix(p, "/") && p != "/" {
+				name = path.Base(p)
+			}
+		}
+		if name == "" && deps.dirOf != nil {
+			if info, err := deps.dirOf(cid); err == nil {
+				name = strings.TrimSpace(info.n)
+			}
+		}
+		if name == "" {
+			if len(next) > 1 {
+				return fmt.Errorf("读不出媒体库（cid=%s）的目录名，本地目录名定不下来：填一个本地目录名，或稍后再试", cid)
+			}
+			continue // 只有一个库：老行为，运行时现读 115 目录名
+		}
+		if prev, ok := used[libLocalKey(name)]; ok {
+			return fmt.Errorf("两个媒体库的本地目录名都是「%s」（cid=%s 与 %s），会落进同一个本地目录：给其中一个改个本地目录名", name, prev, cid)
+		}
+		used[libLocalKey(name)] = cid
+		plan.Locals[cid] = name
+		o := opts.Libs[cid]
+		o.Local = name
+		opts.Libs[cid] = o
+	}
+	return nil
+}
+
 // subscribeCfgWithoutSubdir 订阅全局默认的转存子目录被解绑时清空它（空 = 转存目录本身，运行时也是这么退的）
 func subscribeCfgWithoutSubdir(raw string, unbound map[string]bool) (string, bool) {
 	if raw == "" || len(unbound) == 0 {
@@ -381,6 +461,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 			}
 			return get115DirInfo(cookie, cid)
 		},
+		ledgerHas: ledgerHasLib,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -392,7 +473,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	}
 	if plan.FullChanged {
 		// 互不包含、库目录不重名（workspace.go），与 SaveSetting 同一道校验
-		if err := h.guardWorkspaceSetting("full", plan.FullJSON); err != nil {
+		if err := h.guardWorkspaceSettings("full", plan.FullJSON, map[string]string{libOptsKey: plan.OptsJSON}); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}

@@ -130,14 +130,14 @@ func TestPlanLibrariesSaveSelf(t *testing.T) {
 	if keep.OptsChanged {
 		t.Errorf("不带 opts 应沿用：%s", keep.OptsJSON)
 	}
-	// 改回本站整理
+	// 改回本站整理（各库的本地目录名照旧留着，liblocal.go）
 	back, _, _ := planLibrariesSave(in, libSaveReq{ExtraLibs: keepAll(), Opts: map[string]libOpt{}}, deps)
-	if !back.OptsChanged || back.OptsJSON != "{}" {
+	if bo := parseLibOpts(back.OptsJSON); !back.OptsChanged || len(bo.selfCids()) != 0 || bo.of("200").Local != "动漫" {
 		t.Errorf("改回本站整理：%s", back.OptsJSON)
 	}
 	// 移除库时它的选项一起丢
 	rm, _, _ := planLibrariesSave(in, libSaveReq{ExtraLibs: []libRootEntry{{Cid: "300", Path: "/4K"}}, Opts: self}, deps)
-	if rm.OptsJSON != "{}" {
+	if _, left := parseLibOpts(rm.OptsJSON).Libs["200"]; left {
 		t.Errorf("移除的库不该留在 lib_opts 里：%s", rm.OptsJSON)
 	}
 

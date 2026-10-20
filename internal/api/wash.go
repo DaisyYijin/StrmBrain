@@ -285,13 +285,16 @@ func filterLedger(rows []model.SyncedFile, keep func(name string) bool) []model.
 
 // ledgerPrefixOf 取同步台账的库名前缀（库根目录名，如 "俱乐部"）
 func ledgerPrefixOf(ops *pan115Ops, cfg *OrgConfig) string {
-	if ops == nil || cfg == nil || ops.cookie == "" || cfg.Library == "" {
+	if cfg == nil || cfg.Library == "" {
 		return ""
 	}
-	if info, err := get115DirInfo(ops.cookie, cfg.Library); err == nil {
-		return info.n
+	if n := libLocalName(cfg.Library); n != "" {
+		return n
 	}
-	return ""
+	if ops == nil || ops.cookie == "" {
+		return ""
+	}
+	return libDirName(ops.cookie, cfg.Library)
 }
 
 // washStrategyCache YAML 解析结果缓存（1 分钟），避免每个文件都重新解析。

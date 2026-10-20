@@ -424,9 +424,7 @@ func execAdoptPreviewJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	failed := 0
 	for i, cid := range cids {
 		info := adoptLibInfo{Cid: cid}
-		if di, err := get115DirInfo(cookie, cid); err == nil {
-			info.Name = di.n
-		}
+		info.Name = libDirName(cookie, cid)
 		if info.Name == "" {
 			info.Error = "读不出媒体库目录名（可能已删除，或暂时连不上 115）"
 			libs = append(libs, info)

@@ -25,11 +25,15 @@ import (
 
 // libraryView 一张库卡片
 type libraryView struct {
-	Cid     string `json:"cid"`
-	Name    string `json:"name"`    // 115 目录名 = 本地第一层；认不出为空
-	Path    string `json:"path"`    // 网盘绝对路径；认不出为空
-	Local   string `json:"local"`   // 本地目录（本地根 / 库名）；库名认不出为空
-	Default bool   `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
+	Cid   string `json:"cid"`
+	Name  string `json:"name"`  // 本地目录名 = 本地第一层（liblocal.go；没定过时是 115 目录名）；认不出为空
+	Path  string `json:"path"`  // 网盘绝对路径；认不出为空
+	Local string `json:"local"` // 本地目录（本地根 / 库名）；库名认不出为空
+	// PanName 115 上现在的目录名（只给界面显示，和 Name 不同时提示一句）
+	PanName string `json:"pan_name"`
+	// LocalLocked 台账里已经有这个库的内容：本地目录名不能再改（librariessave.go 的 planLibLocals 同口径）
+	LocalLocked bool `json:"local_locked"`
+	Default     bool `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
 	// First 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除
 	First bool `json:"first"`
 	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
@@ -62,33 +66,38 @@ type libRenameFix struct {
 	Lib  string `json:"lib"`  // 库 cid
 }
 
-// libNameSource 一个库的名字与位置：路径缓存优先，其次配置里存的显示路径
+// libNameSource 一个库的名字与位置：本地名定过就用它（liblocal.go），网盘一侧路径缓存优先，其次配置里存的显示路径
 type libNameSource struct {
 	Cid      string
 	Shown    string // 配置里存的显示路径（full.cid_path / extra_libs[].path），可能过时
 	CachedOK bool
 	Cached   model.PathCache
+	Local    string // lib_opts 里定下的本地目录名；空 = 老行为，本地第一层跟 115 目录名走
 }
 
-// libRootOf 名字与网盘路径。缓存里的是 115 现在的样子；显示路径是选目录那一刻的样子
+// libRootOf 名字与网盘路径。缓存里的是 115 现在的样子；显示路径是选目录那一刻的样子。
+// Name 是本地第一层：定过本地名用本地名，否则就是 115 目录名
 func (s libNameSource) libRootOf() libRoot {
 	r := libRoot{Cid: s.Cid}
 	if s.CachedOK {
-		r.Name, r.Abs = s.Cached.Name, s.Cached.Path
-		if r.Name == "" && r.Abs != "" {
-			r.Name = path.Base(r.Abs)
+		r.PanName, r.Abs = s.Cached.Name, s.Cached.Path
+		if r.PanName == "" && r.Abs != "" {
+			r.PanName = path.Base(r.Abs)
 		}
-		return r
+	} else if p := strings.TrimRight(strings.TrimSpace(s.Shown), "/"); p != "" && strings.HasPrefix(p, "/") {
+		r.PanName, r.Abs = path.Base(p), p
 	}
-	if p := strings.TrimRight(strings.TrimSpace(s.Shown), "/"); p != "" && strings.HasPrefix(p, "/") {
-		r.Name, r.Abs = path.Base(p), p
+	r.Name = r.PanName
+	if s.Local != "" {
+		r.Name = s.Local
 	}
 	return r
 }
 
-// staleName 配置里显示路径的目录名与 115 现在的名字不同时，返回旧名（库在 115 上改过名）
+// staleName 配置里显示路径的目录名与 115 现在的名字不同时，返回旧名（库在 115 上改过名）。
+// 定过本地名的库不算：规则 library 认的是本地名，115 上改名碰不到它
 func (s libNameSource) staleName() string {
-	if !s.CachedOK {
+	if !s.CachedOK || s.Local != "" {
 		return ""
 	}
 	p := strings.TrimRight(strings.TrimSpace(s.Shown), "/")
@@ -109,9 +118,10 @@ func libNameSources(fullRaw string) []libNameSource {
 		shown[strings.TrimSpace(e.Cid)] = e.Path
 	}
 	cids := cfg.libCids()
+	opts := loadLibOpts()
 	out := make([]libNameSource, 0, len(cids))
 	for _, cid := range cids {
-		s := libNameSource{Cid: cid, Shown: shown[cid]}
+		s := libNameSource{Cid: cid, Shown: shown[cid], Local: strings.TrimSpace(opts.of(cid).Local)}
 		s.Cached, s.CachedOK = lookupCachedRow(cid)
 		out = append(out, s)
 	}
@@ -270,7 +280,7 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 		LocalRoot:   root,
 	}
 	for i, r := range roots {
-		v := libraryView{Cid: r.Cid, Name: r.Name, Path: r.Abs, Default: r.Default, First: i == 0, Mode: "organize",
+		v := libraryView{Cid: r.Cid, Name: r.Name, PanName: r.PanName, Path: r.Abs, Default: r.Default, First: i == 0, Mode: "organize",
 			Rules: byLib[r.Cid], Inboxes: inboxes[r.Cid]}
 		if r.Name != "" && root != "" {
 			v.Local = root + "/" + r.Name
@@ -332,6 +342,7 @@ func (h *Handler) librariesNow() librariesView {
 		if o := opts.of(v.Libs[i].Cid); o.self() {
 			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()
 		}
+		v.Libs[i].LocalLocked = ledgerHasLib(v.Libs[i].Name)
 	}
 	return v
 }

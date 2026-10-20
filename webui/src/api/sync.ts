@@ -29,7 +29,7 @@ export interface FullSyncConfig {
   cid_path?: string
   /**
    * 附加媒体库：全量 / 增量同步、海报墙、深度删除和主库一样管。
-   * 本地 STRM 第一层就是库目录名，所以各库目录名不能重名（后端保存时校验）
+   * 本地 STRM 第一层是库的本地目录名（lib_opts，默认取 115 目录名），各库不能重名（后端保存时校验）
    */
   extra_libs?: ExtraLib[]
   local_path: string

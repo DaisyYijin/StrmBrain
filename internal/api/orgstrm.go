@@ -126,12 +126,10 @@ func (s *orgSink) libNameOf(cid string) string {
 	if n, ok := s.curNames[cid]; ok {
 		return n
 	}
-	name := ""
-	if s.h != nil {
+	name := libLocalName(cid)
+	if name == "" && s.h != nil {
 		if cookie, err := s.h.get115Cookie(); err == nil && cookie != "" {
-			if info, err := get115DirInfo(cookie, cid); err == nil {
-				name = info.n
-			}
+			name = libDirName(cookie, cid)
 		}
 	}
 	if s.curNames == nil {
@@ -152,10 +150,12 @@ func (s *orgSink) resolveLibName() string {
 	if s.h == nil || s.libCid == "" {
 		return s.libName
 	}
+	if n := libLocalName(s.libCid); n != "" {
+		s.libName = n
+		return s.libName
+	}
 	if cookie, err := s.h.get115Cookie(); err == nil && cookie != "" {
-		if info, err := get115DirInfo(cookie, s.libCid); err == nil {
-			s.libName = info.n
-		}
+		s.libName = libDirName(cookie, s.libCid)
 	}
 	return s.libName
 }

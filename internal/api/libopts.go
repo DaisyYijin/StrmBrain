@@ -28,9 +28,13 @@ const libModeSelf = "self"
 
 // libOpt 一个库的选项
 type libOpt struct {
-	Mode   string `json:"mode,omitempty"`  // 空 / organize = 本站整理；self = 我自己整理
-	Depth  int    `json:"depth,omitempty"` // 自己整理的库：片目在库下第几层（1 = 库/片目，2 = 库/分类/片目，3 = 再多一层分类）	// Scrape 刮不刮：auto / manual / off；空 = 没设过，按老的全局开关换算（legacyLibScrape）
+	Mode  string `json:"mode,omitempty"`  // 空 / organize = 本站整理；self = 我自己整理
+	Depth int    `json:"depth,omitempty"` // 自己整理的库：片目在库下第几层（1 = 库/片目，2 = 库/分类/片目，3 = 再多一层分类）
+	// Scrape 刮不刮：auto / manual / off；空 = 没设过，按老的全局开关换算（legacyLibScrape）
 	Scrape string `json:"scrape,omitempty"`
+	// Local 本地目录名（STRM 第一层、台账路径第一段、规则 library 认的名字，liblocal.go）。
+	// 空 = 老行为：现读 115 目录名。定下来之后 115 上改名不再影响本地
+	Local string `json:"local,omitempty"`
 }
 
 // libOptDepthMax 片目层级最多三层：再深基本是选错了，界面也只给这三档
@@ -138,10 +142,11 @@ func marshalLibOpts(o libOpts, libCids []string) string {
 		out.Fallback = fb
 	}
 	for cid, v := range o.Libs {
-		if !keep[cid] || (!v.self() && v.Scrape == "") {
+		v.Local = strings.TrimSpace(v.Local)
+		if !keep[cid] || (!v.self() && v.Scrape == "" && v.Local == "") {
 			continue
 		}
-		x := libOpt{Scrape: v.Scrape}
+		x := libOpt{Scrape: v.Scrape, Local: v.Local}
 		if v.self() {
 			x.Mode, x.Depth = libModeSelf, v.depth()
 		}

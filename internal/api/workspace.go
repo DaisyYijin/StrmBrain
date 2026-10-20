@@ -31,6 +31,8 @@ type wsSlot struct {
 	key   string // library / share / existing / redundant；附加媒体库是 library:<cid>
 	label string
 	cid   string
+	// local 媒体库槽位的本地目录名（lib_opts，liblocal.go）；空 = 跟 115 目录名走
+	local string
 }
 
 // wsLibKeyPrefix 附加媒体库的槽位 key 前缀（主库是 library）。
@@ -84,6 +86,12 @@ func workspaceSlots(getter func(key string) string) []wsSlot {
 		loc := wsSettingOf[s.key]
 		out = append(out, wsSlot{key: s.key, label: s.label, cid: jsonStrField(getter(loc[0]), loc[1])})
 	}
+	opts := parseLibOpts(getter(libOptsKey))
+	for i := range out {
+		if isLibSlot(out[i].key) {
+			out[i].local = strings.TrimSpace(opts.of(out[i].cid).Local)
+		}
+	}
 	full := parseFullCfg(getter("full"))
 	shown := map[string]string{}
 	for _, e := range full.ExtraLibs {
@@ -94,7 +102,7 @@ func workspaceSlots(getter func(key string) string) []wsSlot {
 		if p := shown[cid]; p != "" {
 			label += "「" + p + "」"
 		}
-		out = append(out, wsSlot{key: wsLibKeyPrefix + cid, label: label, cid: cid})
+		out = append(out, wsSlot{key: wsLibKeyPrefix + cid, label: label, cid: cid, local: strings.TrimSpace(opts.of(cid).Local)})
 	}
 	return out
 }
@@ -190,9 +198,10 @@ func checkWorkspaceSlots(slots []wsSlot, changed map[string]bool, resolve func(c
 			if wsContains(pb, pa) {
 				return fmt.Errorf("%s（%s）位于 %s（%s）之内，这几个目录必须互不包含", a.label, pa, b.label, pb)
 			}
-			// 媒体库的目录名就是本地 STRM 的第一层：同名的两个库会落进同一个本地目录（libroots.go）
-			if i < j && isLibSlot(a.key) && isLibSlot(b.key) && path.Base(pa) == path.Base(pb) {
-				return fmt.Errorf("%s（%s）与 %s（%s）同名：本地 STRM 第一层就是库目录名，同名会混进同一个本地目录，请在 115 上把其中一个改名",
+			// 媒体库的本地目录名就是本地 STRM 的第一层：同名的两个库会落进同一个本地目录（libroots.go）。
+			// 定过本地名的按本地名比，没定过的跟 115 目录名走（liblocal.go）
+			if i < j && isLibSlot(a.key) && isLibSlot(b.key) && libLocalKey(firstNonEmpty(a.local, path.Base(pa))) == libLocalKey(firstNonEmpty(b.local, path.Base(pb))) {
+				return fmt.Errorf("%s（%s）与 %s（%s）的本地目录名相同：本地 STRM 第一层就是库的本地目录名，同名会混进同一个本地目录，请给其中一个改本地目录名",
 					a.label, pa, b.label, pb)
 			}
 		}
@@ -202,6 +211,12 @@ func checkWorkspaceSlots(slots []wsSlot, changed map[string]bool, resolve func(c
 
 // guardWorkspaceSetting SaveSetting 的前置校验：只管三个装着工作区目录的 key
 func (h *Handler) guardWorkspaceSetting(key, value string) error {
+	return h.guardWorkspaceSettings(key, value, nil)
+}
+
+// guardWorkspaceSettings 同 guardWorkspaceSetting，extra 是同一次保存里一起要写的其它 key
+// （PUT /libraries 同时写 full 与 lib_opts：新库的本地目录名还没落盘，同名比较要按这次要写的算）
+func (h *Handler) guardWorkspaceSettings(key, value string, extra map[string]string) error {
 	if key != "full" && key != "share" && key != "org-basic" {
 		return nil
 	}
@@ -217,6 +232,9 @@ func (h *Handler) guardWorkspaceSetting(key, value string) error {
 	next := workspaceSlots(func(k string) string {
 		if k == key {
 			return value
+		}
+		if v, ok := extra[k]; ok {
+			return v
 		}
 		return h.getSettingValue(k)
 	})

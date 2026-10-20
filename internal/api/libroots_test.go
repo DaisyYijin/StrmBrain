@@ -39,7 +39,7 @@ func TestResolveLibRoots(t *testing.T) {
 	if r, err := resolveLibRoots(name, ab, []string{"1", "2"}); err != nil || r[1].Name != "动漫" || r[1].Abs != "/盘2/动漫" {
 		t.Fatalf("两个库应各自解析: %v %v", r, err)
 	}
-	if _, err := resolveLibRoots(name, ab, []string{"1", "3"}); err == nil || !strings.Contains(err.Error(), "同名") {
+	if _, err := resolveLibRoots(name, ab, []string{"1", "3"}); err == nil || !strings.Contains(err.Error(), "本地目录名") {
 		t.Fatalf("同名的两个库必须拒绝（本地会混进一个目录），实得 %v", err)
 	}
 	if _, err := resolveLibRoots(name, ab, []string{"1", "9"}); err == nil {
@@ -233,7 +233,7 @@ func TestIncrMultiLibAbortsOnBadExtra(t *testing.T) {
 
 	h, d, p = newMultiLibEnv(t, "incr_multilib_dup.db")
 	d.names["lib2"] = "媒体库"
-	if _, err := h.executeIncrementalSyncWith(d, p); err == nil || !strings.Contains(err.Error(), "同名") || d.fetchCalls != 0 {
+	if _, err := h.executeIncrementalSyncWith(d, p); err == nil || !strings.Contains(err.Error(), "本地目录名相同") || d.fetchCalls != 0 {
 		t.Fatalf("同名的两个库必须熔断: err=%v fetch=%d", err, d.fetchCalls)
 	}
 }

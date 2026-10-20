@@ -221,6 +221,7 @@ func resolveIncrLibs(d incrDeps, primary string) (incrLibSet, error) {
 		// 主库是 "0" / 空：沿用老口径报主库无效，不拿附加库顶上（整理的落点还是主库）
 		return nil, fmt.Errorf("媒体库 cid 无效（%s）", primary)
 	}
+	opts := parseLibOpts(d.setting(libOptsKey))
 	out := make(incrLibSet, 0, len(cids))
 	seen := map[string]string{}
 	for _, cid := range cids {
@@ -228,15 +229,20 @@ func resolveIncrLibs(d incrDeps, primary string) (incrLibSet, error) {
 		if abs == "" {
 			return nil, fmt.Errorf("媒体库 cid=%s 解析不出绝对路径（未配置或已失效）", cid)
 		}
-		l := incrLib{cid: cid, name: d.dirName(cid), abs: abs}
+		// 本地第一层：定过本地名用它（liblocal.go），不用再问 115
+		name := strings.TrimSpace(opts.of(cid).Local)
+		if name == "" {
+			name = d.dirName(cid)
+		}
+		l := incrLib{cid: cid, name: name, abs: abs}
 		if len(cids) > 1 {
 			if l.name == "" {
 				return nil, fmt.Errorf("媒体库 %s 读不出目录名", abs)
 			}
-			if prev, ok := seen[l.name]; ok {
-				return nil, fmt.Errorf("媒体库 %s 与 %s 同名，本地会落进同一个目录（请在 115 上把其中一个改名）", prev, abs)
+			if prev, ok := seen[libLocalKey(l.name)]; ok {
+				return nil, fmt.Errorf("媒体库 %s 与 %s 的本地目录名相同，会落进同一个本地目录（到「账号与媒体库 → 媒体库」给其中一个改本地目录名）", prev, abs)
 			}
-			seen[l.name] = abs
+			seen[libLocalKey(l.name)] = abs
 		}
 		out = append(out, l)
 	}

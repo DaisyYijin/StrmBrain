@@ -146,7 +146,7 @@ const usable = computed(() => {
           {{ usable }} 个本地 STRM 能原地接管。下一版会在这里放「执行接管」，现在先看看各项是否符合预期。
         </HAlert>
         <HAlert v-else-if="report.verdict === 'move'" status="warning" title="多数 STRM 的位置和本站对不上">
-          本站的本地路径是「本地媒体库目录 / 115 库目录名 / 库内路径」。按下面的前缀换算调整挂载或本地媒体库目录，
+          本站的本地路径是「本地媒体库目录 / 库的本地目录名 / 库内路径」。按下面的前缀换算调整挂载或本地媒体库目录，
           让本站会写的位置正好是现有文件的位置，再预演一次。搬动本地文件会让 Emby 当成新文件，别那样做。
         </HAlert>
         <HAlert v-else status="warning" title="一个都没对上">

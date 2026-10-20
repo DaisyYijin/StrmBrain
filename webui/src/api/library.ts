@@ -50,10 +50,14 @@ export interface LibEmbyState {
 
 export interface LibraryView {
   cid: string
-  /** 115 目录名；认不出为空 */
+  /** 本地目录名（STRM 第一层，规则 library 认的就是它）；没定过时是 115 目录名；认不出为空 */
   name: string
   path: string
   local: string
+  /** 115 上现在的目录名；和 name 不同时界面提示一句（115 上改过名不影响本地） */
+  pan_name: string
+  /** 台账里已经有这个库的内容：本地目录名不能再改 */
+  local_locked: boolean
   /** 「默认放这里」的库：二级分类里没写 library 的规则落进它（阶段 3 起不一定是首个库） */
   default: boolean
   /** 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除 */
@@ -114,6 +118,8 @@ export interface LibSaveReq {
   opts: Record<string, LibOpt>
   /** 「默认放这里」的库 cid；空 = 交给后端挑第一个本站整理的库 */
   fallback?: string
+  /** 要设的本地目录名（库 cid → 名字），只带用户改过的；新库不带就用 115 目录名 */
+  locals?: Record<string, string>
 }
 
 /** 409：转存目录里已有同名子目录、里面有东西，要用户确认 */
