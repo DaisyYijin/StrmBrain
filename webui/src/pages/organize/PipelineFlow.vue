@@ -136,7 +136,8 @@ const steps = computed<Step[]>(() => {
 .pipe {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* 步骤名对齐在同一条线上：有的步骤下面有小字、有的没有，居中对齐的话没小字的会往下掉半行 */
+  align-items: flex-start;
   gap: 8px 4px;
   margin: 0 0 14px;
   padding: 10px 12px;
@@ -146,7 +147,7 @@ const steps = computed<Step[]>(() => {
 }
 .step {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
 }
 .step-body {
@@ -187,6 +188,7 @@ const steps = computed<Step[]>(() => {
   color: var(--warning-soft-foreground);
 }
 .pipe-arrow {
+  margin-top: 4px;
   color: var(--muted);
 }
 </style>

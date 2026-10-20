@@ -83,10 +83,14 @@ func tvProgStale(p model.TmdbTVProgress, now time.Time) bool {
 	return now.Sub(p.FetchedAt) > ttl
 }
 
-// countHaveEpisodes 台账里一个片目有几集正片（同一集几份、双集文件都按集号去重）
+// countHaveEpisodes 台账里一个片目有几集正片（同一集几份、双集文件都按集号去重）。
+// 失效 STRM（orphan_at 非空，网盘上已经没有）不算，与订阅盘点 subHaveOf 同口径
 func countHaveEpisodes(key string, rows []model.SyncedFile) int {
 	seen := map[epKey]bool{}
 	for _, sf := range rows {
+		if sf.OrphanAt != nil {
+			continue
+		}
 		for _, k := range ledgerVideoEpisodes(key, sf.RelPath) {
 			if k.S > 0 {
 				seen[k] = true

@@ -46,6 +46,7 @@ func TestTVProgStale(t *testing.T) {
 
 // 同一集几份算一集，季目录给季号，第 0 季不算
 func TestCountHaveEpisodes(t *testing.T) {
+	now := time.Now()
 	key := "电视剧/国产剧/繁花 (2023) {tmdb-207468}"
 	rows := []model.SyncedFile{
 		{RelPath: key + "/Season 01/繁花 S01E01.strm"},
@@ -53,8 +54,9 @@ func TestCountHaveEpisodes(t *testing.T) {
 		{RelPath: key + "/Season 01/繁花 S01E02-E03.strm"},
 		{RelPath: key + "/Season 02/E05.strm"},
 		{RelPath: key + "/Season 00/繁花 S00E01.strm"},
+		{RelPath: key + "/Season 02/E06.strm", OrphanAt: &now},
 	}
 	if n := countHaveEpisodes(key, rows); n != 4 {
-		t.Fatalf("应为 4 集（S01E01-03、S02E05），得 %d", n)
+		t.Fatalf("应为 4 集（S01E01-03、S02E05；失效的 E06 不算），得 %d", n)
 	}
 }

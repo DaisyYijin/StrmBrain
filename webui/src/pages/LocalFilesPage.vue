@@ -336,9 +336,10 @@ function metaLine(t: LocalTitle) {
   const p = t.media_type === 'tv' ? tvProg.value[t.key] : undefined
   // 缺集的「12/16 集」单独一段上警告色（模板里的 ep-lag），这里不写集数
   if (epLag(t)) return parts.join(' · ')
-  if (tvWithCount) parts.push(`${p?.aired ? p.have : t.videos} 集`)
+  // 完结且收全写「全 N 集」：中卡片一行放不下「12 集 · 完结」（2026-10-20 实测被截成「12 集 · …」）；
+  // 连载中只写集数，「连载中」在悬停提示里
+  if (tvWithCount) parts.push(p?.aired ? `${p.ended ? '全 ' : ''}${p.have} 集` : `${t.videos} 集`)
   else if (t.videos > 1) parts.push(`${t.videos} 个视频`)
-  if (p?.aired) parts.push(p.ended ? '完结' : '连载中')
   return parts.join(' · ')
 }
 
