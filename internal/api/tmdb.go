@@ -445,8 +445,32 @@ var (
 // 会把 "Call.Me.By.Your.Name"、"Best.of.Me" 这类片名当域名剜掉，标题残缺
 var (
 	reAdBracketBlock = regexp.MustCompile(`【[^【】]*】`)
-	reAdDomain       = regexp.MustCompile(`(?i)(\bwww\.[a-z0-9][a-z0-9-]{1,15}\.(com|net|org|cc|xyz|info|vip|top|me|tv)\b|\b([a-z0-9][a-z0-9-]{1,15}\.){2,}(com|net|org|cc|xyz|info|vip|top|me|tv)\b)`)
+	reAdDomain       = regexp.MustCompile(`(?i)\bwww\.[a-z0-9][a-z0-9-]{1,15}\.(com|net|org|cc|xyz|info|vip|top|me|tv)\b`)
+	// 不带 www. 的只认 2–3 段标签，而且前后不能和别的点分段粘着（见 stripBareAdDomains）
+	reAdDomainBare = regexp.MustCompile(`(?i)\b([a-z0-9][a-z0-9-]{1,15}\.){2,3}(com|net|org|cc|xyz|info|vip|top|me|tv)\b`)
 )
+
+// stripBareAdDomains 剥掉不带 www. 的广告域名（web.4k688.com）。
+// 点分的 scene 命名里单词本身就像域名标签：2026-10-20 现场
+// 「Cyberpunk.Edgerunners.S02E02.Give.Me.Another.Day…」的前半截被当成以 .Me 结尾的域名剜掉，
+// 季集号跟着没了，这一集进了 Season 0。所以要求它前面不是点、后面不再接点分段（媒体后缀除外）
+func stripBareAdDomains(name string) string {
+	locs := reAdDomainBare.FindAllStringIndex(name, -1)
+	for i := len(locs) - 1; i >= 0; i-- {
+		s, e := locs[i][0], locs[i][1]
+		if s > 0 && name[s-1] == '.' {
+			continue
+		}
+		if e < len(name) && name[e] == '.' {
+			rest := name[e+1:]
+			if rest != "" && !reMediaExt.MatchString(rest) {
+				continue
+			}
+		}
+		name = name[:s] + " " + name[e:]
+	}
+	return name
+}
 
 // stripReleaseAds 剥离文件名/目录名中的发布站广告（【高清影视之家发布
 // www.SSDSSE.com】块与裸域名），清理残留分隔符。放在 parseFileName 最前，
@@ -454,6 +478,7 @@ var (
 func stripReleaseAds(name string) string {
 	name = reAdBracketBlock.ReplaceAllString(name, " ")
 	name = reAdDomain.ReplaceAllString(name, " ")
+	name = stripBareAdDomains(name)
 	for strings.Contains(name, "  ") {
 		name = strings.ReplaceAll(name, "  ", " ")
 	}

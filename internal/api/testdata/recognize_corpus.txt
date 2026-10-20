@@ -29,6 +29,7 @@ ok   | 【高清影视之家发布 www.SSDSSE.com】骗不了人的男人.Softie
 # ---------- 剧集 ----------
 ok   | The.Boys.S04E01.2024.2160p.AMZN.WEB-DL.mkv | The Boys | 2024 | 4 | 1 | 1 | - | 年份是第四季的，识别时不当首播年份
 ok   | The.Office.US.S02E03.mkv | The Office US | - | 2 | 3 | 1 | - |
+ok   | Cyberpunk.Edgerunners.S02E02.Give.Me.Another.Day.1080p.NF.WEB-DL.DDP.5.1.H.264-CHDWEB.mkv | Cyberpunk Edgerunners | - | 2 | 2 | 1 | - | 集名里的 Give.Me 曾被当成 .me 广告域名剜掉
 ok   | 请回答1988.E05.mkv | 请回答1988 | - | 1 | 5 | 1 | - |
 ok   | Baby.Walkure.Everyday.EP08.1080p.MAX.WEB-DL.DDP2.0.H.264-MagicStar.mkv | Baby Walkure Everyday | - | 1 | 8 | 1 | - |
 ok   | 某剧.第01集.1080p.mkv | 某剧 | - | 1 | 1 | 1 | - |

@@ -36,6 +36,11 @@ func TestStripReleaseAds(t *testing.T) {
 		{"骗不了人的男人 www.4k688.com.mkv", "骗不了人的男人 .mkv"},
 		// 干净名字不受影响（Softie.Conman 的 .Conman 不是 TLD）
 		{"Softie.Conman.2022.1080p.MyTVSuper.WEB-DL.H265", "Softie.Conman.2022.1080p.MyTVSuper.WEB-DL.H265"},
+		// 不带 www. 的域名
+		{"骗不了人的男人 web.4k688.com.mkv", "骗不了人的男人 .mkv"},
+		// 点分片名里的 .Me / .TV 不是域名（2026-10-20：S02E02 被剜掉进了 Season 0）
+		{"Cyberpunk.Edgerunners.S02E02.Give.Me.Another.Day.1080p.NF.WEB-DL", "Cyberpunk.Edgerunners.S02E02.Give.Me.Another.Day.1080p.NF.WEB-DL"},
+		{"The.Show.S01E01.Trust.Me", "The.Show.S01E01.Trust.Me"},
 	}
 	for _, c := range cases {
 		if got := stripReleaseAds(c.in); got != c.want {
