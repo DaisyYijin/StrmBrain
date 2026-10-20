@@ -268,21 +268,27 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	orphanTotal := 0
 	var failed []string
 	seenName := map[string]string{}
+	// 每个库这次的结果，结束时（含提前返回）写给媒体库卡片看（libsyncstat.go）
+	stats := map[string]libSyncStat{}
+	defer func() { h.saveLibSyncStats(stats) }()
 	for i, t := range targets {
 		if len(targets) > 1 {
 			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(targets)))
 		}
+		libStart := time.Now()
 		libOps, libCookie := ops, cookie
 		if t.acct != acctMain {
 			o, err := h.opsFor(t.acct)
 			if err != nil {
 				log.Printf("[同步] ✗ 附加账号的库「%s」同步失败: %v", t.local, err)
 				failed = append(failed, fmt.Sprintf("%s：%v", t.local, err))
+				stats[libSyncStatKey(t)] = libSyncStatOf(fullLibResult{}, err, libStart)
 				continue
 			}
 			libOps, libCookie = o, o.cookie
 		}
 		r, err := h.fullSyncLib(libOps, libCookie, p, t, len(targets) > 1, filter, seenName, domain, format, keepExt, skipExist)
+		stats[libSyncStatKey(t)] = libSyncStatOf(r, err, libStart)
 		if err != nil {
 			if len(targets) == 1 {
 				return nil, err

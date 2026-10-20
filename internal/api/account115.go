@@ -180,7 +180,12 @@ func (h *Handler) saveExtraCookie(acct uint, cookie, device, username string) (w
 			old = ck
 		}
 		if a, b := cookieUserID(old), cookieUserID(cookie); a != 0 && b != 0 && a != b {
-			// 阶段 3 起这个账号下的库要重新全量（pickcode 不跨账号），这里先提醒
+			// 换了 115 用户：这个账号下的库的 STRM 都是原来那个用户的 pickcode，换过去一个都播不了，
+			// 全量还会把两个用户的东西混在一棵本地树里。挂着库就不许换（acctlibs.go）
+			if libs := h.acctLibNamesOf(acct); len(libs) > 0 {
+				return "", fmt.Errorf("这次登录的是另一个 115 用户（原来是「%s」），而这个账号还挂着媒体库%s：先到「媒体库」里移除它们（勾选清理本地），再换用户",
+					firstNonEmpty(s.UserName, "未知"), strings.Join(libs, "、"))
+			}
 			warning = fmt.Sprintf("这次登录的是另一个 115 用户（原来是「%s」）", firstNonEmpty(s.UserName, "未知"))
 		}
 	}
@@ -323,13 +328,7 @@ func (h *Handler) DeleteAccount115(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var names []string
-	for _, e := range parseAcctLibs(h.getSettingValue(acctLibsKey)) {
-		if e.Account == s.ID {
-			names = append(names, "「"+e.Local+"」")
-		}
-	}
-	if len(names) > 0 {
+	if names := h.acctLibNamesOf(s.ID); len(names) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这个账号还挂着媒体库" + strings.Join(names, "、") + "：先到「媒体库」里移除它们"})
 		return
 	}
@@ -440,4 +439,15 @@ func loadMainStorage115(db *gorm.DB, out *model.Storage) error {
 		*out = s
 	}
 	return err
+}
+
+// acctLibNamesOf 这个附加账号挂着的库（「本地名」），删账号、换用户前查
+func (h *Handler) acctLibNamesOf(acct uint) []string {
+	var names []string
+	for _, e := range parseAcctLibs(h.getSettingValue(acctLibsKey)) {
+		if e.Account == acct {
+			names = append(names, "「"+e.Local+"」")
+		}
+	}
+	return names
 }

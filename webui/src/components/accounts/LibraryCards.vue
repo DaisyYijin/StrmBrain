@@ -31,6 +31,8 @@ import { configApi, libraryApi, storageApi } from '@/api'
 import { ApiError } from '@/api/client'
 import type { LibInboxConfirm, LibInboxReq, LibMode, LibOpt, LibPreview, LibrariesView, LibraryView } from '@/api/library'
 import type { Account115 } from '@/api/storage'
+import type { LibSyncStat } from '@/api/library'
+import { fullTime, relTime } from '@/utils/time'
 import type { LibScrape } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
@@ -190,6 +192,26 @@ function setAccount(d: DraftLib, v: number) {
     d.inboxDraft = undefined
   }
 }
+// ---- 上一次全量（后端 libsyncstat.go，学 LitePan 的任务卡片） ----
+
+function durText(sec: number) {
+  if (sec < 60) return `${sec} 秒`
+  if (sec < 3600) return `${Math.round(sec / 60)} 分钟`
+  return `${(sec / 3600).toFixed(1)} 小时`
+}
+/** 卡片上那一行：成功时报数，失败时报原因 */
+function syncLine(s: LibSyncStat) {
+  const when = relTime(new Date(s.at * 1000).toISOString())
+  if (!s.ok) return `上次全量 ${when} 失败：${s.error || '原因未知'}`
+  const parts = [`视频 ${s.videos}`, `新增 STRM ${s.created}`]
+  if (s.failed) parts.push(`写失败 ${s.failed}`)
+  if (s.assets) parts.push(`附属文件 ${s.assets}`)
+  if (s.orphans) parts.push(`失效 STRM ${s.orphans} 待清理`)
+  if (!s.complete) parts.push('清单不完整')
+  return `上次全量 ${when}（${s.mode === 'fast' ? '快速' : '标准'}模式，${durText(s.seconds)}）：${parts.join('，')}`
+}
+const syncTitle = (s: LibSyncStat) => fullTime(new Date(s.at * 1000).toISOString())
+
 /** 附加账号的库在 lib_opts 里的 key（后端 acctLibKey） */
 const acctKey = (account: number, cid: string) => `a${account}:${cid}`
 function dropNew(i: number) {
@@ -620,6 +642,14 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
           <template v-if="d.view?.pan_name && d.view.pan_name !== d.view.name">（115 上现在叫「{{ d.view.pan_name }}」，不影响本地）</template>
           <template v-if="d.view?.first"><span class="sep">·</span>在上面「媒体库位置」里改</template>
         </p>
+        <p v-if="!d.isNew" class="sync-line" :class="{ bad: d.view?.last_sync && !d.view.last_sync.ok }">
+          <template v-if="d.view?.last_sync">
+            <TriangleAlert v-if="!d.view.last_sync.ok" :size="13" />
+            <span :title="syncTitle(d.view.last_sync)">{{ syncLine(d.view.last_sync) }}</span>
+          </template>
+          <template v-else-if="d.account">还没同步过：保存时已排队同步一次，之后每 6 小时补一次</template>
+          <template v-else>还没跑过全量同步（Strm 管理 → 全量同步）</template>
+        </p>
 
         <!-- 本地目录名：只在还能改的时候出现；有内容之后上面那行「本地：」就是它（MULTI-ACCOUNT-PLAN.md §3） -->
         <div v-if="localEditable(d)" class="row">
@@ -986,6 +1016,17 @@ const CATEGORY_LINK = { name: 'organize', query: { tab: 'category' } }
 .depth {
   width: 240px;
   margin-bottom: 4px;
+}
+.sync-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -6px 0 10px; /* 紧跟在路径行下面，算同一组 */
+  font-size: 12px;
+  color: var(--muted);
+}
+.sync-line.bad {
+  color: var(--danger);
 }
 .local-name {
   width: 240px;

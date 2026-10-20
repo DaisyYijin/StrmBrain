@@ -193,3 +193,31 @@ func TestDeleteAccountWithLibs(t *testing.T) {
 		t.Fatalf("移除库之后应能删：%d", code)
 	}
 }
+
+// 挂着库的附加账号不许重新登录成另一个 115 用户（库里的 STRM 全是原来那个用户的 pickcode）
+func TestSaveExtraCookieUserSwitch(t *testing.T) {
+	h, _ := acctSetup(t)
+	h.DB.Create(&model.Storage{Name: "主人", Type: "115", Main: true})
+	extra := model.Storage{Name: "副号", Type: "115"}
+	h.DB.Create(&extra)
+	if _, err := h.saveExtraCookie(extra.ID, "UID=2_A1_x; SEID=s", "web", "二号"); err != nil {
+		t.Fatal(err)
+	}
+	// 同一个用户重新登录：照常
+	if w, err := h.saveExtraCookie(extra.ID, "UID=2_B2_y; SEID=s", "web", "二号"); err != nil || w != "" {
+		t.Fatalf("同一用户重登：%q %v", w, err)
+	}
+	// 挂着库时换用户：拒绝，Cookie 不动
+	_ = h.Config.SaveSetting(acctLibsKey, `[{"account":`+uitoa(extra.ID)+`,"cid":"9","local":"副号电影"}]`)
+	if _, err := h.saveExtraCookie(extra.ID, "UID=3_A1_z; SEID=s", "web", "三号"); err == nil || !strings.Contains(err.Error(), "副号电影") {
+		t.Fatalf("挂着库换用户应拒绝：%v", err)
+	}
+	if ck, _ := h.Config.LoadCookieOf(extra.ID); !strings.HasPrefix(ck, "UID=2_") {
+		t.Fatalf("拒绝时 Cookie 不该被覆盖：%q", ck)
+	}
+	// 没有库时换用户：允许，给提醒
+	_ = h.Config.SaveSetting(acctLibsKey, `[]`)
+	if w, err := h.saveExtraCookie(extra.ID, "UID=3_A1_z; SEID=s", "web", "三号"); err != nil || w == "" {
+		t.Fatalf("没挂库换用户应允许并提醒：%q %v", w, err)
+	}
+}

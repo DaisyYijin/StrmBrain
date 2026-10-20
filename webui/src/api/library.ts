@@ -62,6 +62,8 @@ export interface LibraryView {
   account: number
   account_name?: string
   raw_cid?: string
+  /** 上一次全量里这个库的结果（后端 libsyncstat.go）；没同步过没有这个字段 */
+  last_sync?: LibSyncStat
   /** 「默认放这里」的库：二级分类里没写 library 的规则落进它（阶段 3 起不一定是首个库） */
   default: boolean
   /** 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除 */
@@ -75,6 +77,23 @@ export interface LibraryView {
   rules: RuleLibRef[]
   inboxes: LibInbox[]
   emby?: LibEmbyState
+}
+
+/** 一个库上一次全量的结果 */
+export interface LibSyncStat {
+  /** 结束时间（unix 秒） */
+  at: number
+  ok: boolean
+  error?: string
+  /** fast / normal */
+  mode?: string
+  seconds: number
+  videos: number
+  created: number
+  failed: number
+  assets: number
+  orphans: number
+  complete: boolean
 }
 
 export type LibMode = 'organize' | 'self'

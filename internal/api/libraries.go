@@ -38,7 +38,9 @@ type libraryView struct {
 	Account     uint   `json:"account"`
 	AccountName string `json:"account_name,omitempty"`
 	RawCid      string `json:"raw_cid,omitempty"`
-	Default     bool   `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
+	// LastSync 上一次全量里这个库的结果（libsyncstat.go）；没同步过为空
+	LastSync *libSyncStat `json:"last_sync,omitempty"`
+	Default  bool         `json:"default"` // 「默认放这里」的库（没写 library 的规则落进它），阶段 3 起不一定是首个库
 	// First 首个媒体库（full.cid）：115 目录在「媒体库位置」里改、不能移除
 	First bool `json:"first"`
 	// Mode 谁来整理：organize（本站整理）/ self（我自己整理），Depth 自己整理的库片目在第几层（libopts.go）
@@ -359,6 +361,7 @@ func (h *Handler) librariesNow() librariesView {
 	v.EmbyConfigured, v.EmbyError = embyOK, embyErr
 	opts := loadLibOpts()
 	legacy := loadLegacyLibScrape()
+	syncStats := parseLibSyncStats(h.getSettingValue(libSyncStatsKey))
 	for i := range v.Libs {
 		v.Libs[i].Scrape = opts.of(v.Libs[i].Cid).Scrape
 		if v.Libs[i].Scrape == "" {
@@ -368,6 +371,9 @@ func (h *Handler) librariesNow() librariesView {
 			v.Libs[i].Mode, v.Libs[i].Depth = libModeSelf, o.depth()
 		}
 		v.Libs[i].LocalLocked = ledgerHasLib(v.Libs[i].Name)
+		if st, ok := syncStats[v.Libs[i].Cid]; ok {
+			v.Libs[i].LastSync = &st
+		}
 		if a := v.Libs[i].Account; a != acctMain && h.DB != nil {
 			var s model.Storage
 			if h.DB.Select("name").First(&s, a).Error == nil {
