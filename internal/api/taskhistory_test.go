@@ -47,6 +47,10 @@ func TestQueryJobHistory(t *testing.T) {
 	if total != 2 || counts["all"] != 2 || counts[jobSuccess] != 1 {
 		t.Fatalf("类型筛选应同时作用于条数：%d %v", total, counts)
 	}
+	_, total, _ = queryJobHistory(model.DB, jobHistoryFilter{Kind: "organize,redo"})
+	if total != 3 {
+		t.Fatalf("逗号分隔的多个类型：%d", total)
+	}
 	_, total, _ = queryJobHistory(model.DB, jobHistoryFilter{Source: "web"})
 	if total != 2 {
 		t.Fatalf("来源筛选：%d", total)

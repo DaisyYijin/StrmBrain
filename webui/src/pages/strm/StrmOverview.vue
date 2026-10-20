@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
-import { ChevronRight, DatabaseBackup, FileWarning, Trash2, Zap } from '@lucide/vue'
-import HSkeleton from '@/components/hero/HSkeleton.vue'
+import { DatabaseBackup, FileWarning, Trash2, Zap } from '@lucide/vue'
+import StatusStrip from '@/components/ui/StatusStrip.vue'
+import type { StripItem, StripTone } from '@/components/ui/StatusStrip.vue'
 import { syncApi, tasksApi } from '@/api'
 import type { DeepDeleteRecord, OrphanReport } from '@/api/sync'
 import type { TaskJob } from '@/api/tasks'
@@ -10,7 +11,7 @@ import type { FullSetting } from './fullSetting'
 import type { DeepDelSetting } from './deepDelSetting'
 import type { StrmRuns } from './useStrmRuns'
 import { useQueueStore } from '@/stores/queue'
-import { fullTime, relTime } from '@/utils/time'
+import { fullTime, relCronNext, relTime } from '@/utils/time'
 import { num } from '@/utils/format'
 
 /**
@@ -100,7 +101,7 @@ watch(
 )
 
 // ---- 四块的状态 ----
-type Tone = 'ok' | 'warn' | 'danger' | 'off' | 'loading'
+type Tone = StripTone
 interface Tile {
   key: string
   title: string
@@ -191,7 +192,7 @@ const fullTile = computed<Tile>(() => {
   }
   const cfg = savedCfg.value
   if (cfg.detect_orphans && cfg.cron_enabled && cfg.cron) {
-    lines.push({ text: nextFull.value ? `定时 · 下次 ${relNext(nextFull.value)}` : `定时 · ${cfg.cron}`, title: cfg.cron })
+    lines.push({ text: nextFull.value ? `定时 · 下次 ${relCronNext(nextFull.value)}` : `定时 · ${cfg.cron}`, title: cfg.cron })
   } else {
     lines.push({ text: '未开启定时全量' })
   }
@@ -209,24 +210,6 @@ const fullTile = computed<Tile>(() => {
         : '从未执行',
   }
 })
-
-/**
- * cron 预览给的是「01-02 15:04」（routes.go 的 /sync/cron-preview，没有年份），挑个短写法：
- * 今天 / 明天 HH:mm，更远的原样给。跨年时补出来的日期会落在过去，按明年算
- */
-function relNext(s: string): string {
-  const m = /^(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(s.trim())
-  if (!m) return s
-  const now = new Date()
-  const d = new Date(now.getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4])
-  if (d.getTime() < now.getTime() - 86_400_000) d.setFullYear(d.getFullYear() + 1)
-  const hm = `${m[3]}:${m[4]}`
-  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
-  const diff = Math.round((day(d) - day(new Date())) / 86_400_000)
-  if (diff === 0) return `今天 ${hm}`
-  if (diff === 1) return `明天 ${hm}`
-  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hm}`
-}
 
 const orphanTile = computed<Tile>(() => {
   const base = { key: 'orphan', title: '失效 STRM', icon: FileWarning }
@@ -288,163 +271,26 @@ const delTile = computed<Tile>(() => {
 })
 
 const tiles = computed(() => [incrTile.value, fullTile.value, orphanTile.value, delTile.value])
+
+// 状态条上不放执行按钮（维护者要求）：「立即同步」「开始全量」在各自页签里
+const ACTION: Record<string, string> = { incr: '详情', full: '设置', orphan: '清理', deepdel: '记录' }
+const items = computed<StripItem[]>(() =>
+  tiles.value.map((t) => ({
+    key: t.key,
+    title: t.title,
+    tone: t.tone,
+    text: t.short,
+    tip: t.lines.map((l) => l.title || l.text).join('\n'),
+    action: t.key === 'orphan' && !(orphan.value?.total ?? 0) ? undefined : ACTION[t.key],
+  })),
+)
+function act(key: string) {
+  if (key === 'orphan') emit('goto', 'full', 'orphans')
+  else emit('goto', key)
+}
 </script>
 
 <template>
-  <!-- 一条细状态条（约 48px 高）：四件事各一段，圆点颜色 = 好不好，悬停看细节。
-       原来是四张大卡片，占掉 200px 把下面的配置挤到折叠线以下，2026-09-30 收成一行 -->
-  <div class="card card--default strip">
-    <div
-      v-for="t in tiles"
-      :key="t.key"
-      class="seg"
-      :class="`tone-${t.tone}`"
-      :title="t.lines.map((l) => l.title || l.text).join('\n')"
-    >
-      <span class="seg-dot" />
-      <span class="seg-title">{{ t.title }}</span>
-      <HSkeleton v-if="t.tone === 'loading'" width="90px" height="10px" radius="999px" />
-      <span v-else class="seg-text">{{ t.short }}</span>
-
-      <span class="seg-act">
-        <!-- 状态条上不放执行按钮（维护者要求）：「立即同步」「开始全量」在各自页签里 -->
-        <button v-if="t.key === 'incr'" type="button" class="seg-link" @click="emit('goto', 'incr')">
-          详情<ChevronRight :size="13" />
-        </button>
-
-        <button v-else-if="t.key === 'full'" type="button" class="seg-link" @click="emit('goto', 'full')">
-          设置<ChevronRight :size="13" />
-        </button>
-
-        <button
-          v-else-if="t.key === 'orphan' && (orphan?.total ?? 0) > 0"
-          type="button"
-          class="seg-link"
-          @click="emit('goto', 'full', 'orphans')"
-        >
-          清理<ChevronRight :size="13" />
-        </button>
-
-        <button v-else-if="t.key === 'deepdel'" type="button" class="seg-link" @click="emit('goto', 'deepdel')">
-          记录<ChevronRight :size="13" />
-        </button>
-      </span>
-    </div>
-  </div>
+  <!-- 原来是四张大卡片，占掉 200px 把下面的配置挤到折叠线以下，2026-09-30 收成一行（样式在 StatusStrip） -->
+  <StatusStrip :items="items" @act="act" />
 </template>
-
-<style scoped>
-.strip {
-  flex-direction: row;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  overflow: hidden;
-}
-.seg {
-  --tone: var(--success);
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 48px;
-  padding: 0 8px 0 16px;
-  font-size: 13px;
-}
-.seg + .seg {
-  border-left: 1px solid var(--separator);
-}
-.tone-warn {
-  --tone: var(--warning);
-}
-.tone-danger {
-  --tone: var(--danger);
-}
-.tone-off,
-.tone-loading {
-  --tone: var(--border-tertiary);
-}
-.seg-dot {
-  width: 8px;
-  height: 8px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--tone);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--tone) 22%, transparent);
-}
-.seg-title {
-  flex-shrink: 0;
-  font-weight: 600;
-  color: var(--foreground);
-  white-space: nowrap;
-}
-.seg-text {
-  min-width: 0;
-  flex: 1 1 auto;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-.tone-warn .seg-text {
-  color: var(--warning-soft-foreground);
-}
-.tone-danger .seg-text {
-  color: var(--danger);
-}
-.seg-act {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: flex;
-}
-.seg-link {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  font: inherit;
-  font-size: 12.5px;
-  color: var(--muted);
-  cursor: pointer;
-  transition:
-    background-color 150ms ease,
-    color 150ms ease;
-}
-.seg-link:hover {
-  background: var(--default);
-  color: var(--accent);
-}
-
-/* 放不下一行时 2×2：每段仍是一行字，总高约 96px */
-@media (max-width: 1180px) {
-  .strip {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .seg + .seg {
-    border-left: 0;
-  }
-  .seg:nth-child(even) {
-    border-left: 1px solid var(--separator);
-  }
-  .seg:nth-child(n + 3) {
-    border-top: 1px solid var(--separator);
-  }
-}
-@media (max-width: 600px) {
-  .strip {
-    grid-template-columns: 1fr;
-  }
-  .seg:nth-child(even) {
-    border-left: 0;
-  }
-  .seg:nth-child(n + 2) {
-    border-top: 1px solid var(--separator);
-  }
-}
-</style>

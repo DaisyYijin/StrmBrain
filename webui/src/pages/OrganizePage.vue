@@ -7,6 +7,7 @@ import ScrapeSummary from './organize/ScrapeSummary.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
+import OrganizeOverview from './organize/OrganizeOverview.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
@@ -29,6 +30,8 @@ const tabs = computed(() => [
 
 <template>
   <div class="page">
+    <!-- 页签全是配置：顶部一行先说现在怎么样（下次定时 / 上一轮 / 待确认） -->
+    <OrganizeOverview @goto="(t) => (tab = t)" />
     <HTabs v-model="tab" :items="tabs" />
 
     <!-- 页签内容按需挂载：没选中的页签不渲染、不发请求（与原 NTabPane 的 display-directive="if" 一致） -->

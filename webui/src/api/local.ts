@@ -10,6 +10,8 @@ import { embyImageUrl } from '@/utils/media'
  * pending = Emby 快照还没读到（只有 Emby 刮削时出现，不进三档计数）
  */
 export type LocalTitleStatus = 'ok' | 'partial' | 'miss' | 'pending'
+/** 筛选栏多一档「存疑」：没有 TMDB 编号或 Emby 认成别的编号（后端 titleDoubtful），和刮削状态不互斥 */
+export type LocalTitleFilter = LocalTitleStatus | 'doubt'
 
 export interface LocalTitle {
   /** 台账片目 key（含库名前缀）：刮削提交的就是它 */
@@ -49,6 +51,8 @@ export interface LocalTitleStats {
   miss: number
   movie: number
   tv: number
+  /** 认得没把握的片目数（「存疑」档）；和 ok / partial / miss 不互斥 */
+  doubt: number
   /** Emby 里还缺媒体信息的片目数（套用其余筛选）；没有 Emby 快照时为 0 */
   probe_lack: number
 }
@@ -112,7 +116,7 @@ export interface LocalTitleQuery {
   /** 只看这个目录（含子目录）下的片目 */
   dir?: string
   type?: '' | 'movie' | 'tv'
-  status?: '' | LocalTitleStatus
+  status?: '' | LocalTitleFilter
   /** lack = 只看 Emby 里还缺媒体信息的 */
   probe?: '' | 'lack'
   sort?: LocalTitleSort
@@ -138,6 +142,20 @@ export const listTitles = (q: LocalTitleQuery) =>
       refresh: q.refresh ? 1 : undefined,
       all: q.all ? 1 : undefined,
     },
+  })
+
+/** 剧集集数进度：have 台账有几集正片、aired TMDB 已播几集（0 = 还不知道） */
+export interface LocalTVProgress {
+  have: number
+  aired: number
+  total: number
+  ended: boolean
+}
+
+/** GET /local/titles/tv-progress：TMDB 进度后台慢慢拉，pending > 0 时过一会儿再要 */
+export const tvProgress = () =>
+  http.get<{ configured: boolean; items?: Record<string, LocalTVProgress>; pending?: number }>('/local/titles/tv-progress', {
+    timeoutMs: 30_000,
   })
 
 export const embyStats = (refresh = false) =>

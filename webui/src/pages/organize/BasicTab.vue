@@ -21,6 +21,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { confirmUnsaved } from '@/composables/confirmUnsaved'
 import { useStagingDir } from '@/composables/stagingDir'
 import { ORG_BASIC_DEFAULTS } from './orgBasic'
+import PipelineFlow from './PipelineFlow.vue'
 
 const { message } = useFeedback()
 const queue = useQueueStore()
@@ -269,8 +270,6 @@ async function runOrganize() {
 }
 
 /** 流水线各步：一行画出来，比原来一段话描述「识别 → 二级分类 → …」好扫 */
-const PIPELINE = ['识别', '二级分类', '洗版', '重命名', '搬入媒体库', '写 STRM', '刮削', '刷新 Emby']
-
 /**
  * 什么时候会整理。原来是一整块常驻的提示框（六条 + 两段话），把配置项挤到折叠线以下；
  * 收进默认折起的 details。内容按 2026-09 入队改造后的真实行为写（AGENTS.md §6.12）：
@@ -300,11 +299,8 @@ const TRIGGERS: { name: string; text: string }[] = [
     <div class="grid">
       <!-- ==== 左：怎么跑 ==== -->
       <SectionCard title="运行方式" hint="人工确认与定时；每次整理都走同一条流水线">
-        <ol class="pipe" aria-label="整理流水线">
-          <li v-for="(s, i) in PIPELINE" :key="s" :class="{ 'is-stop': model.manual_confirm && i === 0 }">
-            {{ s }}<ChevronRight v-if="i < PIPELINE.length - 1" :size="12" class="pipe-arrow" />
-          </li>
-        </ol>
+        <!-- 每一步下面写着现在怎么设的，点了跳过去改（PipelineFlow 只读） -->
+        <PipelineFlow :manual-confirm="model.manual_confirm" />
         <p v-if="model.manual_confirm" class="pipe-note">人工确认已开：识别之后停下，等你在整理记录里确认再往下走</p>
 
         <FieldRow
@@ -443,35 +439,6 @@ const TRIGGERS: { name: string; text: string }[] = [
 }
 
 /* ---- 流水线 ---- */
-.pipe {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 4px;
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border-radius: var(--r-lg);
-  background: var(--surface-secondary);
-  list-style: none;
-}
-.pipe li {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12.5px;
-  color: var(--foreground);
-  white-space: nowrap;
-}
-.pipe li.is-stop {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: var(--warning-soft);
-  color: var(--warning-soft-foreground);
-  font-weight: 500;
-}
-.pipe-arrow {
-  color: var(--muted);
-}
 .pipe-note {
   margin: -8px 0 12px;
   font-size: 12px;

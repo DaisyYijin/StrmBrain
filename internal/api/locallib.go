@@ -277,6 +277,8 @@ type localTitleStats struct {
 	Miss    int `json:"miss"`
 	Movie   int `json:"movie"`
 	TV      int `json:"tv"`
+	// Doubt 认得没把握的片目（titleDoubtful）；和上面三档不互斥，是另一种看法
+	Doubt int `json:"doubt"`
 	// ProbeLack Emby 里还缺媒体信息的片目数（套用其余全部筛选）；没有 Emby 快照时为 0
 	ProbeLack int `json:"probe_lack"`
 }
@@ -287,7 +289,7 @@ type localTitleQuery struct {
 	// Dir 只看这个目录（含库名前缀，如 Movies/电影、Movies/电视剧）下的片目，空 = 全部
 	Dir       string
 	MediaType string // movie / tv / 空
-	Status    string // ok / partial / miss / 空
+	Status    string // ok / partial / miss / doubt / 空
 	Sort      string // added_desc（默认）/ title / year_desc / year_asc
 	// Probe lack = 只看 Emby 里还缺媒体信息的片目（要有 Emby 快照才生效）
 	Probe string
@@ -330,7 +332,8 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 			t.EmbyPoster = es.ItemID
 		}
 		typeOK := q.MediaType == "" || t.MediaType == q.MediaType
-		statusOK := q.Status == "" || t.Status == q.Status
+		doubt := titleDoubtful(t)
+		statusOK := q.Status == "" || t.Status == q.Status || (q.Status == "doubt" && doubt)
 		lacking := t.Emby != nil && t.Emby.Lack > 0
 		if typeOK && statusOK && lacking {
 			st.ProbeLack++
@@ -347,6 +350,9 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 		}
 		if typeOK {
 			st.All++
+			if doubt {
+				st.Doubt++
+			}
 			switch t.Status {
 			case "ok":
 				st.OK++
@@ -384,6 +390,12 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 		return a.Key < b.Key
 	})
 	return out, st
+}
+
+// titleDoubtful 片目认得没把握（海报墙「存疑」档，2026-10-20 参考 LitePan 的「匹配存疑」）：
+// 目录名里没有 TMDB 编号（刮削 / Emby 都只能按片名猜），或 Emby 认成的编号与台账不一致
+func titleDoubtful(t localTitle) bool {
+	return t.TmdbID == 0 || t.Mismatch != ""
 }
 
 // ListLocalTitles GET /local/titles?q=&type=&status=&probe=&sort=&offset=&limit=&refresh=&all=

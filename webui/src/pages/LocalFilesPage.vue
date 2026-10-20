@@ -17,7 +17,7 @@ import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
 import { localApi } from '@/api'
-import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
+import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleFilter, LocalTVProgress } from '@/api/local'
 import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
@@ -60,14 +60,14 @@ const dirs = ref<LocalTitleDir[]>([])
 /** 配置的各媒体库名：两个以上时顶部按库切换（库就是目录筛选的第一段） */
 const libs = ref<string[]>([])
 const type = ref<'' | 'movie' | 'tv'>('')
-const status = ref<'' | LocalTitleStatus>('')
+const status = ref<'' | LocalTitleFilter>('')
 /** 只看 Emby 里还缺媒体信息的（有 Emby 快照才显示这个开关） */
 const probeLack = ref(false)
 const sort = ref<LocalTitleSort>('added_desc')
 
 const items = ref<LocalTitle[]>([])
 const total = ref(0)
-const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0, probe_lack: 0 })
+const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0, doubt: 0, probe_lack: 0 })
 const configured = ref(true)
 const missing = ref(0)
 /** Emby 与海报墙对账弹窗：总览的数量（Emby）和这里对不上时，逐个说明差在哪 */
@@ -185,6 +185,8 @@ const statusOptions = computed(() => [
   { label: `已刮削 ${stats.value.ok}`, value: 'ok' as const },
   { label: `不完整 ${stats.value.partial}`, value: 'partial' as const },
   { label: `${statusText('miss', embyScrapes.value)} ${stats.value.miss}`, value: 'miss' as const },
+  // 存疑：目录名没有 TMDB 编号（只能按片名猜）或 Emby 认成了别的编号。没有就不占地方，正选着它时留着
+  ...(stats.value.doubt || status.value === 'doubt' ? [{ label: `存疑 ${stats.value.doubt ?? 0}`, value: 'doubt' as const }] : []),
 ])
 /** Emby 刮削时状态来自 Emby 快照：没读到之前三档都是 0，筛选没意义，先不显示 */
 const showStatus = computed(() => !anyEmby.value || !!emby.value?.ready)
@@ -245,6 +247,33 @@ const embyError = ref('')
 let embyTimer: ReturnType<typeof setTimeout> | undefined
 let embyAlive = true
 
+// ---- 剧集集数进度（「12/16 集」「完结」，后端 localtvprog.go）：打开页面拉一次 ----
+// TMDB 那半边后台逐部慢慢拉，pending 时隔 15 秒再要，最多几次（拉不完的下次打开再说）
+
+const tvProg = ref<Record<string, LocalTVProgress>>({})
+let tvProgTimer: ReturnType<typeof setTimeout> | undefined
+async function loadTvProg(tries = 0) {
+  clearTimeout(tvProgTimer)
+  try {
+    const d = await localApi.tvProgress()
+    if (!embyAlive) return
+    tvProg.value = d.items ?? {}
+    if ((d.pending ?? 0) > 0 && tries < 8) tvProgTimer = setTimeout(() => void loadTvProg(tries + 1), 15_000)
+  } catch {
+    // 拉不到就照旧只显示视频数
+  }
+}
+/** 这部剧缺几集：台账比 TMDB 已播的少才算（多了是连续编号 / 特别篇进了正片季，不显示负数） */
+function epLag(t: LocalTitle) {
+  const p = t.media_type === 'tv' ? tvProg.value[t.key] : undefined
+  return p && p.aired > 0 && p.have < p.aired ? p : undefined
+}
+function epTip(t: LocalTitle) {
+  const p = tvProg.value[t.key]
+  if (!p || !p.aired) return ''
+  return `本地 ${p.have} 集 · TMDB 已播 ${p.aired} 集${p.total > p.aired ? `（已排期 ${p.total} 集）` : ''}${p.ended ? ' · 已完结' : ' · 连载中'}`
+}
+
 /** waited：这一轮是等着后台拉完的，列表手上的角标是旧的，要原地刷新 */
 async function loadEmby(refresh = false, waited = refresh) {
   clearTimeout(embyTimer)
@@ -296,6 +325,7 @@ async function refreshInPlace() {
 function refreshAll() {
   void load(true)
   void loadEmby(true)
+  void loadTvProg()
 }
 
 function metaLine(t: LocalTitle) {
@@ -303,8 +333,12 @@ function metaLine(t: LocalTitle) {
   const tvWithCount = t.media_type === 'tv' && t.videos > 0
   const parts: string[] = tvWithCount ? [] : [t.media_type === 'tv' ? '剧集' : '电影']
   if (t.year) parts.push(t.year)
-  if (tvWithCount) parts.push(`${t.videos} 集`)
+  const p = t.media_type === 'tv' ? tvProg.value[t.key] : undefined
+  // 缺集的「12/16 集」单独一段上警告色（模板里的 ep-lag），这里不写集数
+  if (epLag(t)) return parts.join(' · ')
+  if (tvWithCount) parts.push(`${p?.aired ? p.have : t.videos} 集`)
   else if (t.videos > 1) parts.push(`${t.videos} 个视频`)
+  if (p?.aired) parts.push(p.ended ? '完结' : '连载中')
   return parts.join(' · ')
 }
 
@@ -559,6 +593,7 @@ onMounted(async () => {
   void loadProvider(true)
   void load()
   void loadEmby()
+  void loadTvProg()
   await nextTick()
   measure()
   setTimeout(measure, 250) // 切页动画（位移 4px）结束后再量一次
@@ -573,6 +608,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   embyAlive = false
   clearTimeout(embyTimer)
+  clearTimeout(tvProgTimer)
   clearTimeout(embyRefreshTimer)
   offFinished()
   clearTimeout(kwTimer)
@@ -708,7 +744,8 @@ onBeforeUnmount(() => {
                 <button type="button" class="info-text" @click="openDetail(t)">
                   <h3 class="name" :title="t.title">{{ t.title }}</h3>
                   <p class="meta">
-                    <span class="meta-text">{{ metaLine(t) }}</span>
+                    <span class="meta-text" :title="epTip(t) || undefined">{{ metaLine(t) }}</span>
+                    <span v-if="epLag(t)" class="ep-lag" :title="epTip(t)">{{ epLag(t)!.have }}/{{ epLag(t)!.aired }} 集</span>
                     <span
                       v-if="!t.tmdb_id"
                       class="no-id"
@@ -1166,6 +1203,11 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ep-lag {
+  flex-shrink: 0;
+  color: var(--warning-soft-foreground);
+  font-variant-numeric: tabular-nums;
 }
 .no-id {
   flex-shrink: 0;

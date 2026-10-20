@@ -124,19 +124,29 @@ func TestFilterLocalTitles(t *testing.T) {
 	if !reflect.DeepEqual(keys(got), []string{"b", "a", "c"}) {
 		t.Fatalf("默认按最近入库排: %v", keys(got))
 	}
-	if st != (localTitleStats{All: 3, OK: 1, Partial: 1, Miss: 1, Movie: 1, TV: 2}) {
+	if st != (localTitleStats{All: 3, OK: 1, Partial: 1, Miss: 1, Movie: 1, TV: 2, Doubt: 2}) {
 		t.Fatalf("stats = %+v", st)
 	}
 
 	// 选了剧集：状态计数只算剧集，类型计数不受类型筛选影响
 	got, st = filterLocalTitles(all, localTitleQuery{MediaType: "tv"})
-	if !reflect.DeepEqual(keys(got), []string{"a", "c"}) || st != (localTitleStats{All: 2, OK: 1, Partial: 1, Movie: 1, TV: 2}) {
+	if !reflect.DeepEqual(keys(got), []string{"a", "c"}) || st != (localTitleStats{All: 2, OK: 1, Partial: 1, Movie: 1, TV: 2, Doubt: 1}) {
 		t.Fatalf("tv: %v %+v", keys(got), st)
 	}
 	// 选了状态：类型计数只算这个状态
 	_, st = filterLocalTitles(all, localTitleQuery{Status: "miss"})
 	if st.Movie != 1 || st.TV != 0 || st.All != 3 {
 		t.Fatalf("miss: %+v", st)
+	}
+
+	// 存疑：没有 TMDB 编号的两部；和刮削状态不互斥
+	if got, _ = filterLocalTitles(all, localTitleQuery{Status: "doubt"}); !reflect.DeepEqual(keys(got), []string{"b", "c"}) {
+		t.Fatalf("doubt: %v", keys(got))
+	}
+	mis := append([]localTitle{}, all...)
+	mis[0].Mismatch = "1234"
+	if got, _ = filterLocalTitles(mis, localTitleQuery{Status: "doubt", MediaType: "tv"}); !reflect.DeepEqual(keys(got), []string{"a", "c"}) {
+		t.Fatalf("Emby 认成别的编号也算存疑: %v", keys(got))
 	}
 
 	// 年份倒序，同年按 key 稳定

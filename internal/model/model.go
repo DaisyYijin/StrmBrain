@@ -332,6 +332,16 @@ type ScrapeArtGap struct {
 	CheckedAt  time.Time `json:"checked_at"`
 }
 
+// TmdbTVProgress 剧集在 TMDB 上播到第几集（海报墙卡片的「12/16 集」，api/localtvprog.go）。
+// 一部剧一条，重启不丢：海报墙一打开就要显示，几百部剧没法每次都去 TMDB 现查
+type TmdbTVProgress struct {
+	TmdbID    int       `json:"tmdb_id" gorm:"primaryKey;autoIncrement:false"`
+	Status    string    `json:"status"` // TMDB 的 Ended / Returning Series …
+	Aired     int       `json:"aired"`  // 已播正片集数（不含第 0 季）
+	Total     int       `json:"total"`  // 已排期正片集数（含没播的）
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
 // Subscription 资源订阅：一部片一条（api/subscribe*.go，设计见 docs SUBSCRIBE-PLAN.md）。
 // 以 TMDB 条目为单位，定时回答「缺什么 → 哪条资源能补 → 补上了没有」。
 // 同一部只能订阅一次（tmdb_id + media_type 唯一），范围在条目内调整
@@ -601,6 +611,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&Subscription{},
 		&SubAttempt{},
 		&ShareOut{},
+		&TmdbTVProgress{},
 	); err != nil {
 		return nil, err
 	}

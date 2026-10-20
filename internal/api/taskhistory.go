@@ -34,7 +34,8 @@ const jobHistoryMaxSize = 100
 func queryJobHistory(db *gorm.DB, f jobHistoryFilter) ([]model.TaskJob, int64, map[string]int64) {
 	base := db.Model(&model.TaskJob{}).Where("status IN ?", jobFinishedStatuses)
 	if f.Kind != "" {
-		base = base.Where("kind = ?", f.Kind)
+		// 逗号分隔认多个：自动整理页状态条要「定时整理 + 转存后整理」里最近的一条
+		base = base.Where("kind IN ?", strings.Split(f.Kind, ","))
 	}
 	if f.Source != "" {
 		base = base.Where("source = ?", f.Source)
