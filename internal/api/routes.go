@@ -99,6 +99,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 各库的本地目录名定下来（幂等、零 115 请求，liblocal.go）：要赶在同步与整理起来之前，
 	// 否则这一轮还按 115 目录名落盘
 	h.FreezeLibLocalNames()
+	// 老配置换算成媒体库表（一次性、幂等，libstore.go）：要在本地名定下来之后
+	h.MigrateLibrariesV2()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 
@@ -1209,7 +1211,11 @@ func (h *Handler) TestTMDBConnection(c *gin.Context) {
 }
 
 func (h *Handler) ListCategories(c *gin.Context) {
-	// 从 ScrapeRule 表读取已保存的 YAML
+	// 老的单份分类接口读写方案「默认」（catscheme.go）；还没迁移时退回 ScrapeRule 里的老 YAML
+	if s, ok := schemeByID(primarySchemeID()); ok {
+		c.JSON(http.StatusOK, gin.H{"config": s.Config})
+		return
+	}
 	var rule model.ScrapeRule
 	h.DB.Where("type = ?", "category_config").First(&rule)
 	c.JSON(http.StatusOK, gin.H{"config": rule.Config})
@@ -1260,8 +1266,8 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	} else {
 		h.DB.Create(&rule)
 	}
-	// 事务重建 movie/tv 规则
-	if err := replaceCategoryRules(h.DB, rows); err != nil {
+	// 事务重建方案「默认」的 movie/tv 规则（ScrapeRule 上面已经写过，回退老版本时它还是这份分类）
+	if err := replaceCategoryRules(h.DB, req.Yaml, rows); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重建规则失败: " + err.Error()})
 		return
 	}
@@ -1277,18 +1283,23 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))})
 }
 
-// replaceCategoryRules 事务重建 movie/tv 规则表（整表替换，不做增量合并）
-func replaceCategoryRules(db *gorm.DB, rows []model.CategoryRule) error {
+// replaceCategoryRules 事务重建方案「默认」的 movie/tv 规则与 YAML（整套替换，不做增量合并）
+func replaceCategoryRules(db *gorm.DB, yamlSrc string, rows []model.CategoryRule) error {
+	id, err := ensureDefaultScheme(db)
+	if err != nil {
+		return err
+	}
 	tx := db.Begin()
-	if err := tx.Where("media_type IN ?", []string{"movie", "tv"}).Delete(&model.CategoryRule{}).Error; err != nil {
+	if err := writeSchemeTx(tx, id, yamlSrc, rows); err != nil {
 		tx.Rollback()
 		return err
 	}
-	if err := tx.Create(&rows).Error; err != nil {
-		tx.Rollback()
+	if err := tx.Commit().Error; err != nil {
 		return err
 	}
-	return tx.Commit().Error
+	forgetSchemes()
+	forgetClassifyRules()
+	return nil
 }
 
 // SyncCategoryRulesFromYAML 启动时按库里存的 YAML 重建规则表。
@@ -1297,18 +1308,26 @@ func replaceCategoryRules(db *gorm.DB, rows []model.CategoryRule) error {
 // 否则用户界面上看到的 YAML 和整理实际用的分类对不上（且只有再点一次保存才会一致）。
 // 没存过 YAML（从没进过分类设置）时什么都不做，保留首次部署播种的默认规则。
 func SyncCategoryRulesFromYAML(db *gorm.DB) error {
-	var rule model.ScrapeRule
-	if err := db.Where("type = ?", "category_config").First(&rule).Error; err != nil {
-		return nil // 没存过，用种子默认规则
-	}
-	if strings.TrimSpace(rule.Config) == "" {
-		return nil
-	}
-	rows, err := parseCategoryYAML(rule.Config)
-	if err != nil || len(rows) == 0 {
+	// 第一次启动先把老的那份分类存成方案「默认」（catscheme.go），之后每套方案按自己的 YAML 重建
+	if _, err := ensureDefaultScheme(db); err != nil {
 		return err
 	}
-	return replaceCategoryRules(db, rows)
+	var schemes []model.CategoryScheme
+	db.Order("id").Find(&schemes)
+	for _, s := range schemes {
+		if strings.TrimSpace(s.Config) == "" {
+			continue // 种子规则还没写成 YAML 的方案，保留现有规则行
+		}
+		rows, err := parseCategoryYAML(s.Config)
+		if err != nil || len(rows) == 0 {
+			log.Printf("[分类] ✗ 方案「%s」的 YAML 解析不出规则，保留现有规则行: %v", s.Name, err)
+			continue
+		}
+		if err := replaceSchemeRules(db, s.ID, rows); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // categoryYAMLValue 取一个分类条件的值：标量原样，列表（genre_ids: [16, 99]）按逗号拼起来。

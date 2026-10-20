@@ -666,6 +666,12 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 	for cid := range plan.Unbound {
 		unbound = append(unbound, cid)
 	}
+	sid, serr := ensureDefaultScheme(h.DB) // 老的单份分类就是方案「默认」（catscheme.go）
+	if serr != nil && plan.YAMLChanged {
+		dropCreated()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "准备分类方案失败: " + serr.Error()})
+		return
+	}
 	tx := h.DB.Begin()
 	fail := func(status int, msg string) {
 		tx.Rollback()
@@ -678,11 +684,7 @@ func (h *Handler) SaveLibraries(c *gin.Context) {
 			fail(http.StatusInternalServerError, "保存分类 YAML 失败: "+err.Error())
 			return
 		}
-		if err := tx.Where("media_type IN ?", []string{"movie", "tv"}).Delete(&model.CategoryRule{}).Error; err != nil {
-			fail(http.StatusInternalServerError, "重建分类规则失败: "+err.Error())
-			return
-		}
-		if err := tx.Create(&newRows).Error; err != nil {
+		if err := writeSchemeTx(tx, sid, plan.YAML, newRows); err != nil {
 			fail(http.StatusInternalServerError, "重建分类规则失败: "+err.Error())
 			return
 		}

@@ -734,6 +734,7 @@ func forgetClassifyRules() {
 	classifyRuleCache = map[string][]model.CategoryRule{}
 	classifyRuleAt = map[string]time.Time{}
 	classifyRuleMu.Unlock()
+	forgetSchemes() // 方案的 YAML 往往是一起改的（catscheme.go）
 }
 
 func classifyRules(mediaType string) []model.CategoryRule {
@@ -743,7 +744,8 @@ func classifyRules(mediaType string) []model.CategoryRule {
 		return rs
 	}
 	var categories []model.CategoryRule
-	model.DB.Where("media_type = ?", mediaType).Order("priority ASC").Find(&categories)
+	// 阶段 3 之前整理只用方案「默认」（catscheme.go）
+	model.DB.Where("media_type = ? AND scheme_id = ?", mediaType, primarySchemeID()).Order("priority ASC").Find(&categories)
 	classifyRuleCache[mediaType] = categories
 	classifyRuleAt[mediaType] = time.Now()
 	return categories

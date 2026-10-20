@@ -107,18 +107,18 @@ func (h *Handler) FixLibraryRename(c *gin.Context) {
 		return
 	}
 	catRule.Config = out
+	sid, err := ensureDefaultScheme(h.DB) // 老的单份分类就是方案「默认」（catscheme.go）
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "准备分类方案失败: " + err.Error()})
+		return
+	}
 	tx := h.DB.Begin()
 	if err := tx.Save(&catRule).Error; err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存分类 YAML 失败: " + err.Error()})
 		return
 	}
-	if err := tx.Where("media_type IN ?", []string{"movie", "tv"}).Delete(&model.CategoryRule{}).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "重建分类规则失败: " + err.Error()})
-		return
-	}
-	if err := tx.Create(&rows).Error; err != nil {
+	if err := writeSchemeTx(tx, sid, out, rows); err != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重建分类规则失败: " + err.Error()})
 		return

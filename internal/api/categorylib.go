@@ -316,6 +316,6 @@ func (h *Handler) categoryLibChangesNow(newRows []model.CategoryRule) []category
 		}
 	}
 	var oldRows []model.CategoryRule
-	h.DB.Where("media_type IN ?", []string{"movie", "tv"}).Find(&oldRows)
+	h.DB.Where("media_type IN ? AND scheme_id = ?", []string{"movie", "tv"}, primarySchemeID()).Find(&oldRows)
 	return categoryLibChanges(oldRows, newRows, libs, ledgerCategoryTitles(scanLedgerTitlesCached(), libs))
 }

@@ -341,7 +341,7 @@ func buildLibrariesView(sources []libNameSource, rows []model.CategoryRule, bind
 func (h *Handler) librariesNow() librariesView {
 	var rows []model.CategoryRule
 	if h.DB != nil {
-		h.DB.Where("media_type IN ?", []string{"movie", "tv"}).Order("priority ASC").Find(&rows)
+		h.DB.Where("media_type IN ? AND scheme_id = ?", []string{"movie", "tv"}, primarySchemeID()).Order("priority ASC").Find(&rows)
 	}
 	cfg, embyOK := loadEmbyRefreshCfg()
 	var locs []string

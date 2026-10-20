@@ -104,8 +104,11 @@ type CategoryRule struct {
 	Cid        string `json:"cid" gorm:"size:100"`                      // 115 文件夹 CID
 	ArchiveDir string `json:"archive_dir" gorm:"size:200"`              // 归档子目录路径
 	// Library 这一类整理进哪个媒体库（YAML 的 library 键）：库目录名或 cid，空 = 主媒体库。
-	// 不是匹配条件：只写了它的规则照样是兜底
+	// 不是匹配条件：只写了它的规则照样是兜底。
+	// 2026-10-20 起（MULTI-ACCOUNT-V2-PLAN.md §10.1）作废：放进哪个库由转存文件夹决定，这一列只为老数据留着
 	Library string `json:"library" gorm:"size:200"`
+	// SchemeID 属于哪一套分类方案（CategoryScheme.ID）。老数据迁移成方案 1「默认」
+	SchemeID uint `json:"scheme_id" gorm:"index;default:0"`
 
 	// 匹配维度（对齐 CMS 的 YAML 策略，逗号分隔多值）
 	GenreIds         string `json:"genre_ids" gorm:"size:200"`         // TMDB 类型ID，如 "16,99"
@@ -549,6 +552,46 @@ type RecognizeMemory struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Library 媒体库：一个库一条（2026-10-20，MULTI-ACCOUNT-V2-PLAN.md §10.1）。
+//
+//	名称 → 115 网盘目录（连同账号）→ 本地目录（媒体根下）→ 转存/待整理文件夹 → 分类方案
+//
+// 放进哪个库的转存文件夹，就整理进哪个库、按这个库选的分类方案分目录；不选方案就直接放进网盘目录下。
+// 没设转存文件夹的库只同步 STRM（原来的「我自己整理」）。
+// 取代 setting full.cid / full.extra_libs / acct_libs / lib_opts / staging_libs 那几份散着的配置
+type Library struct {
+	ID   uint   `json:"id" gorm:"primaryKey"`
+	Name string `json:"name" gorm:"size:100;not null"`
+	// Account 网盘目录在哪个 115 账号上：0 = 主账号，其他是 Storage.ID
+	Account uint   `json:"account" gorm:"index;default:0"`
+	Cid     string `json:"cid" gorm:"size:64;not null"`
+	Path    string `json:"path" gorm:"size:1000"` // 网盘绝对路径，选目录时记下的，给人看
+	// Local 本地目录：媒体根（MEDIA_ROOT，默认 /media）下的相对路径，可以多级（电影/主号）；各库之间不能重名、不能互相包含
+	Local string `json:"local" gorm:"size:500;not null"`
+	// StagingCid 转存/待整理文件夹（和网盘目录同一个账号）；空 = 只同步不整理
+	StagingCid  string `json:"staging_cid" gorm:"size:64"`
+	StagingPath string `json:"staging_path" gorm:"size:1000"`
+	// SchemeID 分类方案（CategoryScheme.ID）；0 = 不分类，整理直接放进网盘目录下
+	SchemeID uint `json:"scheme_id" gorm:"default:0"`
+	// Depth 不分类时片目在库下第几层（1–3，0 按 1）。整理进来的就是 1；只同步的库是用户自己的目录结构，要声明
+	Depth int `json:"depth" gorm:"default:0"`
+	// Scrape 刮不刮：auto / manual / off
+	Scrape    string    `json:"scrape" gorm:"size:16"`
+	Sort      int       `json:"sort" gorm:"default:0"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CategoryScheme 一套二级分类方案（2026-10-20）：自动整理页可以存多套，每个媒体库选一套用。
+// Config 就是原来那份 YAML（去掉了 library 键），规则行在 CategoryRule 里按 SchemeID 分开
+type CategoryScheme struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Name      string    `json:"name" gorm:"size:100;not null;uniqueIndex"`
+	Config    string    `json:"config" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // EventSuppress 整理自产事件抑制表：整理自己做的每一次 move/rename 都登记 fid，
 // 生活事件绕一圈回来时命中就删除该行并跳过（命中即消费，pop 语义）。
 // 落库而不是内存 map：进程重启后 pending 事件还会被重新消费，内存标记会丢。
@@ -616,6 +659,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&SubAttempt{},
 		&ShareOut{},
 		&TmdbTVProgress{},
+		&Library{},
+		&CategoryScheme{},
 	); err != nil {
 		return nil, err
 	}
