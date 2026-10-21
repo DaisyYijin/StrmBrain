@@ -209,3 +209,6 @@ export const shareOutRecords = (params: { status?: string; page?: number; size?:
     { params },
   )
 export const shareOutRetry = (id: number) => http.post<{ message: string }>(`/shareout/records/${id}/retry`, {})
+/** 删除分享记录：按 id，或按状态清空（all = 全部）。后端只是隐藏，记账留着防重发 */
+export const shareOutDelete = (body: { ids?: number[]; status?: string }) =>
+  http.post<{ message: string; deleted: number }>('/shareout/records/delete', body)

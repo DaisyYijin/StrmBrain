@@ -261,14 +261,17 @@ type ShareOut struct {
 	TmdbID    int    `json:"tmdb_id"`
 	MediaType string `json:"media_type" gorm:"size:8"`
 	// Status done = 发成了 / skipped = 不发（原因在 Message）/ failed = 失败，到期还会重试（Attempts 用完为止）
-	Status    string    `json:"status" gorm:"index;size:16"`
-	Message   string    `json:"message" gorm:"size:255"`
-	Ref       string    `json:"ref" gorm:"size:64"` // 站点那边的编号（RE0 的 slug / 资源 id，癫影的 resource_id）
-	Points    int       `json:"points"`             // 发布奖励的积分（癫影首次发布）
-	Attempts  int       `json:"attempts"`
-	RetryAt   time.Time `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Status   string    `json:"status" gorm:"index;size:16"`
+	Message  string    `json:"message" gorm:"size:255"`
+	Ref      string    `json:"ref" gorm:"size:64"` // 站点那边的编号（RE0 的 slug / 资源 id，癫影的 resource_id）
+	Points   int       `json:"points"`             // 发布奖励的积分（癫影首次发布）
+	Attempts int       `json:"attempts"`
+	RetryAt  time.Time `json:"-"`
+	// HiddenAt 用户在分享记录里「删除」的：界面上不再列出、失败的不再自动重试，行本身留着——
+	// 它是这条链接在这个站「处理过了」的记账，也是同一分享码的去重依据，真删了定时那一轮会重发
+	HiddenAt  *time.Time `json:"-" gorm:"index"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // EmbyExtractMark 请 Emby 提前探测媒体信息的记账（按 Emby 条目 id，见 api/embyextract.go）。

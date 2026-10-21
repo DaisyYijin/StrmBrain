@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ExternalLink, ListTree, RefreshCw, RotateCcw } from '@lucide/vue'
+import { ExternalLink, ListTree, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PosterImage from '@/components/PosterImage.vue'
@@ -21,10 +21,11 @@ import { fullTime, relTime } from '@/utils/time'
  * 只读本地记账，不请求两个站；「打开」的地址也是按记账拼的（RE0 有 slug 直达那条分享，否则打开这部片在站上的页面）。
  * 失败 / 没分享的可以手动重试一次（后台立刻发，不等定时那一轮）；再失败就停在失败，不再自动重试。
  * 没分享的也放开：站点拒收的原因可能已经不在了，原因还在的重试也只是再记一次跳过
+ * 「删除」在后端只是隐藏：那一行是防重发的记账，删掉的失败记录也不再自动重试
  */
 const emit = defineEmits<{ changed: [] }>()
 const router = useRouter()
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
 
 const STATUS_TABS = ['all', 'done', 'failed', 'skipped'] as const
 type StatusTab = (typeof STATUS_TABS)[number]
@@ -120,6 +121,47 @@ async function retry(r: ShareOutRecord) {
   }
 }
 
+const clearing = ref(false)
+
+async function doDelete(body: { ids?: number[]; status?: string }) {
+  try {
+    const d = await resourcesApi.shareOutDelete(body)
+    message.success(d.message)
+    if (rows.value.length <= (body.ids?.length ?? rows.value.length) && page.value > 1) page.value--
+    await load()
+    emit('changed')
+  } catch (e) {
+    toastError(e, '删除失败')
+  }
+}
+
+function removeOne(r: ShareOutRecord) {
+  void doDelete({ ids: [r.id] })
+}
+
+async function clearAll() {
+  const n = status.value === 'all' ? counts.value.all ?? 0 : counts.value[status.value] ?? 0
+  if (!n) return
+  const what = status.value === 'all' ? '全部' : `「${STATUS_TEXT[status.value]}」的`
+  const ok = await dialog.confirm({
+    title: '清空分享记录',
+    content: `删除${what} ${n} 条分享记录。只删本站的记录，站上已经发出去的分享不受影响。`,
+    tone: 'warning',
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: `删除 ${n} 条`, value: true, variant: 'danger' },
+    ],
+  })
+  if (!ok) return
+  clearing.value = true
+  try {
+    page.value = 1
+    await doDelete({ status: status.value })
+  } finally {
+    clearing.value = false
+  }
+}
+
 function openRecords(r: ShareOutRecord) {
   void router.push({ query: { tab: 'records', link_id: String(r.link_id) } })
 }
@@ -134,6 +176,10 @@ defineExpose({ reload: load })
     hint="贴链接转存的 115 分享，整理认出是哪一部之后发到 RE0 / 癫影的结果，一站一行。开关在「影视转存 → 设置」的 RE0 / 癫影里"
   >
     <template #extra>
+      <HButton v-if="rows.length" size="sm" variant="ghost" :loading="clearing" @click="clearAll">
+        <template #icon><Trash2 /></template>
+        清空
+      </HButton>
       <HTooltip content="刷新">
         <HButton variant="ghost" icon-only :loading="loading" aria-label="刷新" @click="load">
           <RefreshCw />
@@ -189,6 +235,11 @@ defineExpose({ reload: load })
             <HTooltip content="这条链接的整理记录">
               <HButton size="sm" variant="ghost" icon-only aria-label="整理记录" @click="openRecords(r)">
                 <ListTree />
+              </HButton>
+            </HTooltip>
+            <HTooltip content="删除这条记录（站上的分享不受影响）">
+              <HButton size="sm" variant="ghost" icon-only aria-label="删除" @click="removeOne(r)">
+                <Trash2 />
               </HButton>
             </HTooltip>
           </div>

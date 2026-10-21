@@ -73,13 +73,13 @@ func (h *Handler) ShareOutRecords(c *gin.Context) {
 		Status string
 		N      int64
 	}
-	h.DB.Model(&model.ShareOut{}).Select("status, count(*) as n").Group("status").Scan(&byStatus)
+	h.DB.Model(&model.ShareOut{}).Where("hidden_at IS NULL").Select("status, count(*) as n").Group("status").Scan(&byStatus)
 	for _, s := range byStatus {
 		counts[s.Status] = s.N
 		counts["all"] += s.N
 	}
 
-	q := h.DB.Model(&model.ShareOut{})
+	q := h.DB.Model(&model.ShareOut{}).Where("hidden_at IS NULL")
 	if status == shareOutStatusDone || status == shareOutStatusSkipped || status == shareOutStatusFailed {
 		q = q.Where("status = ?", status)
 	}
@@ -142,12 +142,43 @@ func (h *Handler) shareOutDTOs(rows []model.ShareOut, now time.Time) []shareOutR
 	return out
 }
 
+// ShareOutDelete POST /shareout/records/delete {ids} 或 {status: all|done|skipped|failed}：
+// 界面上叫删除，实际只打 HiddenAt（为什么不能真删见 model.ShareOut.HiddenAt）
+func (h *Handler) ShareOutDelete(c *gin.Context) {
+	var req struct {
+		IDs    []uint `json:"ids"`
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	q := h.DB.Model(&model.ShareOut{}).Where("hidden_at IS NULL")
+	switch {
+	case len(req.IDs) > 0:
+		q = q.Where("id IN ?", req.IDs)
+	case req.Status == "all":
+	case req.Status == shareOutStatusDone || req.Status == shareOutStatusSkipped || req.Status == shareOutStatusFailed:
+		q = q.Where("status = ?", req.Status)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "没有指定要删除的记录"})
+		return
+	}
+	// UpdateColumn：不碰 updated_at，列表按它排序，留着原来的处理时间
+	res := q.UpdateColumn("hidden_at", time.Now())
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已删除 %d 条分享记录", res.RowsAffected), "deleted": res.RowsAffected})
+}
+
 var errShareOutBusy = errors.New("正在处理别的分享，稍后再试")
 
 // ShareOutRetry POST /shareout/records/:id/retry：失败 / 跳过的手动重试一次，后台立刻发
 func (h *Handler) ShareOutRetry(c *gin.Context) {
 	var row model.ShareOut
-	if h.DB.First(&row, c.Param("id")).Error != nil {
+	if h.DB.Where("hidden_at IS NULL").First(&row, c.Param("id")).Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}

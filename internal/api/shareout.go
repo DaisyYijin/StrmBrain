@@ -513,7 +513,8 @@ func shareOutTodo(link model.DownloadLink, have map[string]model.ShareOut, now t
 			continue
 		}
 		o, ok := have[s]
-		if !ok || (o.Status == shareOutStatusFailed && o.Attempts < shareOutMaxAttempts && !now.Before(o.RetryAt)) {
+		// 用户删掉（隐藏）的失败记录不再自动重试：界面上已经没有它了，后台还在发会让人摸不着头脑
+		if !ok || (o.Status == shareOutStatusFailed && o.HiddenAt == nil && o.Attempts < shareOutMaxAttempts && !now.Before(o.RetryAt)) {
 			todo = append(todo, s)
 		}
 	}
