@@ -24,6 +24,8 @@ func TestSanitizeReleaseFilename(t *testing.T) {
 		// 干净的文件名不变
 		"START-622.mp4": "START-622.mp4",
 		"MIDV-001.mp4":  "MIDV-001.mp4",
+		// 片名开头的「词.Me」不是域名
+		"Kill.Me.2019.1080p.mkv": "Kill.Me.2019.1080p.mkv",
 		// 字幕文件
 		"4k688.com@START-622.chs.srt": "START-622.chs.srt",
 	}

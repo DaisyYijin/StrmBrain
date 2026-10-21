@@ -3577,15 +3577,41 @@ var (
 	reAdBracket    = regexp.MustCompile(`【[^】]*】`)
 	reAdDomainTail = regexp.MustCompile(`(?i)[a-z0-9.-]+\.[a-z]{2,}@`)
 	reAdWwwPrefix  = regexp.MustCompile(`(?i)^www\.[a-z0-9.-]+\.(com|net|org|cc|xyz|me|tv|info)[-_.@]?`)
-	reAdDomPrefix  = regexp.MustCompile(`(?i)^[a-z0-9]{2,15}\.(com|net|org|cc|xyz|me|tv|info)[-_.@]?`)
+	// 后面只认 - _ @ 或结尾：点号分隔的话「Kill.Me.2019…」开头两个词会被当成域名剥掉
+	reAdDomPrefix  = regexp.MustCompile(`(?i)^[a-z0-9]{2,15}\.(com|net|org|cc|xyz|me|tv|info)(?:[-_@]|$)`)
 	reAdParenHead  = regexp.MustCompile(`(?i)^\(\s*(www\.)?[a-z0-9.-]+\.(com|net|cc|xyz)\s*\)[-_. ]*`)
 	reAdSquareHead = regexp.MustCompile(`(?i)^\[\s*(www\.)?[a-z0-9.-]+\.(com|net|cc|xyz)\s*\][-_. ]*`)
 	reAdUrlTail    = regexp.MustCompile(`[-_ ]+(www\.)?[a-z0-9.-]+\.(com|net|cc|xyz|me|tv)$`)
 	reAdQueryTail  = regexp.MustCompile(`\?[a-z=&0-9]+$`)
 )
 
-// adDomainRegex 广告域名（清洗后仍任意位置出现即视为广告载体）
+// adDomainRegex 广告域名（清洗后仍任意位置出现即视为广告载体，判定走 hasAdDomain）
 var adDomainRegex = regexp.MustCompile(`(?i)(?:https?://|www\.)?[a-z0-9][a-z0-9-]{1,15}\.(?:com|net|org|cc|xyz|me|tv|info|vip|top|app|club|site|online|icu|fun|win)\b`)
+
+// hasAdDomain 名字里有没有广告域名。点分的 scene 命名里单词本身就像「标签.顶级域」：
+// 2026-10-21 现场「Cyberpunk.Edgerunners.S02E02.2022.Give.Me.Another.Day…」的 Give.Me
+// 被认成域名，整集当广告移进冗余。所以不带 www. / http 的，前面紧挨着点、
+// 或后面还接着点分段的不算（真广告域名两头是括号、@、空格、中文之类）
+func hasAdDomain(s string) bool {
+	for _, loc := range adDomainRegex.FindAllStringIndex(s, -1) {
+		st, e := loc[0], loc[1]
+		m := strings.ToLower(s[st:e])
+		if !strings.HasPrefix(m, "www.") && !strings.HasPrefix(m, "http") {
+			if st > 0 && s[st-1] == '.' {
+				continue
+			}
+			if e+1 < len(s) && s[e] == '.' && isASCIIAlnum(s[e+1]) {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func isASCIIAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
 
 // adKeywords 广告文件常见关键词
 var adKeywords = []string{
@@ -3625,10 +3651,10 @@ func isAdOnlyVideo(name string) bool {
 	// 扩展名，传无扩展名基名时 "xxx.com@片名" 的域名会被误当扩展名保留
 	trimmed := strings.TrimSpace(baseName(sanitizeReleaseFilename(name)))
 	if t := strings.Trim(trimmed, ".-_ "); t != "" && trimmed != raw &&
-		!adDomainRegex.MatchString(t) && !containsAdKeyword(t) {
+		!hasAdDomain(t) && !containsAdKeyword(t) {
 		return false // 水印前缀剥掉后是干净片名 → 正片
 	}
-	return adDomainRegex.MatchString(cleaned) || containsAdKeyword(cleaned)
+	return hasAdDomain(cleaned) || containsAdKeyword(cleaned)
 }
 
 // tmdbImageBase TMDB 图片地址（读取 TMDB 配置卡保存的数据库配置，默认官方）

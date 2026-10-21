@@ -83,6 +83,13 @@ func TestIsAdOnlyVideo(t *testing.T) {
 		// 域名在中间剥不掉、或剥完剩广告词：真广告（START-635 离线包同款）
 		{"18+游戏大全(996gg.cc)-七龍珠H版-三國志H版-三國群淫傳等.mp4", true},
 		{"4k688.com@免费观看手机看片.mp4", true},
+		// 点分片名里的 .Me / .TV 不是域名（2026-10-21：S02E02 被当广告移进冗余）
+		{"Cyberpunk.Edgerunners.S02E02.2022.Give.Me.Another.Day.2160p.NF.WEB-DL.DDP5.1.DV.H.265-SalmonWeb.mkv", false},
+		{"Cyberpunk.Edgerunners.S02E02.Give.Me.Another.Day.1080p.NF.WEB-DL.DDP.5.1.H.264-CHDWEB.mkv", false},
+		{"Kill.Me.2019.1080p.WEB-DL.mkv", false},
+		{"Doctor.Who.Tv.Special.2020.mkv", false},
+		// 两头不挨点的仍是广告
+		{"(996gg.me)更多精彩资源.mp4", true},
 	}
 	for _, c := range cases {
 		if got := isAdOnlyVideo(c.name); got != c.want {
