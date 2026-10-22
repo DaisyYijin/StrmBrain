@@ -359,7 +359,7 @@ onMounted(() => {
           </FormActions>
         </SectionCard>
 
-        <!-- 附加 115 账号：后端没开 STATION_MULTI_ACCOUNT 时不显示（MULTI-ACCOUNT-PLAN.md 阶段 2） -->
+        <!-- 附加 115 账号（account115.go） -->
         <ExtraAccounts v-if="!accountUnbound" />
       </div>
 

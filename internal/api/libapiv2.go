@@ -72,8 +72,6 @@ type mediaLibsView struct {
 	Libs      []mediaLibView `json:"libs"`
 	Schemes   []schemeView   `json:"schemes"`
 	Accounts  []acctOption   `json:"accounts"`
-	// MultiAccount 选别的账号的目录（STATION_MULTI_ACCOUNT，没用真的两个账号验证过之前藏着）
-	MultiAccount bool `json:"multi_account"`
 	// Notice 升级时的提示（转存文件夹要重设、原来的分库方式），点「知道了」清掉
 	Notice []string `json:"notice"`
 	// Existing / Redundant 已存在 / 冗余（设置上一套，每个账号在同一路径下各有一份）
@@ -109,7 +107,7 @@ func accountOptions() []acctOption {
 func (h *Handler) mediaLibsNow() mediaLibsView {
 	libs := loadLibraries()
 	root := strings.TrimRight(strings.ReplaceAll(mediaRoot(), `\`, "/"), "/")
-	v := mediaLibsView{MediaRoot: root, Libs: []mediaLibView{}, Accounts: accountOptions(), MultiAccount: multiAccountUIEnabled(),
+	v := mediaLibsView{MediaRoot: root, Libs: []mediaLibView{}, Accounts: accountOptions(),
 		Notice: []string{}}
 	acctName := map[uint]string{}
 	for _, a := range v.Accounts {
@@ -235,7 +233,7 @@ func stripMediaRoot(p string) string {
 }
 
 // checkMediaLibChange 一个库改成这样行不行（除了 validateLibraries 的整组校验之外的）
-func checkMediaLibChange(old *model.Library, next model.Library, accounts []acctOption, multi bool) error {
+func checkMediaLibChange(old *model.Library, next model.Library, accounts []acctOption) error {
 	known := false
 	for _, a := range accounts {
 		if a.ID == next.Account {
@@ -244,9 +242,6 @@ func checkMediaLibChange(old *model.Library, next model.Library, accounts []acct
 	}
 	if !known {
 		return fmt.Errorf("账号 %d 不存在（可能已经删除）", next.Account)
-	}
-	if next.Account != acctMain && !multi && (old == nil || old.Account != next.Account) {
-		return errors.New("多账号还没开放（STATION_MULTI_ACCOUNT），只能选主账号的目录")
 	}
 	if next.SchemeID != 0 {
 		if _, ok := schemeByID(next.SchemeID); !ok {
@@ -366,7 +361,7 @@ func (h *Handler) CreateMediaLib(c *gin.Context) {
 	if l.Scrape == "" {
 		l.Scrape = libScrapeManual
 	}
-	if err := checkMediaLibChange(nil, l, accountOptions(), multiAccountUIEnabled()); err != nil {
+	if err := checkMediaLibChange(nil, l, accountOptions()); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -402,7 +397,7 @@ func (h *Handler) UpdateMediaLib(c *gin.Context) {
 	old := libs[idx]
 	next := old
 	req.applyTo(&next)
-	if err := checkMediaLibChange(&old, next, accountOptions(), multiAccountUIEnabled()); err != nil {
+	if err := checkMediaLibChange(&old, next, accountOptions()); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

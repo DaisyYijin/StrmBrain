@@ -288,8 +288,6 @@ type librariesView struct {
 	// Emby 整体状态：没配 / 读失败时给原因，库卡片上就不显示覆盖情况
 	EmbyConfigured bool   `json:"emby_configured"`
 	EmbyError      string `json:"emby_error,omitempty"`
-	// MultiAccount 界面要不要显示附加账号相关的东西（STATION_MULTI_ACCOUNT，account115.go）
-	MultiAccount bool `json:"multi_account"`
 }
 
 // buildLibrariesView 组装库卡片。embyLocs 为 nil 表示没读 Emby（没配或读失败）
@@ -409,7 +407,6 @@ func (h *Handler) librariesNow() librariesView {
 			}
 		}
 	}
-	v.MultiAccount = multiAccountUIEnabled()
 	return v
 }
 

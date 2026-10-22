@@ -13,11 +13,10 @@ import type { Account115 } from '@/api/storage'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 /**
- * 附加 115 账号（后端 account115.go，MULTI-ACCOUNT-PLAN.md 阶段 2）。
+ * 附加 115 账号（后端 account115.go，MULTI-ACCOUNT-V2-PLAN.md §10）。
  *
- * 只管登录、检测、改名、删除。附加账号的用途是把它的目录挂成「我自己整理」的库（阶段 3），
- * 整理、转存、订阅、机器人都只用主账号 —— 文案里要一直说清楚，免得用户以为能往附加账号里转存。
- * 后端没打开 STATION_MULTI_ACCOUNT 时整块不显示（阶段 3 之前登录了也挂不了库）。
+ * 只管登录、检测、改名、删除。登录好的账号在「媒体库」里建库时可选，整理与 STRM 和主账号一样；
+ * 订阅还只进主账号的库 —— 文案里要说清楚。
  */
 
 const { message, dialog } = useFeedback()
@@ -30,7 +29,7 @@ const busy = ref(0)
 async function load() {
   try {
     const r = await storageApi.accounts()
-    enabled.value = r.enabled
+    enabled.value = true
     list.value = r.data ?? []
   } catch {
     enabled.value = false // 老后端没有这个接口：不显示
@@ -146,7 +145,7 @@ async function remove(a: Account115) {
 </script>
 
 <template>
-  <SectionCard v-if="enabled" title="附加账号" hint="别的 115 账号：只用来挂载目录、生成 STRM 和播放；整理、转存、订阅都只用主账号">
+  <SectionCard v-if="enabled" title="附加账号" hint="别的 115 账号：在「媒体库」里建库时可以选它，整理、生成 STRM 和播放与主账号一样；订阅还只进主账号的库">
     <ul v-if="extras.length" class="accts">
       <li v-for="a in extras" :key="a.id" class="acct">
         <div class="acct-main">

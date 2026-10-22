@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -18,8 +17,8 @@ import (
 // ==================== 多个 115 账号：账号层（2026-10-20，MULTI-ACCOUNT-PLAN.md §4，阶段 2） ====================
 //
 // 主号 = Storage 表里 type=115、Main=true 的那一行（老部署由 MigrateMainAccount 把原来那一行标上）。
-// 其余 type=115 的行是附加账号：只登录、检测、浏览目录，阶段 3 才能把它的目录挂成「我自己整理」的库。
-// 整理、转存、订阅、离线、机器人、签到一律只用主号，所以 get115Cookie / newPan115Ops 这些老入口不动，
+// 其余 type=115 的行是附加账号。V2 起各账号平等，库可以建在任何一个账号上、都能整理和生成 STRM；
+// 转存、订阅、离线、机器人、签到还只用主号，所以 get115Cookie / newPan115Ops 这些老入口不动，
 // 只有要按账号办事的地方改走 cookieOf / opsFor。
 //
 // 账号 id：主号在代码里一律记 0（acctMain），存量数据（库、台账、记录）都不用改；附加账号用 Storage.ID。
@@ -30,16 +29,11 @@ import (
 //   - 写操作：阶段 2 时附加账号的通道只读；2026-10-20 V2 起各账号平等、都能整理（MULTI-ACCOUNT-V2-PLAN.md），放开了；
 //   - 路径缓存：附加账号的目录不写 PathCache（那张表按路径查时不分账号，两个账号都有「/影视」就会串）。
 //
-// 界面默认藏着（STATION_MULTI_ACCOUNT=1 才显示）：阶段 3 之前附加账号登录了也挂不了库，露出来只会让人困惑。
+// 2026-10-22 起不再藏在 STATION_MULTI_ACCOUNT 后面（维护者要求直接开放）。还没用真的两个账号验证过：
+// fid 跨账号是否唯一、风控按账号还是按 IP 算，出了问题先查这两处。
 
 // acctMain 主号在代码里的账号 id
 const acctMain uint = 0
-
-// multiAccountUIEnabled 界面是否显示附加账号（阶段 3 完成前默认关）
-func multiAccountUIEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("STATION_MULTI_ACCOUNT")))
-	return v == "1" || v == "true" || v == "yes"
-}
 
 // mainStorage115 主号那一行。一行 Main 都没有（MigrateMainAccount 跑之前）按老口径取 type=115 的第一行：
 // 那时还不可能有附加账号（添加附加账号要求主号已存在，删主号在有附加账号时被拦）
@@ -233,7 +227,7 @@ func (h *Handler) ListAccounts115(c *gin.Context) {
 		out = append(out, acctView{ID: r.ID, Name: r.Name, UserName: r.UserName, Status: r.Status, Device: r.Device,
 			LoggedIn: ck != "" || r.Cookie != ""})
 	}
-	c.JSON(http.StatusOK, gin.H{"data": out, "enabled": multiAccountUIEnabled()})
+	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
 // acctNameOK 附加账号的名字：给人看的标签，不能空、不能太长

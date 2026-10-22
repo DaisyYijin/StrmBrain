@@ -54,8 +54,7 @@ export interface Account115 {
   logged_in: boolean
 }
 
-/** enabled：界面要不要显示附加账号（后端环境变量 STATION_MULTI_ACCOUNT，阶段 3 完成前默认关） */
-export const accounts = () => http.get<{ data: Account115[]; enabled: boolean }>('/storage/115/accounts')
+export const accounts = () => http.get<{ data: Account115[] }>('/storage/115/accounts')
 export const createAccount = (name: string) => http.post<{ data: Account115 }>('/storage/115/accounts', { name })
 export const renameAccount = (id: number, name: string) => http.put(`/storage/115/accounts/${id}`, { name })
 export const deleteAccount = (id: number) => http.del(`/storage/115/accounts/${id}`)

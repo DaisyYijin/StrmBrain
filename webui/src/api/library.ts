@@ -121,8 +121,6 @@ export interface LibrariesView {
   local_root: string
   emby_configured: boolean
   emby_error?: string
-  /** 界面要不要显示附加账号相关的东西（后端 STATION_MULTI_ACCOUNT） */
-  multi_account: boolean
 }
 
 /** 一个转存入口：cid 是已有子目录；cid 为空 = 按 name 在转存目录下新建（同名已存在就复用） */
@@ -235,7 +233,6 @@ export interface MediaLibsView {
   libs: MediaLib[]
   schemes: SchemeView[]
   accounts: AcctOption[]
-  multi_account: boolean
   notice: string[]
   existing: string
   redundant: string

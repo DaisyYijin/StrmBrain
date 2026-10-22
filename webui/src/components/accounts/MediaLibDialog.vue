@@ -57,8 +57,8 @@ watch(show, (v) => {
 const isNew = computed(() => !props.lib)
 const localLocked = computed(() => !!props.lib?.local_locked)
 const accountOpts = computed(() => props.view.accounts.map((a) => ({ label: a.main ? `${a.name}（主账号）` : a.name, value: a.id })))
-/** 选别的账号只在开了多账号时（后端 STATION_MULTI_ACCOUNT）；已经是别的账号的库照常显示 */
-const showAccount = computed(() => (props.view.multi_account && props.view.accounts.length > 1) || form.value.account !== 0)
+/** 只有一个账号时不显示；已经是别的账号的库照常显示 */
+const showAccount = computed(() => props.view.accounts.length > 1 || form.value.account !== 0)
 const schemeOpts = computed(() => [
   { label: '不分类（片目直接放在库目录下）', value: 0 },
   ...props.view.schemes.map((s) => ({ label: `${s.name}（电影 ${s.movie} / 剧集 ${s.tv} 条）`, value: s.id })),
