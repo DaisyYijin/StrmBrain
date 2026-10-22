@@ -169,6 +169,10 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
               <dt>Emby</dt>
               <dd>
                 <span v-if="l.emby.covered">已在 Emby 里<template v-if="l.emby.suggest">（<code>{{ l.emby.suggest }}</code>）</template></span>
+                <span v-else-if="l.emby.partial && l.emby.missing?.length" class="warn">
+                  <TriangleAlert :size="13" />Emby 只覆盖了一部分，还没进 Emby 的目录：<template v-for="(m, i) in l.emby.missing" :key="m"><template v-if="i">、</template><code>{{ m }}</code></template>
+                </span>
+                <span v-else-if="l.emby.partial">Emby 覆盖了这个库下面的部分目录</span>
                 <span v-else-if="l.emby.unmapped" class="warn"><TriangleAlert :size="13" />路径映射换算不出这个库在 Emby 里的路径（设置 → Emby → 路径映射）</span>
                 <span v-else class="warn">
                   <TriangleAlert :size="13" />Emby 里还没有这个目录<template v-if="l.emby.suggest">：在 Emby 里添加 <code>{{ l.emby.suggest }}</code></template>

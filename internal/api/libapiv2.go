@@ -159,6 +159,11 @@ func (h *Handler) mediaLibsNow() mediaLibsView {
 				for _, r := range classifyRulesOf(l.SchemeID, "tv") {
 					cats = append(cats, r.Name)
 				}
+			} else if l.Depth >= 2 {
+				// 不分类、片目在第二层以下：用户自己的目录结构（爱优腾芒/电影、爱优腾芒/剧集），
+				// 第一层就是分类，Emby 常按它们各建一个库。没有分类规则可读，拿本地实际的子目录当分类，
+				// 否则每个子目录都进了 Emby 也报「Emby 里还没有这个目录」（2026-10-22 现场误报）
+				cats = localSubdirs(mv.LocalAbs)
 			}
 			st := libEmbyCoverage(cfg.PathMapping, locs, mv.LocalAbs, cats)
 			mv.Emby = &st

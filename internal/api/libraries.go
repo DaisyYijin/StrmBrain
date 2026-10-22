@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -273,6 +274,21 @@ func libEmbyCoverage(pathMapping string, locations []string, libLocal string, ca
 		st.Unmapped = true
 	}
 	return st
+}
+
+// localSubdirs 本地目录下一层的子目录名（跳过 . 开头的，如 .actors）；读不了返回 nil
+func localSubdirs(abs string) []string {
+	ents, err := os.ReadDir(abs)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			out = append(out, e.Name())
+		}
+	}
+	return out
 }
 
 // librariesView GET /libraries 的全部内容

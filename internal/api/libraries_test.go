@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +13,32 @@ import (
 )
 
 // ---- Emby 覆盖（C6） ----
+
+// 不分类、片目在第二层的库（爱优腾芒/电影、爱优腾芒/剧集）：拿本地子目录当分类，各自进了 Emby 就算覆盖
+func TestLocalSubdirsCoverage(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	lib := root + "/爱优腾芒"
+	for _, d := range []string{"电影", "剧集", ".actors"} {
+		if err := os.MkdirAll(lib+"/"+d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(lib+"/readme.txt", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cats := localSubdirs(lib)
+	if len(cats) != 2 {
+		t.Fatalf("子目录 = %v，要 电影 / 剧集（跳过 .actors 与文件）", cats)
+	}
+	st := libEmbyCoverage("", []string{lib + "/电影", lib + "/剧集"}, lib, cats)
+	if !st.Covered || st.Partial {
+		t.Fatalf("两个分类都进了 Emby 应算覆盖：%+v", st)
+	}
+	st = libEmbyCoverage("", []string{lib + "/电影"}, lib, cats)
+	if st.Covered || len(st.Missing) != 1 || st.Missing[0] != lib+"/剧集" {
+		t.Fatalf("只进了电影应报缺剧集：%+v", st)
+	}
+}
 
 func TestLibEmbyCoverage(t *testing.T) {
 	cases := []struct {
