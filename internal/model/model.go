@@ -394,6 +394,10 @@ type Subscription struct {
 	// Priority 资源优先级（basic 基础 / follow 跟随洗版策略 / custom 自定义 + 规则）的 JSON；空 = 跟随订阅设置。
 	// 2026-10-22 起取代资源条件里的画质几项（Cond 只剩中字与体积），见 internal/api/subpriority.go
 	Priority string `json:"-" gorm:"type:text"`
+	// Wash 洗版（2026-10-22，internal/api/subwash.go）：库里已有、没达标（没命中洗版策略第 1 条）的集，
+	// 出现更好的资源就转进来交给整理替换。WashUntil = 补齐之后洗到哪天（补齐那一轮按订阅设置的天数算），之后停止检查
+	Wash      bool       `json:"wash"`
+	WashUntil *time.Time `json:"wash_until"`
 	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir" gorm:"size:64"`
 
@@ -434,6 +438,8 @@ type SubAttempt struct {
 	Reason     string     `json:"reason" gorm:"size:500"`
 	RetryAt    *time.Time `json:"retry_at"`
 	Points     int        `json:"points"` // 为它花了多少 RE0 积分（每日预算按它累计）
+	// Wash 洗版的尝试（换掉库里没达标的集），不是补缺集：洗版只认洗版试过的，补缺试过没用的资源洗版还能再看
+	Wash bool `json:"wash"`
 	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
 	ResolvedAt *time.Time `json:"resolved_at"`
 }

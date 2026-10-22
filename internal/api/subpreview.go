@@ -121,9 +121,12 @@ func (r *subRunner) previewShares(sub *model.Subscription, cands []subCand, miss
 func (r *subRunner) recordShareUseless(sub *model.Subscription, c subCand, att *model.SubAttempt, link string, pick sharePick, truncated bool) model.SubAttempt {
 	if att == nil {
 		att = &model.SubAttempt{SubID: sub.ID, Hash: c.Hash, Source: c.Item.Source,
-			Title: truncateStr(c.Item.Title, 480), URL: truncateStr(firstNonEmpty(link, c.Item.URL), 1000)}
+			Title: truncateStr(c.Item.Title, 480), URL: truncateStr(firstNonEmpty(link, c.Item.URL), 1000), Wash: r.washSub == sub.ID}
 	}
 	reason := "里面没有缺的集（" + pick.summary() + "）"
+	if att.Wash {
+		reason = "里面没有比库里更好的（" + pick.summary() + "）"
+	}
 	if sub.MediaType == "movie" {
 		reason = "里面没有能用的视频（" + pick.summary() + "）"
 	}

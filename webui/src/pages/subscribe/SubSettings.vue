@@ -169,6 +169,12 @@ async function save() {
         v-model:rules="cfg.priority.rules"
         v-model:limit="cfg.priority.limit"
       />
+      <FieldRow label="新订阅默认洗版" hint="新建订阅时「洗版」开关的默认值（机器人订阅也用它）。资源优先级是自定义时不能洗版">
+        <HSwitch v-model="cfg.wash_default" aria-label="新订阅默认洗版" />
+      </FieldRow>
+      <FieldRow label="补齐后再洗" hint="开了洗版的订阅，集补齐之后再洗这么多天：期间出现比库里更好的就换，全部达标或到期就结束。补集期间一直在洗">
+        <div class="unit"><HNumberInput v-model="cfg.wash_days" :min="1" :max="365" aria-label="天" /><span>天</span></div>
+      </FieldRow>
       <SubCondFields v-model="cfg.cond" part="extras" />
       <HAlert status="accent" class="note">
         有达标的资源（命中第 1 条规则）就先用达标的；都不达标时先补集数，再按画质挑。

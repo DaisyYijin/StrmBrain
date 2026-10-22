@@ -53,7 +53,7 @@ func (h *Handler) botSubFind(key, keyword string, io botIO) botView {
 
 // botSubDefaultForm 机器人订阅的默认值（与网页订阅弹窗一致）
 func botSubDefaultForm(tc *TmdbClient, hit wecomTmdbHit) subForm {
-	f := subForm{TmdbID: hit.ID, MediaType: hit.Type, Scope: subScopeAll, Follow: subFollowMissing}
+	f := subForm{TmdbID: hit.ID, MediaType: hit.Type, Scope: subScopeAll, Follow: subFollowMissing, Wash: loadSubscribeCfg().WashDefault}
 	if hit.Type != "tv" || tc == nil {
 		return f
 	}

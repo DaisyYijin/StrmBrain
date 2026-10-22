@@ -69,6 +69,7 @@ const blank = (): SubForm => ({
   offline_mode: '',
   cond: null,
   priority: null,
+  wash: false,
   subdir: '',
 })
 const form = ref<SubForm>(blank())
@@ -90,6 +91,15 @@ const tv = computed(() => head.value?.media_type === 'tv')
 watch(show, async (open) => {
   if (!open) return
   form.value = props.edit ? subscribeApi.toForm(props.edit) : blank()
+  if (!props.edit) {
+    // 新建：洗版默认值跟订阅设置
+    subscribeApi
+      .getConfig()
+      .then((d) => {
+        if (!props.edit && show.value) form.value.wash = !!d.data.wash_default
+      })
+      .catch(() => {})
+  }
   advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.cond || !!form.value.priority)
   seasons.value = []
   ended.value = false
@@ -186,6 +196,12 @@ const offlineHint = computed(() => {
   return '按「订阅设置 → 离线下载」的默认策略；每月上限、配额保留这些闸对所有订阅都生效'
 })
 
+const washHint = computed(() => {
+  if (form.value.priority?.mode === 'custom') return '资源优先级是自定义，和整理的洗版策略判得不一样，不能洗版；改成「跟随洗版策略」'
+  const until = props.edit?.wash_until ? `（洗到 ${props.edit.wash_until.slice(5, 10)}）` : ''
+  return `库里已有、没达标（没命中洗版策略第 1 条）的集，出现更好的 115 分享就转进来，交给整理替换；补齐后再洗一段时间${until}。要求整理的洗版策略是替换（replace），不花积分、不用离线`
+})
+
 const scopeHint = computed(() => {
   if (!tv.value) return ''
   const f = form.value
@@ -276,6 +292,10 @@ async function submit() {
           />
         </FieldRow>
       </template>
+
+      <FieldRow label="洗版" :hint="washHint">
+        <HSwitch v-model="form.wash" aria-label="洗版" />
+      </FieldRow>
 
       <FieldRow
         v-if="libsV2 ? stagingItems.length > 1 : stagingItems.length"

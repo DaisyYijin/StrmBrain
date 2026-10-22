@@ -27,6 +27,10 @@ export interface Subscription {
   cond: SubCond | null
   /** 资源优先级；null = 跟随订阅设置 */
   priority: SubPrioSel | null
+  /** 洗版：库里没达标的集出现更好的就换（subwash.go） */
+  wash: boolean
+  /** 补齐之后洗到哪天；没齐时为空 */
+  wash_until?: string | null
   /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
   subdir?: string
   /** active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到 */
@@ -65,6 +69,7 @@ export interface SubForm {
   cond: SubCond | null
   /** 资源优先级；null = 跟随订阅设置 */
   priority: SubPrioSel | null
+  wash: boolean
   /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
   subdir: string
 }
@@ -221,6 +226,10 @@ export interface SubscribeConfig {
   /** 中字与大小（画质几项 2026-10-22 起归资源优先级管） */
   cond: SubCond
   priority: SubPrioCfg
+  /** 洗版：补齐之后再洗多少天 */
+  wash_days: number
+  /** 新订阅默认开洗版 */
+  wash_default: boolean
   /** 默认转存到哪个转存子目录（cid）；空 = 转存目录本身 */
   subdir?: string
 }
@@ -258,6 +267,7 @@ export function toForm(s: Subscription): SubForm {
     offline_mode: s.offline_mode || '',
     cond: s.cond ? { ...blankCond(), ...s.cond } : null,
     priority: s.priority ? { mode: s.priority.mode, rules: [...(s.priority.rules ?? [])] } : null,
+    wash: !!s.wash,
     subdir: s.subdir || '',
   }
 }

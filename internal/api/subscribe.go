@@ -100,6 +100,9 @@ type subscribeCfg struct {
 	Cond subCond `json:"cond"`
 	// Priority 默认的资源优先级（subpriority.go），订阅自己可以另设
 	Priority subPrioCfg `json:"priority"`
+	// WashDays 洗版：补齐之后再洗多少天（期间出现比库里更好的就换），到期停止检查；WashDefault 新订阅默认开不开洗版
+	WashDays    int  `json:"wash_days"`
+	WashDefault bool `json:"wash_default"`
 	// PrioVer 资源优先级迁移版本：老配置读出来是 0，按 migrateSubPrioGlobal 换算一次
 	PrioVer int `json:"prio_ver"`
 	// Subdir 默认转存到哪个绑定了媒体库的转存子目录（cid，stagingsub.go）；空 = 转存目录本身。
@@ -140,6 +143,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		Cond:     subCond{Zh: true}, // 中字默认开（维护者定的，2026-10-22）；老配置不替用户打开
 		Priority: subPrioCfg{Mode: subPrioFollow},
 		PrioVer:  subPrioVer,
+		WashDays: 30,
 	}
 }
 
@@ -227,6 +231,9 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	}
 	c.Cond = keepCondExtras(normalizeSubCond(c.Cond)) // 画质几项归资源优先级管（subpriority.go）
 	c.Priority = normalizeSubPrioCfg(c.Priority)
+	if c.WashDays <= 0 || c.WashDays > 365 {
+		c.WashDays = d.WashDays
+	}
 	// 读的时候已经补过新类型；保存时记成当前版本，用户之后关掉的类型不会再被补回来
 	c.NotifyVer = subNotifyVer
 	return c

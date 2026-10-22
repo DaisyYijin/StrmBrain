@@ -37,6 +37,8 @@ type subForm struct {
 	Cond *subCond `json:"cond"`
 	// Priority 资源优先级，nil = 跟随订阅设置（subpriority.go）
 	Priority *subPrioSel `json:"priority"`
+	// Wash 洗版（subwash.go）
+	Wash bool `json:"wash"`
 	// Subdir 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir"`
 }
@@ -121,6 +123,11 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		b, _ := json.Marshal(keepCondExtras(normalizeSubCond(*f.Cond)))
 		sub.Cond = string(b)
 	}
+	washOn := f.Wash && !sub.Wash
+	sub.Wash = f.Wash
+	if !f.Wash {
+		sub.WashUntil = nil
+	}
 	sub.Priority = ""
 	if f.Priority != nil {
 		if !validSubPrioMode(f.Priority.Mode) {
@@ -135,7 +142,8 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		b, _ := json.Marshal(p)
 		sub.Priority = string(b)
 	}
-	return before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
+	// 打开洗版也算变了：已完成的订阅要回到追更中、马上查一轮
+	return washOn || before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
 }
 
 // subDTO 列表与详情里的订阅

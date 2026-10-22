@@ -188,6 +188,10 @@ type subRunner struct {
 	cookie   string
 	libs     []model.Library // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
 	prio     map[uint]subPriority // 一轮里每个订阅的资源优先级（priorityOf 缓存）
+	// washSub 正在给哪个订阅洗版（subwash.go）：这期间建的尝试记成洗版的，分享按集挑时只要比库里那份好的（washBeats）
+	washSub   uint
+	washBeats func(k epKey, name string) bool
+	searched  map[uint]subSearchHit // 一轮里每个订阅只搜一次：补缺集与洗版共用
 	re0Left  int             // 今天还能自动解锁多少 RE0 积分，<0 = 不限
 	dianLeft int             // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
@@ -392,8 +396,15 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 		return item, true
 	}
 
-	// 补上了：按盘点结果说还差几集。这轮补齐、订阅要完成的交给完成通知，不连推两条
-	if eps := subLandedEpisodes(landed, ev); len(eps) > 0 && sub.MediaType == "tv" && !ev.Done {
+	// 补上了：按盘点结果说还差几集。这轮补齐、订阅要完成的交给完成通知，不连推两条。
+	// 洗版换进来的不算「补上」（整理那边会推洗版替换）
+	fill := landed[:0:0]
+	for _, a := range landed {
+		if !a.Wash {
+			fill = append(fill, a)
+		}
+	}
+	if eps := subLandedEpisodes(fill, ev); len(eps) > 0 && sub.MediaType == "tv" && !ev.Done {
 		r.notifyKind("ingested", "🎉 订阅补上了", subLandedText(sub, eps, ev), sub)
 	}
 
@@ -409,12 +420,42 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 	}
 	item.Have, item.Total, item.Missing = ev.Have, ev.Total, len(ev.Missing)
 
-	sch := planSubNext(ev, submitted, sub.State, sub.EmptyRounds, now, subCadenceOf(r.cfg))
+	// 洗版（subwash.go）：补齐那一轮定下截止时间；没齐（新排了集）就清掉，下次补齐重新算
+	washUpd := map[string]any{}
+	if sub.Wash && ev.Done && sub.WashUntil == nil {
+		t := washUntilFor(now, r.cfg.WashDays)
+		sub.WashUntil = &t
+		washUpd["wash_until"] = t
+	} else if !ev.Done && sub.WashUntil != nil {
+		sub.WashUntil = nil
+		washUpd["wash_until"] = nil
+	}
+	wash := r.washRound(sub, ev, &item)
+
+	sch := planSubNext(ev, submitted || wash.Submitted, sub.State, sub.EmptyRounds, now, subCadenceOf(r.cfg))
 	state := sch.State
+	if state == subStateDone && wash.Active {
+		// 齐了但还在洗：不结束，按补老集的间隔回来看（提交了洗版的半小时后回来结算）
+		state = subStateActive
+		sch.Next = now.Add(time.Duration(r.cfg.GapIntervalHours) * time.Hour)
+		if wash.Submitted {
+			sch.Next = now.Add(subAfterSubmit)
+		}
+	}
 	if sub.State == subStatePaused {
 		state = subStatePaused // 手动查一次暂停的订阅，不替用户恢复
 	}
 	result := subResultLine(sub, ev, item)
+	if wash.Note != "" {
+		if ev.Done && wash.Active {
+			result = "已齐，" + wash.Note
+			if sub.WashUntil != nil {
+				result += "（洗到 " + sub.WashUntil.Format("01-02") + "）"
+			}
+		} else {
+			result += "；" + wash.Note
+		}
+	}
 	upd := map[string]any{
 		"have": ev.Have, "total": ev.Total, "missing": len(ev.Missing),
 		"state": state, "last_check_at": now, "last_result": truncateStr(result, 250),
@@ -424,6 +465,9 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 		upd["next_check_at"] = nil
 	} else {
 		upd["next_check_at"] = sch.Next
+	}
+	for k, v := range washUpd {
+		upd[k] = v
 	}
 	if state == subStateDone && sub.State != subStateDone {
 		upd["done_at"] = now
@@ -563,7 +607,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	db := r.h.DB
 	now := r.now()
 	subLane.setSub("搜索资源", 0, 0, "")
-	items, note := r.search(sub)
+	items, note := r.searchOnce(sub)
 	if note != "" {
 		item.Note = note
 	}
@@ -869,7 +913,7 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 	db := r.h.DB
 	now := r.now()
 	att := model.SubAttempt{SubID: sub.ID, Hash: c.Hash, Source: c.Item.Source, Kind: c.Item.Kind,
-		Title: truncateStr(c.Item.Title, 480), URL: truncateStr(c.Item.URL, 1000), Status: subAttemptFailed}
+		Title: truncateStr(c.Item.Title, 480), URL: truncateStr(c.Item.URL, 1000), Status: subAttemptFailed, Wash: r.washSub == sub.ID}
 	fail := func(reason string, retry bool) (model.SubAttempt, []epKey) {
 		att.Status, att.Reason = subAttemptFailed, truncateStr(reason, 480)
 		if retry {
@@ -978,6 +1022,9 @@ func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, miss
 		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
 		HaveSha1: subLedgerHasSha1,
 		Compare:  r.priorityOf(sub).compare,
+	}
+	if r.washSub == sub.ID {
+		opts.Beats = r.washBeats // 洗版：只要比库里那一集好的
 	}
 	cond, prio := subCondOf(r.cfg, sub.Cond), r.priorityOf(sub)
 	if !cond.empty() || prio.limited() {

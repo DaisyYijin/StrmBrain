@@ -316,7 +316,7 @@ const SUBS = (
 ).map(([id, type, title, year, state, have, total, missing, inflight, running]) => ({
   id, tmdb_id: 90000 + id, media_type: type, title, year, poster_path: '', state, have, total, missing, inflight, running,
   scope: type === 'tv' ? 'all' : '', season: 0, ep_start: 0, ep_end: 0, specials: false, follow: type === 'tv' ? 'missing' : '',
-  sources: [], rank_limit: 0, include: '', exclude: '', offline_mode: '', cond: null, priority: null, last_result: '找到 2 条资源，提交 1 条',
+  sources: [], rank_limit: 0, include: '', exclude: '', offline_mode: '', cond: null, priority: null, wash: false, last_result: '找到 2 条资源，提交 1 条',
   last_check_at: new Date(Date.now() - 3_600_000).toISOString(), next_check_at: new Date(Date.now() + 3_600_000).toISOString(),
   empty_rounds: 0, created_at: new Date(Date.now() - 86_400_000 * 9).toISOString(),
 }))
@@ -335,6 +335,8 @@ const subRoutes: Record<string, unknown> = {
       offline_mode: 'pack', offline_wait_hours: 24, offline_monthly: 30, offline_reserve: 10,
       cond: { pix: '', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },
       priority: { mode: 'follow', rules: [], limit: 0 },
+      wash_days: 30,
+      wash_default: false,
     },
   },
   '/tmdb/discover': (q: URLSearchParams) =>

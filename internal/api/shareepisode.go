@@ -26,6 +26,8 @@ type sharePickOpts struct {
 	// Remap 全剧连续编号换算（S01E166 → S07E22），接 absepisode.go；key 是条目 ID。nil = 不换
 	Remap    func(eps map[string]*ParsedName)
 	HaveSha1 func(sha1 string) bool // 库里已经有这一份（台账 sha1）
+	// Beats 洗版：这个视频补这一集是不是比库里那份好（电影的 k 是零值）。nil = 补缺集，不比
+	Beats func(k epKey, name string) bool
 	// Compare 两个文件名谁更好（subPriority.compare，和整理时洗版同一套）：>0 a 更好；nil 时只比体积
 	Compare func(a, b string) int
 	// Accept 资源条件（subCond.fileOK）：hasSub = 同目录有跟着它的字幕。nil = 不限
@@ -135,6 +137,9 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 	var chosen []shareVideo
 	if o.MediaType == "movie" {
 		for _, v := range vids {
+			if o.Beats != nil && !o.Beats(epKey{}, v.e.Name) {
+				continue
+			}
 			if len(chosen) == 0 || v.better(chosen[0], o.Compare) {
 				chosen = []shareVideo{v}
 			}
@@ -176,6 +181,11 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 	return res
 }
 
+// wants 这个视频补这一集要不要：缺这一集，洗版时还要比库里那份好
+func (o sharePickOpts) wants(k epKey, v shareVideo) bool {
+	return o.Missing[k] && (o.Beats == nil || o.Beats(k, v.e.Name))
+}
+
 // pickEpisodeVideos 剧集按集挑：解析每个视频的季集 → 只要覆盖了缺集的 → 每集留最好的一份。
 // 双集文件只要其中一集缺就要；被它占了的那集不再另挑
 func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []shareVideo {
@@ -203,7 +213,7 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 			all[epKey{p.Season, e}] = true
 		}
 		for _, k := range v.eps {
-			if o.Missing[k] {
+			if o.wants(k, v) {
 				cands = append(cands, v)
 				break
 			}
@@ -216,7 +226,7 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 	for _, v := range cands {
 		gain := false
 		for _, k := range v.eps {
-			if o.Missing[k] && !taken[k] {
+			if o.wants(k, v) && !taken[k] {
 				gain = true
 			}
 		}
@@ -224,7 +234,7 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 			continue
 		}
 		for _, k := range v.eps {
-			if o.Missing[k] && !taken[k] {
+			if o.wants(k, v) && !taken[k] {
 				taken[k] = true
 				res.Covered = append(res.Covered, k)
 			}
