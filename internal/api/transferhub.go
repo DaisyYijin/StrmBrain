@@ -1125,6 +1125,18 @@ func (h *Handler) TransferSources(c *gin.Context) {
 		FolderPath string `json:"folder_path"`
 	}
 	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &share)
+	// V2 下转存目录在库上（xfertarget.go），老的 share.folder 迁移时不自动设、多半是空的：
+	// 照读它的话库里明明设好了转存文件夹，找资源页还提示「还没设置转存目录」
+	if libs := loadLibraries(); len(libs) > 0 {
+		share.Folder, share.FolderPath = "", ""
+		if l, err := h.xferLib("", libs); err == nil {
+			share.Folder = xferTargetOf(l)
+			share.FolderPath = firstNonEmpty(l.StagingPath, "cid "+l.StagingCid)
+		} else if errors.Is(err, errXferNeedLib) {
+			// 多个库、没设默认：每次转存时选，不算没设置
+			share.FolderPath = "转存时选库"
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{"sources": list, "folder": share.Folder, "folder_path": share.FolderPath})
 }
 

@@ -54,7 +54,7 @@ function srcTone(key: SourceKey): Tone | undefined {
 }
 
 const GROUPS = computed<{ label: string; icon: Component; items: { key: string; title: string; tone?: Tone }[] }[]>(() => [
-  { label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '转存/待整理目录', tone: (state.value?.folder ? 'ok' : 'warn') as Tone }] },
+  { label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '转存/待整理目录', tone: (state.value?.folder_path || state.value?.folder ? 'ok' : 'warn') as Tone }] },
   { label: '资源来源', icon: Globe, items: SOURCES.map((s) => ({ key: s.key as string, title: s.title, tone: srcTone(s.key) })) },
   { label: '订阅', icon: BellRing, items: SUB_SECS.map((s) => ({ key: s.key as string, title: s.title, tone: undefined as Tone | undefined })) },
 ])

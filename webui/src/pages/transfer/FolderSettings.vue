@@ -53,6 +53,7 @@ async function saveDefault() {
     targets.value = await transferApi.saveXferDefault(pick.value)
     message.success('已保存')
     void subs.reload()
+    void reload() // 找资源 / 链接转存上方显示的转存目录跟着变
   } catch (e) {
     toastError(e, '保存失败')
   } finally {
