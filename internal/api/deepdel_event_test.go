@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -212,7 +213,7 @@ func TestDeepDelPruneMovieDirNeverVisitsSibling(t *testing.T) {
 	n := h.pruneDeepDelDirs(ops, "lib", []model.SyncedFile{
 		{FileID: "a", RelPath: "影视/电影/流浪地球-2019/a.mkv.strm", Kind: "video"},
 		{FileID: "b", RelPath: "影视/电影/流浪地球-2019/a.nfo", Kind: "asset"},
-	})
+	}, nil)
 	if n != 1 || !eq(ops.deleted, []string{"A"}) {
 		t.Fatalf("影片目录没清掉或误删: n=%d deleted=%v", n, ops.deleted)
 	}
@@ -235,7 +236,7 @@ func TestDeepDelPruneSeasonChainStopsAtRoot(t *testing.T) {
 	n := h.pruneDeepDelDirs(ops, "lib", []model.SyncedFile{
 		{FileID: "e1", RelPath: "影视/剧集/重器-2026/Season 01/E01.mkv.strm", Kind: "video"},
 		{FileID: "nfo", RelPath: "影视/剧集/重器-2026/tvshow.nfo", Kind: "asset"},
-	})
+	}, nil)
 	if n != 3 || !eq(ops.deleted, []string{"s1", "S", "shows"}) {
 		t.Fatalf("空目录链没清干净: n=%d deleted=%v", n, ops.deleted)
 	}
@@ -249,7 +250,7 @@ func TestDeepDelPruneMissingDirIsSkipped(t *testing.T) {
 	})}
 	n := h.pruneDeepDelDirs(ops, "lib", []model.SyncedFile{
 		{FileID: "a", RelPath: "影视/电影/已经改名了/a.mkv.strm", Kind: "video"},
-	})
+	}, nil)
 	if n != 0 || len(ops.deleted) != 0 {
 		t.Fatalf("查不到 cid 不该删任何目录: n=%d deleted=%v", n, ops.deleted)
 	}
@@ -260,10 +261,10 @@ func TestDeepDelPruneWithoutRootCid(t *testing.T) {
 	h := eventTestHandler(t, deepDelTestTree(t, "影视/keep"), nil)
 	ops := newFakeDirs(map[string][]map[string]interface{}{"lib": {}})
 	rows := []model.SyncedFile{{FileID: "a", RelPath: "影视/电影/A/a.mkv.strm", Kind: "video"}}
-	if n := h.pruneDeepDelDirs(ops, "", rows); n != 0 {
+	if n := h.pruneDeepDelDirs(ops, "", rows, nil); n != 0 {
 		t.Fatalf("没有同步根不该清理: %d", n)
 	}
-	if n := h.pruneDeepDelDirs(ops, "0", rows); n != 0 {
+	if n := h.pruneDeepDelDirs(ops, "0", rows, nil); n != 0 {
 		t.Fatalf("网盘根不该清理: %d", n)
 	}
 }
@@ -300,5 +301,80 @@ func TestDeepDelPruneFailureAndRoot(t *testing.T) {
 	}
 	if len(f.deleted) != 0 {
 		t.Fatal(fmt.Sprint(f.deleted))
+	}
+}
+
+// 2026-10-22 现场：刮削回传了 NFO 与图片，用户随即在 Emby 里删了这部片（本地整个目录没了）。
+// 网盘上的影片目录里回传的元数据要跟着删，目录才清得掉；增量记进台账的 NFO 按 fid 删
+func TestDeepDelLeftoversUploadedMeta(t *testing.T) {
+	root := deepDelTestTree(t, "影视/keep")
+	video := model.SyncedFile{FileID: "v", RelPath: "影视/电影/A/a.strm", Kind: "video"}
+	h := eventTestHandler(t, root, []model.SyncedFile{
+		video,
+		{FileID: "nfo", RelPath: "影视/电影/A/a.nfo", Kind: "asset"},
+	})
+	t.Cleanup(func() { h.DB.Exec("DELETE FROM upload_marks") })
+	dir := filepath.Join(root, "影视", "电影", "A")
+	for _, n := range []string{"a.nfo", "poster.jpg", "fanart.jpg", "a.mkv"} {
+		h.DB.Create(&model.UploadMark{Path: filepath.Join(dir, n)})
+	}
+	h.DB.Where("file_id = ?", "v").First(&video)
+	left := h.deepDelLeftovers(root, []model.SyncedFile{video})
+	if len(left.rows) != 1 || left.rows[0].FileID != "nfo" {
+		t.Fatalf("台账里的回传 NFO 没收进来: %+v", left.rows)
+	}
+	names := left.names["影视/电影/A"]
+	if len(left.names) != 1 || len(names) != 2 || !names["poster.jpg"] || !names["fanart.jpg"] {
+		t.Fatalf("只有上传指纹的图片没认出来（视频文件不该算）: %+v", left.names)
+	}
+	if len(left.marks) != 3 {
+		t.Fatalf("上传指纹要一起清: %v", left.marks)
+	}
+
+	ops := &tracedDeepDirIO{fakeDirIO: newFakeDirs(map[string][]map[string]interface{}{
+		"lib":    {namedDir("movies", "电影")},
+		"movies": {namedDir("A", "A"), namedDir("B", "B")},
+		"A":      {fileEnt("poster.jpg"), fileEnt("fanart.jpg")},
+		"B":      {fileEnt("poster.jpg")},
+	})}
+	n := h.pruneDeepDelDirs(ops, "lib", append([]model.SyncedFile{video}, left.rows...), left.names)
+	if n != 1 || !eq(ops.deleted, []string{"poster.jpg", "fanart.jpg", "A"}) {
+		t.Fatalf("回传的元数据与影片目录没清干净: n=%d deleted=%v", n, ops.deleted)
+	}
+}
+
+// 同目录还有别的视频（多版本只删一个、平铺片目所在的分类目录）或本地还有 STRM：一个都不收
+func TestDeepDelLeftoversKeepBusyDir(t *testing.T) {
+	root := deepDelTestTree(t, "影视/keep", "影视/电影/C/local.strm")
+	h := eventTestHandler(t, root, []model.SyncedFile{
+		{FileID: "v1", RelPath: "影视/电影/A/a.strm", Kind: "video"},
+		{FileID: "v2", RelPath: "影视/电影/A/b.strm", Kind: "video"},
+		{FileID: "v3", RelPath: "影视/电影/C/c.strm", Kind: "video"},
+	})
+	t.Cleanup(func() { h.DB.Exec("DELETE FROM upload_marks") })
+	for _, d := range []string{"A", "C"} {
+		h.DB.Create(&model.UploadMark{Path: filepath.Join(root, "影视", "电影", d, "poster.jpg")})
+	}
+	var rows []model.SyncedFile
+	h.DB.Where("file_id IN ?", []string{"v1", "v3"}).Find(&rows)
+	left := h.deepDelLeftovers(root, rows)
+	if len(left.rows) != 0 || len(left.names) != 0 || len(left.marks) != 0 {
+		t.Fatalf("还有片在的目录不该动: %+v", left)
+	}
+}
+
+// 本站回传上去、本地随后被删的元数据，上传事件绕回增量时不许再下回来（否则复活出一个只有 NFO 的目录）
+func TestIncrAssetSkipsUploadedThenDeleted(t *testing.T) {
+	root := deepDelTestTree(t, "影视/keep")
+	h := eventTestHandler(t, root, nil)
+	t.Cleanup(func() { h.DB.Exec("DELETE FROM upload_marks") })
+	h.DB.Create(&model.UploadMark{Path: filepath.Join(root, "影视", "电影", "A", "a.nfo")})
+	d := &realIncrDeps{h: h}
+	err := d.downloadAsset(remoteFile{Path: "影视/电影/A", Name: "a.nfo"}, root)
+	if !errors.Is(err, errAssetLocalGone) {
+		t.Fatalf("应当跳过下载: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "影视", "电影", "A")); !os.IsNotExist(err) {
+		t.Fatalf("本地目录被复活了: %v", err)
 	}
 }

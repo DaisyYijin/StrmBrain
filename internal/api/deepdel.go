@@ -105,6 +105,10 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 		return res, nil
 	}
 	root := h.orphanLocalRoot()
+	// 片目删空了，本站自己放上 115 的元数据（刮削回传的 NFO / 图片）一起收掉，
+	// 否则网盘上的影片目录里永远剩着它们，空目录清理也删不掉
+	left := h.deepDelLeftovers(root, rows)
+	rows = append(rows, left.rows...)
 
 	fids := make([]string, 0, len(rows))
 	rels := make([]string, 0, len(rows))
@@ -153,7 +157,8 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 	// 空目录清理放在删除之后：目录要空了才判得出来，而目录本身不会因为删文件消失，
 	// 逐级按名字查 cid 这条路删完照样走得通
 	if cfg.prunePanDirs() && acct == acctMain {
-		res.PanDirs = h.pruneDeepDelDirsByLib(ops, rows)
+		res.PanDirs = h.pruneDeepDelDirsByLib(ops, rows, left.names)
+		h.dropUploadMarks(left.marks)
 	} else if cfg.prunePanDirs() {
 		// 别的账号的库按名字逐级找目录那一套还没接（要它自己的库根），只删文件、空目录留着（可手动删）
 		log.Printf("[深度删除] ○ 别的账号（%d）的库暂不清网盘空目录，只删了文件", acct)
@@ -183,6 +188,10 @@ func (h *Handler) cleanDeepDelMarks(rels []string) {
 		}
 		paths = append(paths, filepath.Join(root, filepath.FromSlash(rel)))
 	}
+	h.dropUploadMarks(paths)
+}
+
+func (h *Handler) dropUploadMarks(paths []string) {
 	for _, batch := range chunkStrings(paths, 200) {
 		h.DB.Where("path IN ?", batch).Delete(&model.UploadMark{})
 	}
@@ -283,7 +292,10 @@ func findChildDirCid(ops dirIO, parent, name string) (string, error) {
 //     顺带把剩下的空季目录一起收掉；
 //   - 再往上的祖先（分类目录「电影」「剧集」）只接受**自己完全为空**，绝不递归进去，
 //     否则清理分类目录时会遍历兄弟影片，把无关的空目录也删了。
-func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.SyncedFile) int {
+//
+// uploaded 是片目删空后本站回传上去的元数据（键是台账里的目录相对路径，见 deepDelLeftovers），
+// 叶子目录核验过身份之后先按名字删掉它们，目录才空得下来
+func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.SyncedFile, uploaded map[string]map[string]bool) int {
 	if rootCid == "" || rootCid == "0" {
 		return 0
 	}
@@ -296,6 +308,14 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 		rels = append(rels, rel)
 	}
 	cids := resolveDeepDelDirCids(ops, rootCid, rels)
+	// 去掉库名的目录 → 台账里的目录（uploaded 按后者记）
+	fullDir := map[string]string{}
+	for _, r := range rows {
+		rel := strings.Trim(filepath.ToSlash(r.RelPath), "/")
+		if i := strings.Index(rel, "/"); i > 0 {
+			fullDir[path.Dir(rel[i+1:])] = path.Dir(rel)
+		}
+	}
 
 	guard := map[string]bool{rootCid: true, "0": true}
 	for _, cid := range h.allOrgProtectedCids() {
@@ -318,6 +338,9 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 			if !prunableRoot(ops, cid, guard, rel, onLog) {
 				continue
 			}
+			if names := uploaded[fullDir[rel]]; len(names) > 0 {
+				dropUploadedLeftovers(ops, cid, rel, names)
+			}
 			n, _ := pruneEmptyDirTree(ops, cid, guard, 0, rel, onLog)
 			removed += n
 			continue
@@ -332,10 +355,10 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 // pruneDeepDelDirsByLib 多个媒体库时按台账路径的第一段（库名）分组，各从各的库根往下找目录。
 // 不分组的话 B 库的「电影/某片」会从主库根按名字去找，撞上主库里同名的目录（libroots.go）。
 // 只有一个库时照旧整批交给主库（老台账可能不带库名、或库改过名）
-func (h *Handler) pruneDeepDelDirsByLib(ops dirIO, rows []model.SyncedFile) int {
+func (h *Handler) pruneDeepDelDirsByLib(ops dirIO, rows []model.SyncedFile, uploaded map[string]map[string]bool) int {
 	cids := h.loadFullSyncCfg().libCids()
 	if len(cids) <= 1 {
-		return h.pruneDeepDelDirs(ops, firstNonEmpty(cids...), rows)
+		return h.pruneDeepDelDirs(ops, firstNonEmpty(cids...), rows, uploaded)
 	}
 	cookie, _ := h.get115Cookie()
 	roots, err := h.resolveConfiguredLibRoots(cookie)
@@ -349,9 +372,154 @@ func (h *Handler) pruneDeepDelDirsByLib(ops dirIO, rows []model.SyncedFile) int 
 	}
 	removed := 0
 	for _, g := range groups {
-		removed += h.pruneDeepDelDirs(ops, g.cid, g.rows)
+		removed += h.pruneDeepDelDirs(ops, g.cid, g.rows, uploaded)
 	}
 	return removed
+}
+
+// deepDelLeftover 片目删空后本站自己放上 115 的元数据，见 deepDelLeftovers
+type deepDelLeftover struct {
+	rows  []model.SyncedFile         // 台账里有、本地已不在的附属文件（增量把回传 NFO 的上传事件记进了台账）
+	names map[string]map[string]bool // 台账目录 → 只有上传指纹的文件名（图片的上传事件增量不处理，台账里没有）
+	marks []string                   // 这些文件的上传指纹，删完一起清
+}
+
+// deepDelLeftovers 被删视频所在目录里，本站自己回传上 115 的刮削产物（NFO / 图片）。
+//
+// 2026-10-22 现场：整理完刮削、回传 NFO 与图片，用户随即在 Emby 里删了这部片。
+// Emby 删掉了本地整个目录，深删只删了视频，网盘上的影片目录里还躺着 NFO 和四张图，
+// 空目录清理见到文件就整棵不动，目录永远留着。
+//
+// 只收这几种，范围卡死：目录里（直属）已经没有别的视频（台账与本地 STRM 都看）；
+// 文件本地已经不在（和深删的判据一样：本地没了才动网盘）；
+// 是本站传上去的（台账附属行，或带上传指纹的元数据文件名）。子目录不看
+func (h *Handler) deepDelLeftovers(root string, rows []model.SyncedFile) (out deepDelLeftover) {
+	if root == "" || h.DB == nil {
+		return
+	}
+	gone := map[string]bool{}
+	dirs := map[string]bool{}
+	for _, r := range rows {
+		gone[r.FileID] = true
+		if r.Kind == "video" {
+			if d := path.Dir(filepath.ToSlash(r.RelPath)); strings.Contains(d, "/") {
+				dirs[d] = true // 只有一段的是库根，不收
+			}
+		}
+	}
+	missing := func(abs string) bool {
+		_, err := os.Stat(abs)
+		return os.IsNotExist(err)
+	}
+	for d := range dirs {
+		localDir := filepath.Join(root, filepath.FromSlash(d))
+		// 本地目录里还有 STRM（台账外的也算）就是还有片在，不动
+		if ents, err := os.ReadDir(localDir); err == nil {
+			hasStrm := false
+			for _, e := range ents {
+				if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".strm") {
+					hasStrm = true
+					break
+				}
+			}
+			if hasStrm {
+				continue
+			}
+		} else if !os.IsNotExist(err) {
+			continue // 读不了就不下结论
+		}
+		var ledger []model.SyncedFile
+		if err := h.DB.Where(`rel_path LIKE ? ESCAPE '\'`, likeEscape(d)+"/%").Find(&ledger).Error; err != nil {
+			continue
+		}
+		var assets []model.SyncedFile
+		inLedger := map[string]bool{}
+		busy := false
+		for _, r := range ledger {
+			if path.Dir(r.RelPath) != d {
+				continue
+			}
+			inLedger[path.Base(r.RelPath)] = true
+			if gone[r.FileID] {
+				continue
+			}
+			if r.Kind == "video" {
+				busy = true // 同目录还有别的视频（平铺片目所在的分类目录、多版本只删了一个）
+				break
+			}
+			if r.OrphanAt == nil && r.FileID != "" && missing(filepath.Join(root, filepath.FromSlash(r.RelPath))) {
+				assets = append(assets, r)
+			}
+		}
+		if busy {
+			continue
+		}
+		out.rows = append(out.rows, assets...)
+
+		var marks []model.UploadMark
+		prefix := localDir + string(filepath.Separator)
+		if err := h.DB.Where(`path LIKE ? ESCAPE '\'`, likeEscape(prefix)+"%").Find(&marks).Error; err != nil {
+			continue
+		}
+		for _, m := range marks {
+			if filepath.Dir(m.Path) != localDir || !missing(m.Path) {
+				continue
+			}
+			name := filepath.Base(m.Path)
+			if !isMetadataUploadFile(name) && !isStandardMediaImageName(strings.ToLower(name)) {
+				continue
+			}
+			out.marks = append(out.marks, m.Path)
+			if inLedger[name] {
+				continue // 台账里有的按 fid 删，上面已经收了
+			}
+			if out.names == nil {
+				out.names = map[string]map[string]bool{}
+			}
+			if out.names[d] == nil {
+				out.names[d] = map[string]bool{}
+			}
+			out.names[d][name] = true
+		}
+	}
+	return
+}
+
+// dropUploadedLeftovers 在已核验身份的叶子目录里按名字删掉本站回传的元数据文件（不碰子目录）
+func dropUploadedLeftovers(ops dirIO, cid, label string, names map[string]bool) {
+	var fids, hit []string
+	offset := 0
+	for {
+		entries, total, err := ops.listEntries(cid, offset)
+		if err != nil {
+			log.Printf("[深度删除] ○ 读不出目录内容，回传的元数据留着: %s（%v）", label, err)
+			return
+		}
+		for _, e := range entries {
+			if fmt.Sprint(e["f"]) == "0" {
+				continue
+			}
+			if n := fmt.Sprint(e["n"]); names[n] {
+				if fid := fmt.Sprint(e["fid"]); fid != "" && fid != "<nil>" {
+					fids = append(fids, fid)
+					hit = append(hit, n)
+				}
+			}
+		}
+		offset += len(entries)
+		if len(entries) == 0 || offset >= total {
+			break
+		}
+	}
+	if len(fids) == 0 {
+		return
+	}
+	if err := ops.deleteFiles(fids); err != nil {
+		log.Printf("[深度删除] ✗ 删除回传的元数据失败 %s: %v", label, err)
+		return
+	}
+	log.Printf("[深度删除] ○ 已删除本站回传的元数据 %d 个: %s（%s，在 115 回收站，可还原）",
+		len(fids), label, strings.Join(hit, "、"))
 }
 
 // libRowGroup 同一个媒体库里的台账行

@@ -47,7 +47,7 @@ func (f *fakeDirIO) deleteFiles(fids []string) error {
 		for parent, ents := range f.dirs {
 			kept := ents[:0]
 			for _, e := range ents {
-				if fmt.Sprint(e["cid"]) != cid {
+				if fmt.Sprint(e["cid"]) != cid && fmt.Sprint(e["fid"]) != cid {
 					kept = append(kept, e)
 				}
 			}
