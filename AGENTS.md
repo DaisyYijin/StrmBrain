@@ -552,7 +552,7 @@ git tag v26.10.9 && git push origin v26.10.9
     - 站点没登录时是页面加载完才在前端跳 `/login`，判断登录态要等（`re0AwaitAuth`），别一打开就下结论。
     - 每次失败把截图与 HTML 存到 `DATA_DIR/cloakbrowser/debug`（留最近 20 个文件），排查先看这里。
       `CLOAKBROWSER_BINARY_PATH` 可以指定现成的浏览器（同官方包装层），调试用，不下载。
-    - 网页通道**没有文件预览**（`errRe0NoPreview`）：订阅遇到要花积分的 RE0 资源直接跳过、不自动解锁（维护者定的），免费 / 已解锁的照常。
+    - 网页通道**也有文件预览**（2026-10-22，`re0webpreview.go`；此前误以为没有，订阅一律不付费解锁）：资源页解锁前就显示文件列表，数据来自 `GET /api/customer/resources/{slug}/file-list`，在已登录的资源页里借站点的 `signedFetch` 调（`re0WebSignedJS`，与发布分享同一个），返回按 OpenAPI file-list 的字段认，订阅据此走和 OpenAPI 一样的付费解锁判定。**没读到预览（浏览器 / 登录 / 返回格式认不出）一律包成 `errRe0NoPreview`，订阅跳过、不退回按标题判**：看不到文件就不花积分（维护者定的），网页通道出错多半是站点改版、是整体性的，退回标题判会悄悄开始花积分。返回格式还没用真账号核对过，第一次跑看日志 `[RE0网页] 文件预览读到 N 个文件` 或返回原文。
     - 只做每日签到，不开放赌狗签到（同 OpenAPI 时的口径）。
     - 测试 `re0web_test.go`（RSC 解析、签到提示、分享链接、通道选择）/ `re0browser_test.go`（解压、装好判定、种子）；签名校验用的是 `testdata/cloak/` 里的真清单。
       页面流程没有自动化测试，站点改版后从日志 `[RE0网页]` 看卡在哪一步。

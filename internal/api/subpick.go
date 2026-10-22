@@ -345,7 +345,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				}
 				capMax, capLeft := c.paidCap(it.Source)
 				over := capMax <= 0 || cand.Paid > capMax || (capLeft >= 0 && cand.Paid > capLeft)
-				// 上限以内的先看文件预览（RE0 OpenAPI 的预览 / 癫影列表里自带的文件清单）：按真实文件名核对缺集与资源条件，标题没写的也能用、标题写了文件里却没有的也拦得住。
+				// 上限以内的先看文件预览（RE0 的预览，OpenAPI 与网页两条通道都有 / 癫影列表里自带的文件清单）：按真实文件名核对缺集与资源条件，标题没写的也能用、标题写了文件里却没有的也拦得住。
 				// 超限的不预览（只通知用户手动解锁，不值得多一次请求）
 				if !over && c.Re0Preview != nil {
 					covered, pwhy, err := c.Re0Preview(it)
@@ -358,9 +358,10 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 						cands = append(cands, cand)
 						continue
 					}
-					// 网页登录方式根本没有预览：看不到文件就不花积分（维护者定的），留给用户在找资源里手动解锁
+					// 网页通道没读到预览（浏览器 / 登录 / 站点改版）：看不到文件就不花积分（维护者定的），不退回按标题判，
+					// 留给用户在找资源里手动解锁
 					if errors.Is(err, errRe0NoPreview) {
-						c.skip("要花积分、网页登录方式看不到文件预览")
+						c.skip("要花积分、没读到 RE0 文件预览")
 						continue
 					}
 					// 预览不可用（没开放 / 这个网盘不支持 / 出错）：退回按标题判

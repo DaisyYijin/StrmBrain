@@ -198,14 +198,15 @@ func re0BodyKeys(body map[string]any) string {
 
 var re0StationIDRe = regexp.MustCompile(`/(movie|tv)/([A-Za-z0-9_-]{6,})(?:[/?#]|$)`)
 
-// re0WebShareJS 在页面里调站点自己的发布接口，**必须走站点的 signedFetch**（2026-10-18 现场：普通 fetch 带着 Cookie 与
+// re0WebSignedJS 在页面里调站点自己的接口（发布分享、读文件预览），**必须走站点的 signedFetch**（2026-10-18 现场：普通 fetch 带着 Cookie 与
 // X-CSRF-TOKEN 照样 401）。站点的请求客户端（axios + 自定义 adapter，app layout chunk）只对一小串白名单路径直接 fetch，
 // 其余 /api/ 一律 signedFetch：会话握手、请求签名、过期重握手都在里面，Go 这边重写不了，只能借它。
 // 它在 webpack 模块里（导出名 signedFetch），运行时没暴露模块缓存，只有工厂表 .m：按源码里的「signedFetch:()=>」找到模块 id 再
 // require——已经加载过的模块 require 直接返回同一份导出、不会重新执行；站点重新部署后 id 变了也照样找得到。
 // 401 且没有错误码时照站点的做法先 /api/public/auth/refresh 刷新登录态再重试一次（访问令牌过期就是这种）。
-// X-CSRF-TOKEN 照站点请求拦截器取 Cookie `csrf_access_token`
-const re0WebShareJS = `async (path, body) => {
+// X-CSRF-TOKEN 照站点请求拦截器取 Cookie `csrf_access_token`。
+// body 为 null 时发 GET（订阅读文件预览 /api/customer/resources/{slug}/file-list，re0webpreview.go），否则 POST JSON
+const re0WebSignedJS = `async (path, body) => {
   let req
   try {
     const chunks = self.webpackChunk_N_E
@@ -220,13 +221,16 @@ const re0WebShareJS = `async (path, body) => {
     try { const ex = req(id); if (ex && typeof ex.signedFetch === 'function') { sf = ex.signedFetch; break } } catch {}
   }
   if (!sf) return { status: 0, text: '页面里找不到站点的 signedFetch（站点可能改版）' }
+  const get = body == null
   const headers = () => {
-    const h = new Headers({ 'Content-Type': 'application/json', 'Accept': 'application/json, text/plain, */*' })
+    const h = new Headers({ 'Accept': 'application/json, text/plain, */*' })
+    if (!get) h.set('Content-Type', 'application/json')
     const m = document.cookie.match(/(?:^|;\s*)csrf_access_token=([^;]+)/)
     if (m) h.set('X-CSRF-TOKEN', decodeURIComponent(m[1]))
     return h
   }
-  const send = () => sf(path, { method: 'POST', credentials: 'include', headers: headers(), body: JSON.stringify(body) })
+  const send = () => sf(path, get ? { method: 'GET', credentials: 'include', headers: headers() }
+    : { method: 'POST', credentials: 'include', headers: headers(), body: JSON.stringify(body) })
   try {
     let r = await send()
     if (r.status === 401) {
@@ -293,7 +297,7 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 		}
 		// 同站点表单：先让站点解析一遍链接（check/resource），用它规范化过的链接与访问码。失败不影响发布
 		re0Step("检查分享链接")
-		if r, err := p.Eval(re0WebShareJS, "/api/customer/check/resource", map[string]any{"url": body["url"]}); err == nil &&
+		if r, err := p.Eval(re0WebSignedJS, "/api/customer/check/resource", map[string]any{"url": body["url"]}); err == nil &&
 			r.Value.Get("status").Int() == http.StatusOK {
 			var chk struct {
 				Data struct {
@@ -318,7 +322,7 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 			}
 		}
 		re0Step("提交分享")
-		res, err := p.Eval(re0WebShareJS, "/api/customer/resources", body)
+		res, err := p.Eval(re0WebSignedJS, "/api/customer/resources", body)
 		if err != nil {
 			return fmt.Errorf("页面里调用发布接口失败: %v", err)
 		}

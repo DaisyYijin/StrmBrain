@@ -1018,7 +1018,11 @@ func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool
 		subLane.setSub("预览 RE0 文件", 0, 0, truncateStr(it.Title, 40))
 		p, err := r.re0Files(it.Ref)
 		if err != nil {
-			log.Printf("[订阅] ○ 《%s》RE0 文件预览不可用，按标题判「%s」: %v", sub.Title, truncateStr(it.Title, 50), err)
+			then := "按标题判"
+			if errors.Is(err, errRe0NoPreview) {
+				then = "不花积分" // subpick 里跳过，不按标题判
+			}
+			log.Printf("[订阅] ○ 《%s》RE0 文件预览不可用，%s「%s」: %v", sub.Title, then, truncateStr(it.Title, 50), err)
 			return nil, "", err
 		}
 		if p.Invalid != "" {

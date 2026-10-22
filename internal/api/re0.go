@@ -22,7 +22,7 @@ package api
 //
 // 2026-10-14 起 RE0 不再开放 OpenAPI 申请，新增「网页登录」通道（re0browser.go / re0web.go：
 // 账号密码 + CloakBrowser）。OpenAPI 保留为第二通道：已授权的继续走 OpenAPI，其余走网页（re0Channel）。
-// 网页通道拿不到文件预览（errRe0NoPreview），订阅因此不自动付费解锁
+// 网页通道的文件预览借站点页面里的 signedFetch 读（re0webpreview.go），读不到时订阅不付费解锁（errRe0NoPreview）
 
 import (
 	"bytes"
@@ -82,8 +82,9 @@ func re0Channel(cfg *re0Cfg) string {
 	return ""
 }
 
-// errRe0NoPreview 网页通道没有「不解锁先看文件」的数据：订阅据此不自动付费解锁（维护者定的）
-var errRe0NoPreview = errors.New("网页登录方式看不到 RE0 文件预览")
+// errRe0NoPreview 网页通道没读到文件预览（浏览器 / 登录 / 站点改版）：订阅据此不自动付费解锁，不退回按标题判——
+// 「看不到文件就不花积分」是维护者定的；网页通道出错多半是整体的（站点改版），退回标题判会悄悄开始花积分
+var errRe0NoPreview = errors.New("没读到 RE0 文件预览")
 
 // maskIfSet 有值就回掩码（界面原样回传 = 没改）
 func maskIfSet(v string) string {
@@ -914,9 +915,7 @@ type re0PreviewHit struct {
 
 // re0PreviewFiles 预览一条资源的文件列表（带缓存）。预览没开 / 这个网盘不支持预览时返回错误，调用方退回按标题判
 func re0PreviewFiles(h *Handler, slug string) (*re0Preview, error) {
-	if re0Channel(loadRe0Cfg()) == "web" {
-		return nil, errRe0NoPreview
-	}
+	web := re0Channel(loadRe0Cfg()) == "web"
 	now := time.Now()
 	re0PreviewCache.Lock()
 	if hit, ok := re0PreviewCache.m[slug]; ok {
@@ -931,11 +930,16 @@ func re0PreviewFiles(h *Handler, slug string) (*re0Preview, error) {
 	}
 	re0PreviewCache.Unlock()
 
-	var raw json.RawMessage
-	err := re0Call(h, loadRe0Cfg(), http.MethodGet, "/api/open/resources/file-list/"+url.PathEscape(slug), nil, nil, &raw)
 	var p *re0Preview
-	if err == nil {
-		p, err = parseRe0Preview(raw)
+	var err error
+	if web {
+		p, err = re0WebPreviewFiles(slug)
+	} else {
+		var raw json.RawMessage
+		err = re0Call(h, loadRe0Cfg(), http.MethodGet, "/api/open/resources/file-list/"+url.PathEscape(slug), nil, nil, &raw)
+		if err == nil {
+			p, err = parseRe0Preview(raw)
+		}
 	}
 	// 限流 / 授权问题不缓存：过一会儿或重新授权后就该能用
 	if err == nil || !(strings.Contains(err.Error(), "限流") || errors.Is(err, errRe0Reauth)) {
