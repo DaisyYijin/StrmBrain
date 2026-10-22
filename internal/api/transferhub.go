@@ -686,24 +686,24 @@ func resRelevant(q resQuery, title string) bool {
 // 用户在洗版 YAML 里写过「更想要哪种版本」，找资源时正好拿来用。
 // 搜索时还不知道会整理进哪个分类，先找不限分类的策略，没有就退到同类型的第一条
 func resWashRank(mediaType, title string) int {
-	st := matchWashStrategy(mediaType, "")
-	if st == nil {
-		for _, s := range washStrategyCache() {
-			if s.MediaType == "" || s.MediaType == mediaType {
-				st = &s
-				break
-			}
-		}
-	}
+	st := washStrategyForType(mediaType)
 	if st == nil {
 		return -1
 	}
-	for i, r := range st.PriorityLevel {
-		if ruleMatch(title, r) {
-			return i
+	return washTier(title, st.PriorityLevel)
+}
+
+// washStrategyForType 还不知道分类时用哪条洗版策略：不限分类的，没有就同类型的第一条
+func washStrategyForType(mediaType string) *washStrategy {
+	if st := matchWashStrategy(mediaType, ""); st != nil {
+		return st
+	}
+	for _, s := range washStrategyCache() {
+		if s.MediaType == "" || s.MediaType == mediaType {
+			return &s
 		}
 	}
-	return -1
+	return nil
 }
 
 // resNormalize 统一补齐标签、相关性、洗版排名，并过滤掉进不了 115 的资源

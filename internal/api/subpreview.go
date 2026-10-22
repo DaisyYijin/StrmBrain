@@ -112,7 +112,7 @@ func (r *subRunner) previewShares(sub *model.Subscription, cands []subCand, miss
 		c.Reach, c.Span = maxEpKey(pick.Covered), pick.Episodes
 		out = append(out, c)
 	}
-	sortSubCandidates(out)
+	sortSubCandidates(out, r.priorityOf(sub))
 	return out, true
 }
 

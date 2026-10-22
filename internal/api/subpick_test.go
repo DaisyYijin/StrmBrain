@@ -50,13 +50,13 @@ func TestPlanSubCandidates(t *testing.T) {
 		share("剧 第二季 全集", "https://115.com/s/aaa", -1),                                                                          // 覆盖 2 集
 		share("剧 S02E05", "https://115.com/s/bbb", 0),                                                                           // 覆盖 1 集，排名好
 		share("剧 S01 1080p", "https://115.com/s/ccc", 0),                                                                        // 写明第 1 季：缺的不在里面
-		share("剧 2023 4K", "https://115.com/s/ddd", 0),                                                                          // 估计不出：留着，排后面
+		share("剧 2023 1080p", "https://115.com/s/ddd", 0),                                                                       // 估计不出：留着，排后面
 		share("剧 第二季 枪版", "https://115.com/s/eee", 0),                                                                           // 排除词
 		{Source: "pansou", Kind: "share115", Action: "transfer", Title: "剧 S02", URL: "https://115.com/s/fff", Relevant: false}, // 不相关
 		{Source: "tg", Kind: "magnet", Action: "offline", Title: "剧 2023", URL: "magnet:?xt=urn:btih:2222222222222222222222222222222222222222", Relevant: true}, // 离线估计不出
 		{Source: "tg", Kind: "magnet", Action: "offline", Title: "剧 S02E06", URL: "magnet:?xt=urn:btih:3333333333333333333333333333333333333333", Relevant: true},
 		share("剧 第二季 试过的", "https://115.com/s/ggg", 0),
-		share("剧 第二季 连载过一天了", "https://115.com/s/hhh", 0),
+		share("剧 第二季 连载过一天了 2160p", "https://115.com/s/hhh", 0),
 		{Source: "pan", Kind: "pan", Action: "open", Title: "剧 第二季", URL: "https://pan.baidu.com/s/x", Relevant: true},
 	}
 	past := now.Add(-time.Hour)
@@ -69,14 +69,15 @@ func TestPlanSubCandidates(t *testing.T) {
 			"hhh": {Status: subAttemptUseless, RetryAt: &past},
 		},
 		Re0Left: -1,
+		Prio:    subPriority{Rules: []washRule{{ResourcePix: "2160p"}}},
 	}
 	cands, over := planSubCandidates(items, ctx)
 	var got []string
 	for _, c := range cands {
 		got = append(got, c.Item.Title)
 	}
-	// 覆盖一样多时洗版排名好的在前（全集那条没命中规则）
-	want := []string{"剧 第二季 连载过一天了", "剧 第二季 全集", "剧 S02E05", "剧 S02E06", "剧 2023 4K"}
+	// 达标的（命中第 1 条规则）最前；其余覆盖多的在前
+	want := []string{"剧 第二季 连载过一天了 2160p", "剧 第二季 全集", "剧 S02E05", "剧 S02E06", "剧 2023 1080p"}
 	if !reflect.DeepEqual(got, want) || len(over) != 0 {
 		t.Fatalf("候选 = %v, want %v（over %d）", got, want, len(over))
 	}

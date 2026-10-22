@@ -138,7 +138,7 @@ func TestSortSubCandidatesReachSpan(t *testing.T) {
 	for i := range cs {
 		cs[i].Item = ResourceItem{Kind: "share115", Action: "transfer"}
 	}
-	sortSubCandidates(cs)
+	sortSubCandidates(cs, subPriority{})
 	var got []string
 	for _, c := range cs {
 		got = append(got, c.Hash)

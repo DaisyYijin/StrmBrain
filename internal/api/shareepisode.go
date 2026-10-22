@@ -26,8 +26,8 @@ type sharePickOpts struct {
 	// Remap 全剧连续编号换算（S01E166 → S07E22），接 absepisode.go；key 是条目 ID。nil = 不换
 	Remap    func(eps map[string]*ParsedName)
 	HaveSha1 func(sha1 string) bool // 库里已经有这一份（台账 sha1）
-	// Rank 文件名的洗版排名（resWashRank），越小越好、-1 = 没命中；nil 时只比体积
-	Rank func(name string) int
+	// Compare 两个文件名谁更好（subPriority.compare，和整理时洗版同一套）：>0 a 更好；nil 时只比体积
+	Compare func(a, b string) int
 	// Accept 资源条件（subCond.fileOK）：hasSub = 同目录有跟着它的字幕。nil = 不限
 	Accept func(e shareEntry, hasSub bool) (bool, string)
 	// MaxEps 剧集最多挑几集（订阅一轮的集数上限还剩多少），超了留集号靠前的；0 = 不限。
@@ -71,22 +71,16 @@ func (p sharePick) summary() string {
 }
 
 type shareVideo struct {
-	e    shareEntry
-	eps  []epKey
-	rank int
+	e   shareEntry
+	eps []epKey
 }
 
-// better a 比 b 更值得要：洗版排名小的优先（没命中的最后），一样就要大的
-func (a shareVideo) better(b shareVideo) bool {
-	ra, rb := a.rank, b.rank
-	if ra < 0 {
-		ra = 1 << 30
-	}
-	if rb < 0 {
-		rb = 1 << 30
-	}
-	if ra != rb {
-		return ra < rb
+// better a 比 b 更值得要：画质好的优先（cmp 为 nil 不比），分不出就要大的
+func (a shareVideo) better(b shareVideo, cmp func(a, b string) int) bool {
+	if cmp != nil {
+		if c := cmp(a.e.Name, b.e.Name); c != 0 {
+			return c > 0
+		}
 	}
 	return a.e.Size > b.e.Size
 }
@@ -135,17 +129,13 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 				continue
 			}
 		}
-		rank := -1
-		if o.Rank != nil {
-			rank = o.Rank(e.Name)
-		}
-		vids = append(vids, shareVideo{e: e, rank: rank})
+		vids = append(vids, shareVideo{e: e})
 	}
 
 	var chosen []shareVideo
 	if o.MediaType == "movie" {
 		for _, v := range vids {
-			if len(chosen) == 0 || v.better(chosen[0]) {
+			if len(chosen) == 0 || v.better(chosen[0], o.Compare) {
 				chosen = []shareVideo{v}
 			}
 		}
@@ -220,7 +210,7 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 		}
 	}
 	// 好的在前，然后逐个认领还没被认领的缺集
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].better(cands[j]) })
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].better(cands[j], o.Compare) })
 	taken := map[epKey]bool{}
 	var out []shareVideo
 	for _, v := range cands {

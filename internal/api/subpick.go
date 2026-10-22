@@ -109,6 +109,8 @@ type subCand struct {
 	// Stale 发布时间早于缺集里最早那集的播出日：不可能有缺的集（「持续更新」的分享内容会变，所以只排后、不丢）
 	Stale bool
 	Paid  int // 要花的积分（RE0 / 癫影，看 Item.Source；0 = 不花）
+	// Top 标题达标：命中洗版策略第 1 条规则（subpriority.go）。达标的排最前，都不达标先补集数
+	Top bool
 	// Exact RE0 文件预览核实过、这条资源能补上的集（电影是一个零值）；nil = 没预览过，覆盖按标题估计
 	Exact []epKey
 }
@@ -149,6 +151,8 @@ type subPickCtx struct {
 	Exclude []string // 内置排除词 + 订阅自己的
 	Include []string
 	Cond    subCond // 资源条件（subcond.go）
+	// Prio 资源优先级（subpriority.go）：达标与画质比较，和整理时洗版同一套
+	Prio subPriority
 	// Identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
 	Identity *subIdentity
 	Re0Max   int // RE0 单条自动解锁上限，0 = 不自动解锁
@@ -281,7 +285,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			c.skip("磁力" + why)
 			continue
 		}
-		cand := subCand{Item: it, Hash: hash}
+		cand := subCand{Item: it, Hash: hash, Top: c.Prio.top(it.Title)}
 		cand.Stale = !movie && !earliestAir.IsZero() && it.TimeUnix > 0 && time.Unix(it.TimeUnix, 0).Before(earliestAir)
 		if movie {
 			cand.Covers = 1
@@ -381,7 +385,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		}
 		cands = append(cands, cand)
 	}
-	sortSubCandidates(cands)
+	sortSubCandidates(cands, c.Prio)
 	return cands, overLimit
 }
 
@@ -394,19 +398,18 @@ func containsAnyKeyword(lower string, kws []string) bool {
 	return false
 }
 
-// sortSubCandidates 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
+// sortSubCandidates 达标的在前（命中洗版策略第 1 条）→ 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
 // 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 → 补到的集更接近最新已播出的在前 → 集数多的在前 →
-// 洗版排名好的在前（没命中的最后）→ 新的在前。
+// 画质好的在前（prio.compare，和整理时洗版同一套）→ 新的在前。
+// 达标放最前是维护者定的（2026-10-22）：有达标的就要达标的；都不达标时第一关打平，就是先补集数、再看画质。
+// 一轮里先试的先占集，后面的只补还缺的，所以达标的单集分享排在不达标的合集前面，合集只补剩下的集。
 // 别整体改成按时间倒序：一轮按集数限额、先提交的先占集，补老集时会让新发的低画质资源抢在高画质合集前面
-func sortSubCandidates(cs []subCand) {
-	rank := func(r int) int {
-		if r < 0 {
-			return 1 << 30
-		}
-		return r
-	}
+func sortSubCandidates(cs []subCand, prio subPriority) {
 	sort.SliceStable(cs, func(i, j int) bool {
 		a, b := cs[i], cs[j]
+		if a.Top != b.Top {
+			return a.Top
+		}
 		if a.Covers != b.Covers {
 			return a.Covers > b.Covers
 		}
@@ -425,8 +428,8 @@ func sortSubCandidates(cs []subCand) {
 		if a.Span != b.Span {
 			return a.Span > b.Span
 		}
-		if ra, rb := rank(a.Item.Rank), rank(b.Item.Rank); ra != rb {
-			return ra < rb
+		if c := prio.compare(a.Item.Title, b.Item.Title); c != 0 {
+			return c > 0
 		}
 		return a.Item.TimeUnix > b.Item.TimeUnix
 	})

@@ -127,12 +127,7 @@ func TestPickShareEpisodesTV(t *testing.T) {
 		MediaType: "tv",
 		Missing:   missing,
 		HaveSha1:  func(s string) bool { return s == "INLIB" },
-		Rank: func(name string) int {
-			if strings.Contains(name, "2160p") {
-				return 0
-			}
-			return -1
-		},
+		Compare:   subPriority{Rules: []washRule{{ResourcePix: "2160p"}}}.compare,
 	})
 	want := []string{"a2", "b1", "b1t", "b2b", "b2bs", "b34"}
 	if got := pickIDs(p); !reflect.DeepEqual(got, want) {

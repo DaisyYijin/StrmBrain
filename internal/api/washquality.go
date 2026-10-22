@@ -116,6 +116,8 @@ func qualityUnder(name string, r *washRule) washQuality {
 		return q
 	}
 	lname := strings.ToLower(name)
+	ri := ParseResourceInfo(name)
+	vals := [wqDims]string{ri.Pix, ri.Type, ri.Effect, ri.VideoEncode} // 与 ruleMatch 各字段用的归一值同源
 	for d := 0; d < wqDims; d++ {
 		ceil := 0
 		for _, part := range strings.Split(ruleFieldOf(r, d), ",") {
@@ -123,9 +125,9 @@ func qualityUnder(name string, r *washRule) washQuality {
 			if part == "" || strings.HasPrefix(part, "!") {
 				continue
 			}
-			// 命中判断与 matchField 同口径（子串），值本身的分按同一套默认排序算；
+			// 命中判断与 matchField 同口径（condTokenHit），值本身的分按同一套默认排序算；
 			// 默认排序里认不出的值（UHD、发布组之类）不设上限，否则这一维被抹成 0
-			if strings.Contains(lname, strings.ToLower(part)) {
+			if condTokenHit(lname, strings.ToLower(vals[d]), strings.ToLower(part)) {
 				if v := qualityOf(part)[d]; v > ceil {
 					ceil = v
 				}

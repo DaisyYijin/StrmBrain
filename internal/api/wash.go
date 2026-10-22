@@ -142,6 +142,10 @@ func ruleMatch(name string, r washRule) bool {
 
 // matchField 单字段匹配（CMS 语义）：逗号分隔多值——
 //
+// 一个词怎样算命中走 condTokenHit（2026-10-22 起，订阅与整理同一套，维护者定的）：包含在解析出的归一值里，
+// 或者在名字里单独出现（前后不挨字母数字）。原来是对整个名字做子串查找：DV 命中 DVDRip、!TS 把 Ghosts 排掉；
+// 订阅拿的是资源站标题，比改过名的文件名乱得多，误判更多。WEB 照样命中 WEBRip（归一值里有），HDR 照样命中 HDR10
+//
 //	"2160p,4k"    = 命中任一正值即通过（正值间 OR）
 //	"!DV,!DV.HDR" = 任一排除词命中即不通过（负值间 AND NOT）
 //	混合时：先看排除（命中即否），再看正值（命中任一即是），全未命中且存在正值则否
@@ -163,7 +167,7 @@ func matchField(name, cond, value string) bool {
 		if want == "" {
 			continue
 		}
-		hit := strings.Contains(lname, want) || strings.Contains(lvalue, want)
+		hit := condTokenHit(lname, lvalue, want)
 		if strings.HasPrefix(part, "!") {
 			if hit {
 				return false // 命中排除词

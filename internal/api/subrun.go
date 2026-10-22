@@ -596,7 +596,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		Cond:    subCondOf(r.cfg, sub.Cond), Identity: identity,
 		Re0Max: r.cfg.Re0UnlockMax, Re0Left: r.re0Left, DianMax: r.cfg.DianUnlockMax, DianLeft: r.dianLeft,
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
-		MissingAir: ev.MissingAir, Skipped: map[string]int{},
+		MissingAir: ev.MissingAir, Skipped: map[string]int{}, Prio: r.priorityOf(sub),
 	}
 	pctx.Re0Preview = r.re0PreviewFn(sub, missing)
 	cands, over := planSubCandidates(items, pctx)
@@ -971,12 +971,17 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	return *att, covered
 }
 
+// priorityOf 这个订阅的资源优先级（subpriority.go）
+func (r *subRunner) priorityOf(sub *model.Subscription) subPriority {
+	return subPriorityOf(sub.MediaType)
+}
+
 // sharePickOpts 从分享里按集挑文件的条件：真正转存（tryShare）与 RE0 解锁前的文件预览共用，两边判得一样
 func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, missing map[epKey]bool) sharePickOpts {
 	opts := sharePickOpts{
 		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
 		HaveSha1: subLedgerHasSha1,
-		Rank:     func(n string) int { return resWashRank(sub.MediaType, n) },
+		Compare:  r.priorityOf(sub).compare,
 	}
 	if cond := subCondOf(r.cfg, sub.Cond); !cond.empty() {
 		title, tags := it.Title, it.Tags
