@@ -431,6 +431,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		protected.POST("/guanying/config", h.GySaveConfig)
 		protected.POST("/guanying/login", h.GyLogin)
+		protected.POST("/guanying/captcha", h.GyCaptcha)
 		protected.POST("/guanying/logout", h.GyLogout)
 
 		// 影视转存 · RE0（官方 OpenAPI：OAuth 用户授权）

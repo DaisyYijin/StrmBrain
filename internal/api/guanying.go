@@ -7,8 +7,8 @@ package api
 //     需 GET /res/pow 取挑战 {N,x,t}，计算 y = x^(2^t) mod N（t 次平方），
 //     POST 回 /res/pow 换取放行 Cookie（RSW 工作量证明，Go big.Int 可解）
 //  2. 站内登录：搜索/详情仅登录用户可见，表单 POST /user/login
-//     （username/password/cookietime；服务端可能校验验证码，失败时
-//     请改用浏览器 Cookie 导入）
+//     （username/password/cookietime；账号输错过密码 / 风控时站点要点选验证码，
+//     响应带 captcha，界面弹图让用户点一次，见下面「点选验证码」）
 //
 // 集成方式：账号密码登录（Cookie 持久化，站点会话过期自动重登）→
 // 搜索页/详情页 HTML 里按网盘域名提取链接 → 115 链接一键转存入库。
@@ -17,6 +17,7 @@ package api
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -287,13 +288,31 @@ func gyLoggedIn(client *http.Client, base string) (bool, error) {
 	return !gyIsNoLogin(body), nil
 }
 
+// errGyCaptcha 站点要求点选验证码才能登录（同一账号输错过密码 / 风控时会要）。
+// 这种验证码要人看图点字，后台自动重登过不了，只能由用户在设置页点一次
+type errGyCaptcha struct{ msg string }
+
+func (e *errGyCaptcha) Error() string { return e.msg }
+
+// gyNeedCaptcha 登录响应里的 captcha 字段：站点前端 `if(r.captcha)` 就弹验证码，
+// 值是数字还是字符串没定，按 JS 的真值认
+func gyNeedCaptcha(raw json.RawMessage, msg string) bool {
+	v := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if v != "" && v != "0" && v != "false" && v != "null" {
+		return true
+	}
+	return strings.Contains(msg, "验证码")
+}
+
 // gyLoginOnce 账号密码登录。
 // 真实请求格式（从站点前端 loginm.post 逆向）：表单
-// code=<验证码可空>&siteid=1&dosubmit=1&username=&password=&cookietime=10506240，
-// 响应为 JSON {code, msg}（非 200=失败，msg 为站点原文，如「账号不存在」）
-func gyLoginOnce(client *http.Client, base, username, password string) error {
+// code=<验证码>&siteid=1&dosubmit=1&username=&password=&cookietime=10506240，
+// 响应为 JSON {code, msg, captcha?}（非 200=失败，msg 为站点原文，如「账号不存在」）。
+// code 是点选验证码的结果串（gyCaptchaCheck 核过的那一串），不要求验证码时为空；
+// 响应带 captcha 时返回 *errGyCaptcha，交给界面弹验证码
+func gyLoginOnce(client *http.Client, base, username, password, code string) error {
 	form := url.Values{
-		"code":       {""},
+		"code":       {code},
 		"siteid":     {"1"},
 		"dosubmit":   {"1"},
 		"username":   {username},
@@ -301,35 +320,42 @@ func gyLoginOnce(client *http.Client, base, username, password string) error {
 		"cookietime": {"10506240"},
 	}
 	hdrs := map[string]string{"X-Requested-With": "XMLHttpRequest"}
+	type loginResp struct {
+		Code    int             `json:"code"`
+		Msg     string          `json:"msg"`
+		Captcha json.RawMessage `json:"captcha"`
+	}
+	judge := func(jr loginResp) error {
+		if jr.Code == 200 || jr.Code == 0 {
+			return nil
+		}
+		if gyNeedCaptcha(jr.Captcha, jr.Msg) {
+			return &errGyCaptcha{msg: jr.Msg}
+		}
+		return fmt.Errorf("%s", jr.Msg)
+	}
 	body, err := gyDoReq(client, base, http.MethodPost, "/user/login", form, hdrs)
 	if err != nil {
 		return err
 	}
-	// 成功：JSON {code:200,...}；失败：code=403/其他，msg 为站点原文
-	var jr struct {
-		Code int    `json:"code"`
-		Msg  string `json:"msg"`
-	}
+	var jr loginResp
 	if json.Unmarshal([]byte(body), &jr) == nil && jr.Msg != "" {
-		if jr.Code == 200 || jr.Code == 0 {
-			return nil
-		}
-		// 验证过期类报错 → 重过一次 PoW 再试登录
-		if strings.Contains(jr.Msg, "验证") || strings.Contains(body, "powSolve") {
-			if err := gyPow(client, base); err == nil {
-				body, err = gyDoReq(client, base, http.MethodPost, "/user/login", form, hdrs)
-				if err != nil {
-					return err
+		err := judge(jr)
+		// 浏览器验证过期类报错 → 重过一次 PoW 再试登录（验证码那种不算，重试也是同一个结果）
+		var ce *errGyCaptcha
+		if err != nil && !errors.As(err, &ce) && (strings.Contains(jr.Msg, "验证") || strings.Contains(body, "powSolve")) {
+			if gyPow(client, base) == nil {
+				body, err2 := gyDoReq(client, base, http.MethodPost, "/user/login", form, hdrs)
+				if err2 != nil {
+					return err2
 				}
-				if json.Unmarshal([]byte(body), &jr) == nil && jr.Msg != "" {
-					if jr.Code == 200 || jr.Code == 0 {
-						return nil
-					}
-					return fmt.Errorf("%s", jr.Msg)
+				var jr2 loginResp
+				if json.Unmarshal([]byte(body), &jr2) == nil && jr2.Msg != "" {
+					return judge(jr2)
 				}
 			}
 		}
-		return fmt.Errorf("%s", jr.Msg)
+		return err
 	}
 	// 非 JSON 响应（异常情况）→ 回退会话探测
 	ok, err := gyLoggedIn(client, base)
@@ -338,6 +364,95 @@ func gyLoginOnce(client *http.Client, base, username, password string) error {
 	}
 	if !ok {
 		return fmt.Errorf("登录未通过（站点响应异常）")
+	}
+	return nil
+}
+
+// ==================== 点选验证码 ====================
+//
+// 站点前端 captcha-*.js：POST /res/captcha/2 {webp} 取图 {type, img(base64), text}，
+// 用户在 350×200 的画布上依次点 text 里的字，结果串「x1,y1-x2,y2-…;宽;高」先
+// POST /res/captcha/2 {do:check, info} 核对（code=200 才算过），再作为登录表单的 code 提交。
+// 验证码绑定在会话 Cookie 上，所以取图、核对、登录必须用同一个 Jar：
+// 弹验证码那次登录的 Jar 暂存在这里，用户点完再接着用
+
+const (
+	gyCaptchaPath = "/res/captcha/2"
+	gyCaptchaW    = 350 // 站点 PC 端画布尺寸，坐标按它换算
+	gyCaptchaH    = 200
+)
+
+var (
+	gyPendMu  sync.Mutex
+	gyPendJar *gyJar
+	gyPendAt  time.Time
+)
+
+func gyPendSet(jar *gyJar) {
+	gyPendMu.Lock()
+	gyPendJar, gyPendAt = jar, time.Now()
+	gyPendMu.Unlock()
+}
+
+// gyPendGet 取暂存的会话；超过 10 分钟的作废（站点那边的验证码早过期了）
+func gyPendGet() *gyJar {
+	gyPendMu.Lock()
+	defer gyPendMu.Unlock()
+	if gyPendJar == nil || time.Since(gyPendAt) > 10*time.Minute {
+		return nil
+	}
+	return gyPendJar
+}
+
+// gyCaptchaImg 一张验证码：Img 是 data URL，Text 是要依次点的字
+type gyCaptchaImg struct {
+	Img  string `json:"img"`
+	Text string `json:"text"`
+	W    int    `json:"w"`
+	H    int    `json:"h"`
+}
+
+func gyCaptchaFetch(client *http.Client, base string) (*gyCaptchaImg, error) {
+	hdrs := map[string]string{"X-Requested-With": "XMLHttpRequest"}
+	body, err := gyDoReq(client, base, http.MethodPost, gyCaptchaPath, url.Values{"webp": {""}}, hdrs)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+		Img  string `json:"img"`
+	}
+	if json.Unmarshal([]byte(body), &r) != nil || r.Img == "" || r.Text == "" {
+		// 前端对取图失败的提示就是这句
+		return nil, fmt.Errorf("取验证码失败（请求太频繁，请稍后再试）: %s", truncateStr(body, 100))
+	}
+	if r.Type == "" {
+		r.Type = "jpeg"
+	}
+	return &gyCaptchaImg{Img: "data:image/" + r.Type + ";base64," + r.Img, Text: r.Text, W: gyCaptchaW, H: gyCaptchaH}, nil
+}
+
+// gyCaptchaInfo 把界面点的坐标（已换算到 350×200）拼成站点要的结果串
+func gyCaptchaInfo(points [][2]int) string {
+	xy := make([]string, len(points))
+	for i, p := range points {
+		xy[i] = strconv.Itoa(p[0]) + "," + strconv.Itoa(p[1])
+	}
+	return strings.Join(xy, "-") + ";" + strconv.Itoa(gyCaptchaW) + ";" + strconv.Itoa(gyCaptchaH)
+}
+
+func gyCaptchaCheck(client *http.Client, base, info string) error {
+	hdrs := map[string]string{"X-Requested-With": "XMLHttpRequest"}
+	body, err := gyDoReq(client, base, http.MethodPost, gyCaptchaPath, url.Values{"do": {"check"}, "info": {info}}, hdrs)
+	if err != nil {
+		return err
+	}
+	var r struct {
+		Code int `json:"code"`
+	}
+	if json.Unmarshal([]byte(body), &r) != nil || r.Code != 200 {
+		return &errGyCaptcha{msg: "未点中正确区域，请重试"}
 	}
 	return nil
 }
@@ -571,13 +686,16 @@ func (h *Handler) GySaveConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
-// GyLogin POST /guanying/login {base_url?, username, password}
-// 保存凭据 → 过 PoW → 表单登录 → 会话 Cookie 持久化
+// GyLogin POST /guanying/login {base_url?, username, password, captcha?}
+// 保存凭据 → 过 PoW → 表单登录 → 会话 Cookie 持久化。
+// 站点要验证码时回 409 {need_captcha, captcha:{img,text,w,h}}，界面让用户点完，
+// 带 captcha（按 350×200 换算好的坐标）再调一次，沿用弹验证码那次的会话
 func (h *Handler) GyLogin(c *gin.Context) {
 	var req struct {
-		BaseURL  string `json:"base_url"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		BaseURL  string   `json:"base_url"`
+		Username string   `json:"username"`
+		Password string   `json:"password"`
+		Captcha  [][2]int `json:"captcha"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	// 请求里没带的一律用已保存的：前端「登录」按钮先保存配置再调这里，
@@ -598,12 +716,41 @@ func (h *Handler) GyLogin(c *gin.Context) {
 	}
 
 	jar := &gyJar{m: map[string]string{}}
+	code := ""
+	if len(req.Captcha) > 0 {
+		if jar = gyPendGet(); jar == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "验证码已过期，请重新点登录"})
+			return
+		}
+		code = gyCaptchaInfo(req.Captcha)
+	}
 	client := gyClient(jar)
-	if err := gyLoginOnce(client, cfg.BaseURL, cfg.Username, cfg.Password); err != nil {
+	err := error(nil)
+	if code != "" {
+		err = gyCaptchaCheck(client, cfg.BaseURL, code)
+	}
+	if err == nil {
+		err = gyLoginOnce(client, cfg.BaseURL, cfg.Username, cfg.Password, code)
+	}
+	var ce *errGyCaptcha
+	if errors.As(err, &ce) {
+		img, ierr := gyCaptchaFetch(client, cfg.BaseURL)
+		if ierr != nil {
+			log.Printf("[观影] ✗ 登录要验证码，但%v", ierr)
+			c.JSON(http.StatusBadGateway, gin.H{"error": ierr.Error()})
+			return
+		}
+		gyPendSet(jar)
+		log.Printf("[观影] ○ 登录要验证码（%s），等用户点选", ce.msg)
+		c.JSON(http.StatusConflict, gin.H{"error": ce.msg, "need_captcha": true, "captcha": img})
+		return
+	}
+	if err != nil {
 		log.Printf("[观影] ✗ 登录失败: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	gyPendSet(nil)
 	cfg.Cookies = jar.m
 	if err := saveGyCfg(cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存会话失败: " + err.Error()})
@@ -611,6 +758,23 @@ func (h *Handler) GyLogin(c *gin.Context) {
 	}
 	log.Printf("[观影] ✓ 登录成功（%s）", cfg.Username)
 	c.JSON(http.StatusOK, gin.H{"message": "登录成功"})
+}
+
+// GyCaptcha POST /guanying/captcha：验证码框里「换一张」，沿用弹验证码那次的会话取新图
+// （重新点登录也能换，但那会多算一次登录失败）
+func (h *Handler) GyCaptcha(c *gin.Context) {
+	jar := gyPendGet()
+	if jar == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "验证码已过期，请重新点登录"})
+		return
+	}
+	img, err := gyCaptchaFetch(gyClient(jar), loadGyCfg().BaseURL)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	gyPendSet(jar)
+	c.JSON(http.StatusOK, img)
 }
 
 // GyLogout POST /guanying/logout → 清空会话
@@ -632,7 +796,11 @@ func gyAutoLogin(cfg *gyCfg) error {
 	}
 	jar := &gyJar{m: map[string]string{}}
 	client := gyClient(jar)
-	if err := gyLoginOnce(client, cfg.BaseURL, cfg.Username, cfg.Password); err != nil {
+	if err := gyLoginOnce(client, cfg.BaseURL, cfg.Username, cfg.Password, ""); err != nil {
+		var ce *errGyCaptcha
+		if errors.As(err, &ce) {
+			return fmt.Errorf("观影要求验证码（%s），请到「影视转存 → 设置 → 观影」手动登录一次", ce.msg)
+		}
 		return err
 	}
 	cfg.Cookies = jar.m

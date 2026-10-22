@@ -16,7 +16,7 @@ func TestGyLiveFlow(t *testing.T) {
 	base := "https://www.xn--wcv59z.com"
 	jar := &gyJar{m: map[string]string{}}
 	client := gyClient(jar)
-	err := gyLoginOnce(client, base, "probe_fake_user_42", "wrongpass")
+	err := gyLoginOnce(client, base, "probe_fake_user_42", "wrongpass", "")
 	if err == nil {
 		t.Fatalf("假凭据不应登录成功")
 	}

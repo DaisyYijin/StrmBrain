@@ -6,7 +6,10 @@ import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
+import GyCaptchaDialog from './GyCaptchaDialog.vue'
 import { resourcesApi } from '@/api'
+import { ApiError } from '@/api/client'
+import type { GyCaptcha } from '@/api/resources'
 import { plainProps } from '@/utils/autofill'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
@@ -17,6 +20,11 @@ const form = ref({ base_url: '', username: '', password: '' })
 const loggedIn = ref(false)
 const saving = ref(false)
 const authing = ref(false)
+
+// 站点要验证码时后端回 409 带一张图，点完带坐标再登一次（沿用同一个站点会话）
+const capShow = ref(false)
+const captcha = ref<GyCaptcha | null>(null)
+const capErr = ref('')
 
 async function load() {
   try {
@@ -57,10 +65,58 @@ async function auth() {
       return
     }
     await resourcesApi.gySaveConfig(form.value)
-    const d = await resourcesApi.gyLogin(form.value)
+    await login()
+  } catch (e) {
+    toastError(e, '登录失败')
+    loggedIn.value = false
+  } finally {
+    authing.value = false
+    emit('changed')
+  }
+}
+
+/** 登录一次；要验证码时弹出验证码框并正常返回，其余错误照常抛出 */
+async function login(points?: number[][]) {
+  try {
+    const d = await resourcesApi.gyLogin({ ...form.value, captcha: points })
+    capShow.value = false
+    captcha.value = null
     loggedIn.value = true
     message.success(d.message || '登录成功')
   } catch (e) {
+    if (e instanceof ApiError && e.status === 409 && e.data.need_captcha) {
+      // 首次弹出时站点原话多半是「验证码错误」，对用户没意义；点错了再显示
+      capErr.value = points ? e.message : ''
+      captcha.value = e.data.captcha as GyCaptcha
+      capShow.value = true
+      return
+    }
+    throw e
+  }
+}
+
+async function capRefresh() {
+  authing.value = true
+  try {
+    captcha.value = await resourcesApi.gyCaptcha()
+    capErr.value = ''
+  } catch (e) {
+    // 会话过期了就从头登一次
+    if (e instanceof ApiError && e.status === 400) {
+      return await capRun()
+    }
+    toastError(e, '换验证码失败')
+  } finally {
+    authing.value = false
+  }
+}
+
+async function capRun(points?: number[][]) {
+  authing.value = true
+  try {
+    await login(points)
+  } catch (e) {
+    capShow.value = false
     toastError(e, '登录失败')
     loggedIn.value = false
   } finally {
@@ -79,7 +135,7 @@ onMounted(load)
 
   <FieldRow
     label="账号"
-    tip="观影站内账号（搜索 / 详情需登录）。登录即测试账号有效性；服务端自动通过站点反爬验证并保持登录态，会话失效后自动重登。"
+    tip="观影站内账号（搜索 / 详情需登录）。登录即测试账号有效性；服务端自动通过站点反爬验证并保持登录态，会话失效后自动重登；站点要求验证码时会弹出来让你点一次（后台自动重登过不了验证码）。"
   >
     <div class="auth-row">
       <!-- 不用 .h-field-row：它只让第一个子项伸缩，SecretInput 的根是 width:100% 的输入框组，
@@ -94,6 +150,15 @@ onMounted(load)
       <LoginBadge :on="loggedIn" :sub="loggedIn ? form.username : ''" />
     </div>
   </FieldRow>
+
+  <GyCaptchaDialog
+    v-model:show="capShow"
+    :captcha="captcha"
+    :busy="authing"
+    :error="capErr"
+    @submit="capRun"
+    @refresh="capRefresh"
+  />
 
   <FormActions>
     <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>

@@ -203,3 +203,82 @@ func TestGyCode403(t *testing.T) {
 		t.Fatal("gyCode403 判断不对")
 	}
 }
+
+// 站点要验证码时回 409 带图；用户点完带坐标再登，要先用同一个会话核对、再把结果串当 code 登录
+func TestGyLoginCaptchaFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var gotCode, gotCheck string
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		sess, _ := r.Cookie("sess")
+		switch r.URL.Path {
+		case "/res/captcha/2":
+			if r.Form.Get("do") == "check" {
+				if sess == nil || sess.Value != "s1" {
+					w.Write([]byte(`{"code":0}`))
+					return
+				}
+				gotCheck = r.Form.Get("info")
+				w.Write([]byte(`{"code":200}`))
+				return
+			}
+			w.Write([]byte(`{"type":"jpeg","text":"甲乙丙","img":"QUJD"}`))
+		case "/user/login":
+			if r.Form.Get("code") == "" {
+				http.SetCookie(w, &http.Cookie{Name: "sess", Value: "s1"})
+				w.Write([]byte(`{"code":403,"msg":"验证码错误","captcha":2}`))
+				return
+			}
+			gotCode = r.Form.Get("code")
+			w.Write([]byte(`{"code":200,"msg":"ok"}`))
+		}
+	}))
+	defer site.Close()
+	gyCfgMu.Lock()
+	gyCfgV, gyCfgAt = &gyCfg{BaseURL: site.URL, Username: "u", Password: "p", Cookies: map[string]string{}}, time.Now()
+	gyCfgMu.Unlock()
+	t.Cleanup(func() {
+		gyCfgMu.Lock()
+		gyCfgV = nil
+		gyCfgMu.Unlock()
+		gyPendSet(nil)
+	})
+	h := &Handler{}
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/guanying/login", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.GyLogin(c)
+		return w
+	}
+	w := post(`{}`)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"need_captcha":true`) ||
+		!strings.Contains(w.Body.String(), `data:image/jpeg;base64,QUJD`) || !strings.Contains(w.Body.String(), "甲乙丙") {
+		t.Fatalf("要验证码时应回 409 带图: %d %s", w.Code, w.Body)
+	}
+	// 保存会话那一步没有配置源，走到它说明登录已经过了
+	w = post(`{"captcha":[[10,20],[30,40],[50,60]]}`)
+	want := "10,20-30,40-50,60;350;200"
+	if gotCheck != want || gotCode != want {
+		t.Fatalf("核对 / 登录的结果串不对: check=%q code=%q (%d %s)", gotCheck, gotCode, w.Code, w.Body)
+	}
+}
+
+func TestGyNeedCaptcha(t *testing.T) {
+	cases := []struct {
+		raw, msg string
+		want     bool
+	}{
+		{``, "账号不存在", false},
+		{`0`, "密码错误", false},
+		{`2`, "密码错误", true},
+		{`"1"`, "", true},
+		{`null`, "验证码错误", true},
+	}
+	for _, c := range cases {
+		if got := gyNeedCaptcha(json.RawMessage(c.raw), c.msg); got != c.want {
+			t.Errorf("%q %q = %v", c.raw, c.msg, got)
+		}
+	}
+}

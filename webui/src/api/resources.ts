@@ -48,8 +48,17 @@ export const gyConfig = () => http.get<GyConfig>('/guanying/config')
 export const gyCheck = () => http.get<{ logged_in: boolean }>('/guanying/check')
 export const gySaveConfig = (body: { base_url: string; username: string; password: string }) =>
   http.post('/guanying/config', body)
-export const gyLogin = (body: { base_url: string; username: string; password: string }) =>
+/** 观影点选验证码：img 是 data URL，按 text 的顺序点字，坐标换算到 w×h */
+export interface GyCaptcha {
+  img: string
+  text: string
+  w: number
+  h: number
+}
+/** 站点要验证码时回 409 {need_captcha, captcha}；点完带 captcha（[x,y] 列表）再调一次 */
+export const gyLogin = (body: { base_url: string; username: string; password: string; captcha?: number[][] }) =>
   http.post<{ message?: string }>('/guanying/login', body, { timeoutMs: 120_000 })
+export const gyCaptcha = () => http.post<GyCaptcha>('/guanying/captcha', {}, { timeoutMs: 60_000 })
 export const gyLogout = () => http.post('/guanying/logout')
 
 // ============ 不太灵影视 ============
