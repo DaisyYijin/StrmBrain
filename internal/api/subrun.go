@@ -187,6 +187,7 @@ type subRunner struct {
 	subs     map[string]stagingLib
 	cookie   string
 	libs     []model.Library // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
+	prio     map[uint]subPriority // 一轮里每个订阅的资源优先级（priorityOf 缓存）
 	re0Left  int             // 今天还能自动解锁多少 RE0 积分，<0 = 不限
 	dianLeft int             // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
@@ -971,11 +972,6 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	return *att, covered
 }
 
-// priorityOf 这个订阅的资源优先级（subpriority.go）
-func (r *subRunner) priorityOf(sub *model.Subscription) subPriority {
-	return subPriorityOf(sub.MediaType)
-}
-
 // sharePickOpts 从分享里按集挑文件的条件：真正转存（tryShare）与 RE0 解锁前的文件预览共用，两边判得一样
 func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, missing map[epKey]bool) sharePickOpts {
 	opts := sharePickOpts{
@@ -983,9 +979,13 @@ func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, miss
 		HaveSha1: subLedgerHasSha1,
 		Compare:  r.priorityOf(sub).compare,
 	}
-	if cond := subCondOf(r.cfg, sub.Cond); !cond.empty() {
+	cond, prio := subCondOf(r.cfg, sub.Cond), r.priorityOf(sub)
+	if !cond.empty() || prio.limited() {
 		title, tags := it.Title, it.Tags
 		opts.Accept = func(e shareEntry, hasSub bool) (bool, string) {
+			if ok, why := prio.fileOK(e.Name, title, tags); !ok {
+				return false, why
+			}
 			return cond.fileOK(e.Name, e.Size, title, tags, hasSub)
 		}
 	}

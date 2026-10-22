@@ -87,3 +87,93 @@ func TestPickShareEpisodesCompare(t *testing.T) {
 		t.Fatalf("挑中 %v", got)
 	}
 }
+
+// testSubCfg 测试用的订阅设置：中字默认开（2026-10-22）之后，测试里的资源名大多没写字幕，关掉免得个个被拦
+func testSubCfg() subscribeCfg {
+	c := defaultSubscribeCfg()
+	c.Cond = subCond{}
+	return c
+}
+
+// prioAny 命中一切的规则（只写了排除词）：付费资源要「画质至少命中一条规则」，测试标题不写画质时用它
+var prioAny = subPriority{Rules: []washRule{{ResourcePix: "!480p"}}}
+
+// 老配置迁移：资源条件写了画质几项 → 自定义 + 前 1 条（行为不变）；没写 → 跟随洗版策略；中字没存过的不替用户打开
+func TestMigrateSubPrioGlobal(t *testing.T) {
+	c := defaultSubscribeCfg()
+	c.Cond = subCond{Pix: "2160p", Type: "WEB-DL", Zh: true, MaxGB: 20}
+	m := migrateSubPrioGlobal(c, true)
+	if m.Priority.Mode != subPrioCustom || m.Priority.Limit != 1 || len(m.Priority.Rules) != 1 ||
+		m.Priority.Rules[0].ResourcePix != "2160p" || m.Priority.Rules[0].ResourceType != "WEB-DL" {
+		t.Fatalf("写了画质的应迁成自定义: %+v", m.Priority)
+	}
+	if m.Cond != (subCond{Zh: true, MaxGB: 20}) || m.PrioVer != subPrioVer {
+		t.Fatalf("条件只留中字与体积: %+v", m.Cond)
+	}
+	if m := migrateSubPrioGlobal(defaultSubscribeCfg(), false); m.Priority.Mode != subPrioFollow || m.Cond.Zh {
+		t.Fatalf("没写画质 / 没存过条件: %+v %+v", m.Priority, m.Cond)
+	}
+}
+
+func TestMigrateSubPrioSub(t *testing.T) {
+	// 自己写了画质：自定义 + 前 1 条
+	s := model.Subscription{Cond: `{"pix":"1080p","zh":true}`}
+	if !migrateSubPrioSub(&s, false) || s.RankLimit != 1 || s.Cond != `{"pix":"","type":"","effect":"","video":"","audio":"","team":"","zh":true,"min_gb":0,"max_gb":0}` {
+		t.Fatalf("自己写了画质: %+v", s)
+	}
+	if sel := parseSubPrioSel(s.Priority); sel == nil || sel.Mode != subPrioCustom || sel.Rules[0].ResourcePix != "1080p" {
+		t.Fatalf("优先级: %q", s.Priority)
+	}
+	// 自定义成不限、订阅设置原来写了画质：跟随洗版策略，不被迁过去的订阅设置套上
+	s = model.Subscription{Cond: `{}`}
+	if !migrateSubPrioSub(&s, true) || parseSubPrioSel(s.Priority).Mode != subPrioFollow {
+		t.Fatalf("不限: %+v", s)
+	}
+	// 跟随订阅设置的不动
+	s = model.Subscription{}
+	if migrateSubPrioSub(&s, true) || s.Priority != "" {
+		t.Fatalf("跟随的不该动: %+v", s)
+	}
+}
+
+// 订阅自己选了模式用自己的与 RankLimit；跟随订阅设置时 RankLimit 盖过订阅设置的前 N 条
+func TestSubPrioMode(t *testing.T) {
+	cfg := defaultSubscribeCfg()
+	cfg.Priority = subPrioCfg{Mode: subPrioCustom, Rules: []washRule{{ResourcePix: "2160p"}}, Limit: 2}
+	if m, r, l := subPrioMode(cfg, &model.Subscription{}); m != subPrioCustom || len(r) != 1 || l != 2 {
+		t.Fatalf("跟随订阅设置: %s %v %d", m, r, l)
+	}
+	if _, _, l := subPrioMode(cfg, &model.Subscription{RankLimit: 1}); l != 1 {
+		t.Fatalf("订阅的门槛优先: %d", l)
+	}
+	if m, _, l := subPrioMode(cfg, &model.Subscription{Priority: `{"mode":"basic"}`}); m != subPrioBasic || l != 0 {
+		t.Fatalf("自己选基础: %s %d", m, l)
+	}
+}
+
+// 「前 N 条」三态：标题没写的分享到文件一级再判，文件名没写看标题，都没写算不符
+func TestSubPriorityLimitVerdict(t *testing.T) {
+	p := subPriority{Rules: []washRule{{ResourcePix: "2160p", ResourceEffect: "DV"}, {ResourcePix: "1080p"}}, Limit: 1}
+	for title, want := range map[string]condVerdict{
+		"剧 S01 2160p DV":   condOK,
+		"剧 S01 1080p":      condFail,
+		"剧 S01 全集":         condUnknown,
+		"剧 S01 2160p HDR10": condFail, // 写了 HDR10、不是 DV
+	} {
+		if v, why := p.titleVerdict(title, resTags{}); v != want {
+			t.Errorf("%s: %v（%s）", title, v, why)
+		}
+	}
+	if ok, _ := p.fileOK("01.2160p.DV.mkv", "剧 全集", resTagsOf("剧 全集")); !ok {
+		t.Fatal("文件名写了")
+	}
+	if ok, _ := p.fileOK("01.mkv", "剧 全集 2160p DV", resTagsOf("剧 全集 2160p DV")); !ok {
+		t.Fatal("文件名没写看标题")
+	}
+	if ok, why := p.fileOK("01.mkv", "剧 全集", resTagsOf("剧 全集")); ok || why == "" {
+		t.Fatal("都没写算不符")
+	}
+	if ok, _ := (subPriority{Rules: p.Rules}).fileOK("01.mkv", "", resTags{}); !ok {
+		t.Fatal("没有前 N 条就不过滤")
+	}
+}

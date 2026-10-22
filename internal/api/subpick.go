@@ -264,9 +264,6 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		if len(c.Include) > 0 && !containsAnyKeyword(lower, c.Include) {
 			continue
 		}
-		if c.Sub.RankLimit > 0 && (it.Rank < 0 || it.Rank >= c.Sub.RankLimit) {
-			continue
-		}
 		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）。
 		// RE0 / 癫影不查：它们是按 TMDB 编号列的资源，本来就是这一部，再按标题找证据只会误杀（相关性同样对它放行）
 		if c.Identity != nil && !resByTmdb(it.Source) {
@@ -275,8 +272,14 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				continue
 			}
 		}
-		// 资源条件：标题明确不符的丢；没写的分享到文件一级再判，磁力只有标题可看、又扣离线配额，不下
-		verdict, why := c.Cond.titleVerdict(it.Title, it.Tags, movie, it.SizeBytes)
+		// 资源条件（中字 / 体积）与「只要命中前 N 条」：标题明确不符的丢；没写的分享到文件一级再判，
+		// 磁力只有标题可看、又扣离线配额，不下
+		verdict, why := c.Prio.titleVerdict(it.Title, it.Tags)
+		if verdict != condFail {
+			if v, w := c.Cond.titleVerdict(it.Title, it.Tags, movie, it.SizeBytes); v > verdict {
+				verdict, why = v, w
+			}
+		}
 		if verdict == condFail {
 			c.skip(why)
 			continue
@@ -344,7 +347,8 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			if !it.Owned && *it.Points > 0 {
 				cand.Paid = *it.Points
 				// 付费的额外要求：画质命中洗版规则、确认能覆盖缺集、看得出合不合资源条件（§5.4）
-				if c.Sub.RankLimit == 0 && it.Rank < 0 {
+				if !c.Prio.paidOK(it.Title) {
+					c.skip("要花积分、标题看不出画质")
 					continue
 				}
 				capMax, capLeft := c.paidCap(it.Source)

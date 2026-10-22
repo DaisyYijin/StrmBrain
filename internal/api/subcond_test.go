@@ -140,7 +140,7 @@ func TestPlanSubCandidatesCond(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("候选 = %v, want %v", got, want)
 	}
-	if !reflect.DeepEqual(skipped, map[string]int{"分辨率不符": 1, "磁力标题没写分辨率": 1, "要花积分、标题没写分辨率": 1}) {
+	if !reflect.DeepEqual(skipped, map[string]int{"分辨率不符": 1, "磁力标题没写分辨率": 1, "要花积分、标题看不出画质": 1}) {
 		t.Fatalf("跳过原因 = %v", skipped)
 	}
 }

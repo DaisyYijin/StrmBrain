@@ -94,6 +94,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
+	// 订阅资源条件的画质几项迁成资源优先级（一次性，subpriority.go）
+	h.MigrateSubPriority()
 	// 本地媒体根固定为 MEDIA_ROOT（默认 /media）：换了根就改写记录里的旧绝对路径（幂等，mediaroot.go）
 	h.MigrateMediaRoot()
 	// 主账号标上 Main（一次性、幂等，account115.go）：有了附加账号之后「type=115 的第一行」不一定是主号

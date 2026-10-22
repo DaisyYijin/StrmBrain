@@ -56,7 +56,7 @@ func TestPlanSubCandidatesRe0WebPreview(t *testing.T) {
 		return epKeys("S01E04"), "", nil
 	}
 	skipped := map[string]int{}
-	cands, over := planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: time.Now(), Re0Max: 20, Re0Left: -1,
+	cands, over := planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: time.Now(), Re0Max: 20, Re0Left: -1,
 		Re0Preview: preview, Skipped: skipped})
 	if len(cands) != 1 || cands[0].Item.Ref != "ok" || len(cands[0].Exact) != 1 || len(over) != 0 {
 		t.Fatalf("候选 = %+v over=%d", cands, len(over))

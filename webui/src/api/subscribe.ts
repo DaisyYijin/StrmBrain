@@ -23,8 +23,10 @@ export interface Subscription {
   include: string
   exclude: string
   offline_mode: OfflineMode
-  /** 资源条件；null = 跟随订阅设置 */
+  /** 资源条件（中字 / 大小）；null = 跟随订阅设置 */
   cond: SubCond | null
+  /** 资源优先级；null = 跟随订阅设置 */
+  priority: SubPrioSel | null
   /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
   subdir?: string
   /** active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到 */
@@ -59,11 +61,63 @@ export interface SubForm {
   include: string
   exclude: string
   offline_mode: OfflineMode
-  /** 资源条件；null = 跟随订阅设置 */
+  /** 资源条件（中字 / 大小）；null = 跟随订阅设置 */
   cond: SubCond | null
+  /** 资源优先级；null = 跟随订阅设置 */
+  priority: SubPrioSel | null
   /** 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，root = 转存目录本身 */
   subdir: string
 }
+
+/**
+ * 资源优先级（internal/api/subpriority.go）：挑资源时谁更好，与整理时洗版同一套比法。
+ * basic 基础（只按 分辨率 → 片源 → HDR → 视频编码）/ follow 跟随洗版策略 / custom 自定义规则。
+ * 命中第 1 条规则算「达标」
+ */
+export type PrioMode = 'basic' | 'follow' | 'custom'
+
+/** 一条规则，字段同洗版 YAML 的 priority_level */
+export interface WashRule {
+  resource_pix?: string
+  resource_type?: string
+  resource_effect?: string
+  video_encode?: string
+  audio_encode?: string
+  resource_team?: string
+}
+
+/** 单个订阅自己选的（「只要命中前 N 条」用订阅的 rank_limit） */
+export interface SubPrioSel {
+  mode: PrioMode
+  rules?: WashRule[]
+}
+
+/** 订阅设置里的默认值 */
+export interface SubPrioCfg {
+  mode: PrioMode
+  rules: WashRule[]
+  /** 只要命中前 N 条，0 = 不限 */
+  limit: number
+}
+
+/** 规则与资源条件的画质几项互转：界面上用同一套预设标签编辑 */
+export const ruleToCond = (r: WashRule): SubCond => ({
+  ...blankCond(),
+  pix: r.resource_pix ?? '',
+  type: r.resource_type ?? '',
+  effect: r.resource_effect ?? '',
+  video: r.video_encode ?? '',
+  audio: r.audio_encode ?? '',
+  team: r.resource_team ?? '',
+})
+export const condToRule = (c: SubCond): WashRule => ({
+  resource_pix: c.pix,
+  resource_type: c.type,
+  resource_effect: c.effect,
+  video_encode: c.video,
+  audio_encode: c.audio,
+  resource_team: c.team,
+})
 
 /**
  * 资源条件（同洗版规则的写法：逗号分隔命中任一，「!」开头排除）。
@@ -164,7 +218,9 @@ export interface SubscribeConfig {
   offline_wait_hours: number
   offline_monthly: number
   offline_reserve: number
+  /** 中字与大小（画质几项 2026-10-22 起归资源优先级管） */
   cond: SubCond
+  priority: SubPrioCfg
   /** 默认转存到哪个转存子目录（cid）；空 = 转存目录本身 */
   subdir?: string
 }
@@ -201,6 +257,7 @@ export function toForm(s: Subscription): SubForm {
     exclude: s.exclude,
     offline_mode: s.offline_mode || '',
     cond: s.cond ? { ...blankCond(), ...s.cond } : null,
+    priority: s.priority ? { mode: s.priority.mode, rules: [...(s.priority.rules ?? [])] } : null,
     subdir: s.subdir || '',
   }
 }

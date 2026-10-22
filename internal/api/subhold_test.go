@@ -66,7 +66,7 @@ func TestSubOfflineWaitOrAbandon(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var removed, deleted []string
 			looks, naps := 0, 0
-			r := &subRunner{h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), target: "T", now: time.Now, holdWrap: true,
+			r := &subRunner{h: &Handler{DB: model.DB}, cfg: testSubCfg(), target: "T", now: time.Now, holdWrap: true,
 				mkdir:    func(string, string) (string, error) { return "W", nil },
 				rmdir:    func(cid string) error { removed = append(removed, cid); return nil },
 				offline:  func(string, string) (int, string, uint, string) { return 200, "ok", 7, "abc" },

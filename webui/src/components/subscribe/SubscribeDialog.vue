@@ -14,6 +14,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import SubCondFields from '@/components/subscribe/SubCondFields.vue'
+import SubPriorityFields from '@/components/subscribe/SubPriorityFields.vue'
 import { resourcesApi } from '@/api'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubForm, Subscription, TmdbSeason } from '@/api/subscribe'
@@ -67,6 +68,7 @@ const blank = (): SubForm => ({
   exclude: '',
   offline_mode: '',
   cond: null,
+  priority: null,
   subdir: '',
 })
 const form = ref<SubForm>(blank())
@@ -88,7 +90,7 @@ const tv = computed(() => head.value?.media_type === 'tv')
 watch(show, async (open) => {
   if (!open) return
   form.value = props.edit ? subscribeApi.toForm(props.edit) : blank()
-  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.cond)
+  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.cond || !!form.value.priority)
   seasons.value = []
   ended.value = false
   if (!tv.value || !head.value) return
@@ -124,12 +126,38 @@ const epEnd = computed({
   get: () => (form.value.ep_end > 0 ? form.value.ep_end : null),
   set: (v) => (form.value.ep_end = v ?? 0),
 })
-const rankLimit = computed({
-  get: () => (form.value.rank_limit > 0 ? form.value.rank_limit : null),
-  set: (v) => (form.value.rank_limit = v ?? 0),
-})
 
-// 改成自定义时从订阅设置的默认条件抄一份起步，用户多半只是在默认上改一两项
+// 资源优先级：空串 = 跟随订阅设置（priority 为 null）。改成自定义时从订阅设置的自定义规则抄一份起步，
+// 订阅设置不是自定义就给两条常见的（4K、1080p）
+const prioMode = computed({
+  get: () => form.value.priority?.mode ?? '',
+  set: (v: subscribeApi.PrioMode | '') => {
+    if (!v) {
+      form.value.priority = null
+      return
+    }
+    form.value.priority = { mode: v, rules: form.value.priority?.rules ?? [] }
+    if (v === 'custom' && !form.value.priority.rules?.length) void seedCustomRules()
+  },
+})
+const prioRules = computed({
+  get: () => form.value.priority?.rules ?? [],
+  set: (rs: subscribeApi.WashRule[]) => {
+    if (form.value.priority) form.value.priority.rules = rs
+  },
+})
+async function seedCustomRules() {
+  let rules: subscribeApi.WashRule[] = [{ resource_pix: '2160p,4k' }, { resource_pix: '1080p,1080i' }]
+  try {
+    const d = await subscribeApi.getConfig()
+    if (d.data.priority?.mode === 'custom' && d.data.priority.rules?.length) rules = d.data.priority.rules
+  } catch {
+    // 读不到就用默认的两条
+  }
+  if (form.value.priority?.mode === 'custom' && !form.value.priority.rules?.length) form.value.priority.rules = rules
+}
+
+// 中字与大小改成自定义时从订阅设置的默认值抄一份起步，用户多半只是在默认上改一两项
 async function setCondMode(v: string | undefined) {
   if (v !== 'custom') {
     form.value.cond = null
@@ -258,21 +286,16 @@ async function submit() {
       </FieldRow>
 
       <button type="button" class="adv-toggle" :aria-expanded="advanced" @click="advanced = !advanced">
-        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源条件、关键词、离线
+        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源优先级、中字与大小、关键词、离线
       </button>
       <div v-if="advanced" class="adv">
         <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 设置」里开着的来源">
           <HMultiSelect v-model="form.sources" :options="sourceOptions" placeholder="全部开着的来源" />
         </FieldRow>
+        <SubPriorityFields v-model:mode="prioMode" v-model:rules="prioRules" v-model:limit="form.rank_limit" inherit />
         <FieldRow
-          label="画质门槛"
-          hint="只要命中洗版策略前 N 条规则的资源；留空 = 不限，只用来排先后。RE0 / 癫影要花积分的资源不论这里怎么设，都要命中至少一条规则"
-        >
-          <HNumberInput v-model="rankLimit" :min="1" placeholder="不限" aria-label="画质门槛" />
-        </FieldRow>
-        <FieldRow
-          label="资源条件"
-          hint="分辨率、质量、特效、编码、发布组、中字、大小。分享里每个视频逐个判，不符合的不转；磁力只能看标题，标题没写的不下"
+          label="中字与大小"
+          hint="要不要中文字幕、单个视频多大。分享里每个视频逐个判，不符合的不转；磁力只能看标题，标题没写的不下"
         >
           <HSegmented
             :model-value="form.cond ? 'custom' : 'follow'"
@@ -283,7 +306,7 @@ async function submit() {
             @update:model-value="setCondMode"
           />
         </FieldRow>
-        <SubCondFields v-if="form.cond" v-model="form.cond" />
+        <SubCondFields v-if="form.cond" v-model="form.cond" part="extras" />
         <FieldRow label="包含" hint="资源标题要含其中一个（逗号分隔），留空不限">
           <HInput v-model="form.include" placeholder="如：4K, 杜比视界" />
         </FieldRow>

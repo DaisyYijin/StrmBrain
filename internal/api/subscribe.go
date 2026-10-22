@@ -96,8 +96,12 @@ type subscribeCfg struct {
 	// OfflineReserve 115 剩余离线配额低于它就不再提交，留给手动离线；0 = 不查配额
 	OfflineReserve int `json:"offline_reserve"`
 
-	// Cond 默认的资源条件（subcond.go），订阅自己可以另设
+	// Cond 默认的资源条件（subcond.go），订阅自己可以另设。2026-10-22 起只用中字与体积，画质几项迁进 Priority
 	Cond subCond `json:"cond"`
+	// Priority 默认的资源优先级（subpriority.go），订阅自己可以另设
+	Priority subPrioCfg `json:"priority"`
+	// PrioVer 资源优先级迁移版本：老配置读出来是 0，按 migrateSubPrioGlobal 换算一次
+	PrioVer int `json:"prio_ver"`
 	// Subdir 默认转存到哪个绑定了媒体库的转存子目录（cid，stagingsub.go）；空 = 转存目录本身。
 	// 订阅自己的 Subdir 为空时跟随它
 	Subdir string `json:"subdir"`
@@ -132,15 +136,26 @@ func defaultSubscribeCfg() subscribeCfg {
 		OfflineWaitHours: 24,
 		OfflineMonthly:   30,
 		OfflineReserve:   10,
+
+		Cond:     subCond{Zh: true}, // 中字默认开（维护者定的，2026-10-22）；老配置不替用户打开
+		Priority: subPrioCfg{Mode: subPrioFollow},
+		PrioVer:  subPrioVer,
 	}
 }
+
+// subPrioVer 资源优先级配置的版本：1 = 资源条件的画质几项迁进 priority
+const subPrioVer = 1
 
 // loadSubscribeCfg 读配置，缺的项与越界的值回落默认
 func loadSubscribeCfg() subscribeCfg {
 	c := defaultSubscribeCfg()
 	if v := settingValueCompat("subscribe"); v != "" {
 		c.NotifyVer = 0 // 老配置里没有这个键
+		c.PrioVer = 0
 		_ = json.Unmarshal([]byte(v), &c)
+		if c.PrioVer < subPrioVer {
+			c = migrateSubPrioGlobal(c, strings.Contains(v, `"cond"`))
+		}
 		// 原来一类都不推的，是用户关掉了通知，新类型也不替用户打开
 		for ver := c.NotifyVer + 1; ver <= subNotifyVer && strings.TrimSpace(c.Notify) != ""; ver++ {
 			if k := subNotifyAdded[ver]; k != "" && !strings.Contains(","+c.Notify+",", ","+k+",") {
@@ -210,7 +225,8 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	if c.OfflineReserve < 0 {
 		c.OfflineReserve = 0
 	}
-	c.Cond = normalizeSubCond(c.Cond)
+	c.Cond = keepCondExtras(normalizeSubCond(c.Cond)) // 画质几项归资源优先级管（subpriority.go）
+	c.Priority = normalizeSubPrioCfg(c.Priority)
 	// 读的时候已经补过新类型；保存时记成当前版本，用户之后关掉的类型不会再被补回来
 	c.NotifyVer = subNotifyVer
 	return c

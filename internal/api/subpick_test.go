@@ -82,15 +82,17 @@ func TestPlanSubCandidates(t *testing.T) {
 		t.Fatalf("候选 = %v, want %v（over %d）", got, want, len(over))
 	}
 
-	// 画质门槛：只要前 1 条规则
-	sub.RankLimit = 1
+	// 画质门槛：只要前 1 条规则。标题写明不符的丢（1080p），没写的分享留着到文件一级再判，没写的磁力不下
+	ctx.Prio.Limit = 1
 	cands, _ = planSubCandidates(items, ctx)
+	got = nil
 	for _, c := range cands {
-		if c.Item.Rank != 0 {
-			t.Fatalf("门槛外的不该留下: %+v", c.Item)
-		}
+		got = append(got, c.Item.Title)
 	}
-	sub.RankLimit = 0
+	if want := []string{"剧 第二季 连载过一天了 2160p", "剧 第二季 全集", "剧 S02E05"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("门槛 前 1 条 候选 = %v, want %v", got, want)
+	}
+	ctx.Prio.Limit = 0
 
 	// 包含词
 	ctx.Include = splitKeywords("全集")
@@ -147,7 +149,7 @@ func TestPlanSubCandidatesRe0(t *testing.T) {
 		re0("剧 S01 10分", "p10", pts(10), false, 0),
 		re0("剧 S01 30分", "p30", pts(30), false, 0),
 		re0("剧 2023 估不出", "p5u", pts(5), false, 0),   // 付费但估计不出覆盖：不花钱
-		re0("剧 S01 没命中规则", "p5r", pts(5), false, -1), // 付费但画质没命中洗版规则
+		re0("剧 S01 480p 没命中规则", "p5r", pts(5), false, -1), // 付费但画质没命中规则（prioAny 只排除 480p）
 		re0("剧 S01 不知道多少分", "pn", nil, false, 0),
 	}
 	titles := func(cs []subCand) []string {
@@ -159,7 +161,7 @@ func TestPlanSubCandidatesRe0(t *testing.T) {
 	}
 
 	// 没开自动解锁：免费和解锁过的照常；付费的进「超过上限」
-	cands, over := planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Re0Max: 0, Re0Left: -1})
+	cands, over := planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Re0Max: 0, Re0Left: -1})
 	if got := titles(cands); !reflect.DeepEqual(got, []string{"剧 S01 免费", "剧 S01 解锁过"}) {
 		t.Fatalf("没开自动解锁 候选 = %v", got)
 	}
@@ -168,7 +170,7 @@ func TestPlanSubCandidatesRe0(t *testing.T) {
 	}
 
 	// 上限 20：10 分的可以，30 分的超限；免费的排在付费前面
-	cands, over = planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: -1})
+	cands, over = planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: -1})
 	if got := titles(cands); !reflect.DeepEqual(got, []string{"剧 S01 免费", "剧 S01 解锁过", "剧 S01 10分"}) || cands[2].Paid != 10 {
 		t.Fatalf("上限 20 候选 = %v", got)
 	}
@@ -177,14 +179,14 @@ func TestPlanSubCandidatesRe0(t *testing.T) {
 	}
 
 	// 预算只剩 5：10 分的也超
-	_, over = planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: 5})
+	_, over = planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: 5})
 	if got := titles(over); !reflect.DeepEqual(got, []string{"剧 S01 10分", "剧 S01 30分"}) {
 		t.Fatalf("预算 5 超限 = %v", got)
 	}
 
 	// 记过「需要积分」的不拦：调高上限后还能用
 	tried := map[string]subTried{"re0:p30": {Status: subAttemptPaid}}
-	cands, _ = planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Tried: tried, Re0Max: 50, Re0Left: -1})
+	cands, _ = planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Tried: tried, Re0Max: 50, Re0Left: -1})
 	if got := titles(cands); len(got) != 4 {
 		t.Fatalf("调高上限后 候选 = %v", got)
 	}

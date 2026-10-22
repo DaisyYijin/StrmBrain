@@ -391,6 +391,9 @@ type Subscription struct {
 	OfflineMode string `json:"offline_mode" gorm:"size:16"`
 	// Cond 资源条件（分辨率 / 质量 / 特效 / 编码 / 发布组 / 中字 / 体积）的 JSON；空 = 跟随订阅设置，"{}" = 自定义成不限
 	Cond string `json:"cond" gorm:"type:text"`
+	// Priority 资源优先级（basic 基础 / follow 跟随洗版策略 / custom 自定义 + 规则）的 JSON；空 = 跟随订阅设置。
+	// 2026-10-22 起取代资源条件里的画质几项（Cond 只剩中字与体积），见 internal/api/subpriority.go
+	Priority string `json:"-" gorm:"type:text"`
 	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir" gorm:"size:64"`
 

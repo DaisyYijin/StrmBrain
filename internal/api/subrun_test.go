@@ -84,7 +84,7 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 	nextLink := uint(100)
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.Local)
 	r := &subRunner{
-		h: h, cfg: defaultSubscribeCfg(), target: "T", cookie: "UID=1", re0Left: -1,
+		h: h, cfg: testSubCfg(), target: "T", cookie: "UID=1", re0Left: -1,
 		tc:     &TmdbClient{APIKey: "k", APIURL: tmdb.URL, Language: "zh-CN", httpClient: tmdb.Client()},
 		now:    func() time.Time { return now },
 		search: func(*model.Subscription) ([]ResourceItem, string) { return append([]ResourceItem(nil), items...), "" },
@@ -202,7 +202,7 @@ func TestSubRunnerDropsWrapperOnFailure(t *testing.T) {
 	newTestDB(t, "subrun-fail.db")
 	var removed []string
 	r := &subRunner{
-		h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), target: "T", re0Left: -1, now: time.Now,
+		h: &Handler{DB: model.DB}, cfg: testSubCfg(), target: "T", re0Left: -1, now: time.Now,
 		mkdir:   func(parent, name string) (string, error) { return "W1", nil },
 		rmdir:   func(cid string) error { removed = append(removed, cid); return nil },
 		offline: func(link, target string) (int, string, uint, string) { return 502, "115 说不行", 0, "" },
@@ -240,7 +240,7 @@ func TestSubOfflineGates(t *testing.T) {
 	run := func(subID uint, ev subEval, quotaLeft int) res {
 		var out res
 		r := &subRunner{
-			h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), target: "T", re0Left: -1,
+			h: &Handler{DB: model.DB}, cfg: testSubCfg(), target: "T", re0Left: -1,
 			now:    func() time.Time { return now },
 			search: func(*model.Subscription) ([]ResourceItem, string) { return append([]ResourceItem(nil), items...), "" },
 			mkdir:  func(parent, name string) (string, error) { return "W", nil },
@@ -313,7 +313,7 @@ func TestSubRunnerTriesUpToLimit(t *testing.T) {
 			URL: "magnet:?xt=urn:btih:" + strings.Repeat(hash, 40), Relevant: true, Rank: -1}
 	}
 	items := []ResourceItem{mag("a"), mag("b"), mag("c"), mag("d"), mag("e")}
-	cfg := defaultSubscribeCfg()
+	cfg := testSubCfg()
 	cfg.MaxResPerSub = 4
 	var tries, naps int
 	r := &subRunner{

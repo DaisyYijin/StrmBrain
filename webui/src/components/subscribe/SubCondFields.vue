@@ -10,10 +10,15 @@ import { COND_PRESETS, nextState, parseCond, serializeCond, type CondKey, type P
 
 /**
  * 资源条件的一组输入（订阅设置的默认值与单个订阅的自定义共用）。
+ * part：quality 只要画质几项（资源优先级的自定义规则逐条用它编辑）/ extras 只要中字与大小 / all 全部。
+ * 2026-10-22 起订阅的画质几项归资源优先级管，资源条件只剩 extras
  * 每项一排预设标签：点一下「要」、再点「不要」、第三下取消；同一项里「要」的几个命中任一即可。
  * 存的还是洗版规则那种逗号串（condPresets.ts），以前手填的认不出的写法原样留着、可以删
  */
 const cond = defineModel<SubCond>({ required: true })
+const props = withDefaults(defineProps<{ part?: 'all' | 'quality' | 'extras'; legend?: boolean }>(), { part: 'all', legend: true })
+const quality = computed(() => props.part !== 'extras')
+const extras = computed(() => props.part !== 'quality')
 
 const keys = Object.keys(COND_PRESETS) as CondKey[]
 const parsed = computed(() =>
@@ -58,11 +63,11 @@ const maxGB = computed({
 
 <template>
   <div class="cond">
-    <p class="legend muted">
+    <p v-if="quality && legend" class="legend muted">
       点一下 <span class="mark want"><Check :size="12" />要</span>，再点
       <span class="mark not"><X :size="12" />不要</span>，第三下取消；同一项里「要」的几个命中任一即可，都不点 = 不限。
     </p>
-    <FieldRow v-for="k in keys" :key="k" :label="COND_PRESETS[k].label">
+    <FieldRow v-for="k in quality ? keys : []" :key="k" :label="COND_PRESETS[k].label">
       <div class="chips" role="group" :aria-label="COND_PRESETS[k].label">
         <button
           v-for="(p, i) in COND_PRESETS[k].presets"
@@ -91,13 +96,13 @@ const maxGB = computed({
         </button>
       </div>
     </FieldRow>
-    <FieldRow label="发布组" hint="资源名最后一个「-」后面那段，中文资源名常常取不准，建议只用于英文命名的资源。前面加 ! 是不要">
+    <FieldRow v-if="quality" label="发布组" hint="资源名最后一个「-」后面那段，中文资源名常常取不准，建议只用于英文命名的资源。前面加 ! 是不要">
       <HTagsInput v-model="teams" placeholder="如 ADWeb，回车添加" />
     </FieldRow>
-    <FieldRow label="中文字幕" hint="资源标题或文件名写了中字 / 简繁 / 内封，或者分享里有跟着视频的字幕文件">
+    <FieldRow v-if="extras" label="中文字幕" hint="资源标题或文件名写了中字 / 简繁 / 内封，或者分享里有跟着视频的字幕文件">
       <HSwitch v-model="cond.zh" aria-label="要中文字幕" />
     </FieldRow>
-    <FieldRow label="单个视频大小" hint="按分享里每个视频文件判（剧集就是单集大小）；磁力只能看标题，只对电影判。留空不限">
+    <FieldRow v-if="extras" label="单个视频大小" hint="按分享里每个视频文件判（剧集就是单集大小）；磁力只能看标题，只对电影判。留空不限">
       <div class="pair">
         <HNumberInput v-model="minGB" :min="0" :step="0.5" placeholder="不限" aria-label="最小 GB" />
         <span class="muted">到</span>

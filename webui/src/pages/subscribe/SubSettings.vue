@@ -12,6 +12,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SubCondFields from '@/components/subscribe/SubCondFields.vue'
+import SubPriorityFields from '@/components/subscribe/SubPriorityFields.vue'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubscribeConfig } from '@/api/subscribe'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -59,10 +60,23 @@ type PaceKey = keyof typeof PACE_DEFAULTS
 const paceChanged = (k: PaceKey) => !!cfg.value && cfg.value[k] !== PACE_DEFAULTS[k]
 const paceChangedCount = computed(() => (Object.keys(PACE_DEFAULTS) as PaceKey[]).filter(paceChanged).length)
 
+// 改成自定义、还没有规则时给两条常见的起步（4K、1080p），用户在上面改
+function setPrioMode(v: subscribeApi.PrioMode | '') {
+  if (!cfg.value) return
+  cfg.value.priority.mode = v || 'follow'
+  if (v === 'custom' && !cfg.value.priority.rules.length) {
+    cfg.value.priority.rules = [{ resource_pix: '2160p,4k' }, { resource_pix: '1080p,1080i' }]
+  }
+}
+
 async function load() {
   try {
     const d = await subscribeApi.getConfig()
-    cfg.value = { ...d.data, cond: { ...subscribeApi.blankCond(), ...d.data.cond } }
+    cfg.value = {
+      ...d.data,
+      cond: { ...subscribeApi.blankCond(), ...d.data.cond },
+      priority: { ...{ mode: 'follow' as const, limit: 0 }, ...d.data.priority, rules: d.data.priority?.rules ?? [] },
+    }
     spent.value = d.re0_spent_today
     dianSpent.value = d.dian_spent_today ?? 0
     notify.value = (d.data.notify || '').split(',').filter(Boolean)
@@ -146,13 +160,20 @@ async function save() {
 
     <SectionCard
       v-show="section === 'cond'"
-      title="资源条件"
-      hint="所有订阅默认用这一组，单个订阅可以在「修改订阅 → 高级」里自定义。写法同洗版规则：逗号分隔命中任一，「!」开头排除；留空不限"
+      title="资源优先级"
+      hint="挑资源时谁更好，和整理时洗版同一套比法。所有订阅默认用这里，单个订阅可以在「修改订阅 → 高级」里另选"
     >
-      <SubCondFields v-model="cfg.cond" />
+      <SubPriorityFields
+        :mode="cfg.priority.mode"
+        @update:mode="setPrioMode"
+        v-model:rules="cfg.priority.rules"
+        v-model:limit="cfg.priority.limit"
+      />
+      <SubCondFields v-model="cfg.cond" part="extras" />
       <HAlert status="accent" class="note">
-        资源标题写明不符合的直接跳过。分享里每个视频再逐个判：文件名没写的看资源标题，两边都没写算不符合、不转。
-        磁力只能看标题、又要扣离线配额，标题没写的不下；RE0 要花积分的资源同样要标题写明符合才解锁。
+        有达标的资源（命中第 1 条规则）就先用达标的；都不达标时先补集数，再按画质挑。
+        设了「只要命中前 N 条」或要中字时，资源标题写明不符的直接跳过；分享里每个视频再逐个判，文件名没写的看资源标题，两边都没写算不符、不转。
+        磁力只能看标题、又要扣离线配额，标题没写的不下；RE0 / 癫影要花积分的资源同样要标题写明才解锁。
       </HAlert>
     </SectionCard>
 

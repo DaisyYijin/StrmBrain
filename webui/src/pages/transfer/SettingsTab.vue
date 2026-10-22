@@ -37,7 +37,7 @@ const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
 ]
 const SUB_SECS: { key: SubSec; title: string }[] = [
   { key: 'check', title: '检查' },
-  { key: 'cond', title: '资源条件' },
+  { key: 'cond', title: '资源优先级' },
   { key: 'offline', title: '离线下载' },
   { key: 'unlock', title: '自动解锁' },
   { key: 'notify', title: '通知' },

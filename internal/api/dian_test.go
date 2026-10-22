@@ -152,7 +152,7 @@ func TestPlanSubCandidatesDian(t *testing.T) {
 	}
 	skipped := map[string]int{}
 	// 只开了癫影：癫影的进候选，RE0 的超限；磁力不用
-	cands, over := planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, DianMax: 20, DianLeft: -1, Re0Left: -1, Skipped: skipped})
+	cands, over := planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, DianMax: 20, DianLeft: -1, Re0Left: -1, Skipped: skipped})
 	if got := titles(cands); !reflect.DeepEqual(got, []string{"剧 S01 10分"}) || cands[0].Paid != 10 {
 		t.Fatalf("候选 = %v", got)
 	}
@@ -164,12 +164,12 @@ func TestPlanSubCandidatesDian(t *testing.T) {
 	}
 	// 电影的磁力照常用（一部片一条链接）
 	movie := &model.Subscription{ID: 2, MediaType: "movie"}
-	cands, _ = planSubCandidates(items[1:2], subPickCtx{Sub: movie, Now: now, DianMax: 20, DianLeft: -1})
+	cands, _ = planSubCandidates(items[1:2], subPickCtx{Prio: prioAny, Sub: movie, Now: now, DianMax: 20, DianLeft: -1})
 	if len(cands) != 1 {
 		t.Fatalf("电影磁力应可用: %v", titles(cands))
 	}
 	// 癫影预算只剩 5：10 分的超限
-	_, over = planSubCandidates(items[:1], subPickCtx{Sub: sub, Missing: missing, Now: now, DianMax: 20, DianLeft: 5})
+	_, over = planSubCandidates(items[:1], subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, DianMax: 20, DianLeft: 5})
 	if len(over) != 1 {
 		t.Fatalf("预算 5 应超限: %v", titles(over))
 	}
@@ -181,7 +181,7 @@ func TestSubDianPreview(t *testing.T) {
 	}
 	defer func() { model.DB = nil }()
 	sub := &model.Subscription{ID: 1, Title: "剧", MediaType: "tv"}
-	r := &subRunner{h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(),
+	r := &subRunner{h: &Handler{DB: model.DB}, cfg: testSubCfg(),
 		re0Files: func(string) (*re0Preview, error) { t.Fatal("癫影不该去请求 RE0 预览"); return nil, nil }}
 	fn := r.re0PreviewFn(sub, map[epKey]bool{{S: 1, E: 2}: true, {S: 1, E: 9}: true})
 	it := ResourceItem{Source: "dian", Title: "剧", files: []string{"剧 S01E01.mkv", "剧 S01E02.mkv", "Season 1/剧 S01E03.mkv"}}

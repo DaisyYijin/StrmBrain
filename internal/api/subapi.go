@@ -33,8 +33,10 @@ type subForm struct {
 	Exclude   string   `json:"exclude"`
 	// OfflineMode 空 = 跟随订阅设置
 	OfflineMode string `json:"offline_mode"`
-	// Cond 资源条件，nil = 跟随订阅设置
+	// Cond 资源条件（中字 / 体积），nil = 跟随订阅设置
 	Cond *subCond `json:"cond"`
+	// Priority 资源优先级，nil = 跟随订阅设置（subpriority.go）
+	Priority *subPrioSel `json:"priority"`
 	// Subdir 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir"`
 }
@@ -116,8 +118,22 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 	sub.Subdir = sd
 	sub.Cond = ""
 	if f.Cond != nil {
-		b, _ := json.Marshal(normalizeSubCond(*f.Cond))
+		b, _ := json.Marshal(keepCondExtras(normalizeSubCond(*f.Cond)))
 		sub.Cond = string(b)
+	}
+	sub.Priority = ""
+	if f.Priority != nil {
+		if !validSubPrioMode(f.Priority.Mode) {
+			return false, errors.New("资源优先级只能是 基础 / 跟随洗版策略 / 自定义")
+		}
+		p := subPrioSel{Mode: f.Priority.Mode}
+		if p.Mode == subPrioCustom {
+			if p.Rules = normalizeWashRules(f.Priority.Rules); len(p.Rules) == 0 {
+				return false, errors.New("自定义资源优先级至少要写一条规则")
+			}
+		}
+		b, _ := json.Marshal(p)
+		sub.Priority = string(b)
 	}
 	return before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
 }
@@ -126,7 +142,8 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 type subDTO struct {
 	model.Subscription
 	Sources  []string `json:"sources"`
-	Cond     *subCond `json:"cond"`     // nil = 跟随订阅设置
+	Cond     *subCond    `json:"cond"`     // nil = 跟随订阅设置
+	Priority *subPrioSel `json:"priority"` // nil = 跟随订阅设置
 	Inflight int      `json:"inflight"` // 在路上的尝试数
 	Running  bool     `json:"running"`  // 正在排队 / 检查
 }
@@ -143,6 +160,7 @@ func toSubDTO(s model.Subscription, inflight map[uint]int, running map[uint]bool
 			d.Cond = &c
 		}
 	}
+	d.Priority = parseSubPrioSel(s.Priority)
 	return d
 }
 
@@ -542,6 +560,10 @@ func (h *Handler) SubscribeSaveConfig(c *gin.Context) {
 	var cfg subscribeCfg
 	if err := c.ShouldBindJSON(&cfg); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if cfg.Priority.Mode == subPrioCustom && len(normalizeWashRules(cfg.Priority.Rules)) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "自定义资源优先级至少要写一条规则"})
 		return
 	}
 	cfg = normalizeSubscribeCfg(cfg)

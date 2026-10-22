@@ -83,7 +83,7 @@ func TestSubPreviewShares(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.Local)
 	var dirs []string
 	r := &subRunner{
-		h: h, cfg: defaultSubscribeCfg(), target: "T", cookie: "UID=1", re0Left: -1,
+		h: h, cfg: testSubCfg(), target: "T", cookie: "UID=1", re0Left: -1,
 		tc:     &TmdbClient{APIKey: "k", APIURL: tmdb.URL, Language: "zh-CN", httpClient: tmdb.Client()},
 		now:    func() time.Time { return now },
 		search: func(*model.Subscription) ([]ResourceItem, string) { return append([]ResourceItem(nil), items...), "" },

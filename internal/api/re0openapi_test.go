@@ -265,7 +265,7 @@ func TestPlanSubCandidatesRe0Preview(t *testing.T) {
 		return nil, "", errors.New("503")
 	}
 	skipped := map[string]int{}
-	cands, over := planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: -1,
+	cands, over := planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Re0Max: 20, Re0Left: -1,
 		Re0Preview: preview, Skipped: skipped})
 	var got []string
 	for _, c := range cands {
@@ -283,7 +283,7 @@ func TestPlanSubCandidatesRe0Preview(t *testing.T) {
 
 	// 超过上限：只通知，不预览
 	asked = nil
-	_, over = planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: now, Re0Max: 5, Re0Left: -1, Re0Preview: preview})
+	_, over = planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: missing, Now: now, Re0Max: 5, Re0Left: -1, Re0Preview: preview})
 	if len(asked) != 0 || len(over) != 2 {
 		t.Fatalf("超限时 预览了 %v，over=%d", asked, len(over))
 	}
@@ -305,7 +305,7 @@ func TestSubRe0PreviewFn(t *testing.T) {
 	defer func() { model.DB = nil }()
 	sub := &model.Subscription{ID: 1, Title: "剧", MediaType: "tv"}
 	calls := 0
-	r := &subRunner{h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), re0Files: func(slug string) (*re0Preview, error) {
+	r := &subRunner{h: &Handler{DB: model.DB}, cfg: testSubCfg(), re0Files: func(slug string) (*re0Preview, error) {
 		calls++
 		switch slug {
 		case "dead":

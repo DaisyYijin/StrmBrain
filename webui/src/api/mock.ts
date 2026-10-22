@@ -316,7 +316,7 @@ const SUBS = (
 ).map(([id, type, title, year, state, have, total, missing, inflight, running]) => ({
   id, tmdb_id: 90000 + id, media_type: type, title, year, poster_path: '', state, have, total, missing, inflight, running,
   scope: type === 'tv' ? 'all' : '', season: 0, ep_start: 0, ep_end: 0, specials: false, follow: type === 'tv' ? 'missing' : '',
-  sources: [], rank_limit: 0, include: '', exclude: '', offline_mode: '', cond: null, last_result: '找到 2 条资源，提交 1 条',
+  sources: [], rank_limit: 0, include: '', exclude: '', offline_mode: '', cond: null, priority: null, last_result: '找到 2 条资源，提交 1 条',
   last_check_at: new Date(Date.now() - 3_600_000).toISOString(), next_check_at: new Date(Date.now() + 3_600_000).toISOString(),
   empty_rounds: 0, created_at: new Date(Date.now() - 86_400_000 * 9).toISOString(),
 }))
@@ -333,7 +333,8 @@ const subRoutes: Record<string, unknown> = {
       enabled: true, air_delay_hours: 6, movie_wait: 'digital', max_subs_per_round: 10, fresh_interval_min: 60, gap_interval_hours: 12, max_eps_per_sub: 50, max_res_per_sub: 50, try_cooldown_sec: 5, max_snap_dirs: 40, share_preview_max: 8,
       re0_unlock_max: 10, re0_daily_budget: 30, dian_unlock_max: 0, dian_daily_budget: 0, exclude_default: '预告,花絮', notify: 'created,ingested,stalled',
       offline_mode: 'pack', offline_wait_hours: 24, offline_monthly: 30, offline_reserve: 10,
-      cond: { pix: '2160p,1080p', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },
+      cond: { pix: '', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },
+      priority: { mode: 'follow', rules: [], limit: 0 },
     },
   },
   '/tmdb/discover': (q: URLSearchParams) =>
