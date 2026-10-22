@@ -425,6 +425,11 @@ type SubAttempt struct {
 	SubID  uint   `json:"sub_id" gorm:"index;not null"`
 	Hash   string `json:"hash" gorm:"index;size:64"` // 与 DownloadLink.Hash 同口径（linkHashOf）
 	LinkID uint   `json:"link_id" gorm:"index"`      // 对应的 DownloadLink.ID：按它找整理记录结算
+	// LinkIDs 一条资源解锁出一批离线链接、一起提交进同一个包装目录时，LinkID 之外那几条的 DownloadLink.ID（「,12,13,」）；
+	// 整理记录认领到其中哪一条都不一定，结算要连它们一起查
+	LinkIDs string `json:"link_ids" gorm:"size:500"`
+	// Tasks 提交了几个 115 离线任务（0 按 1 算）：每月上限按任务数记账，一批链接是好几个
+	Tasks  int    `json:"tasks"`
 	Source string `json:"source" gorm:"size:16"`
 	Kind   string `json:"kind" gorm:"size:16"`
 	Title  string `json:"title" gorm:"size:500"`
@@ -434,12 +439,12 @@ type SubAttempt struct {
 	Episodes string `json:"episodes" gorm:"type:text"` // JSON 数组 ["S01E05", …]，电影为空
 	// Status inflight 在路上 / ingested 补上了 / partial 补上一部分 / rejected 内容不对 /
 	// failed 提交或整理失败 / useless 里面没有缺的集
-	Status     string     `json:"status" gorm:"index;size:10"`
-	Reason     string     `json:"reason" gorm:"size:500"`
-	RetryAt    *time.Time `json:"retry_at"`
-	Points     int        `json:"points"` // 为它花了多少 RE0 积分（每日预算按它累计）
+	Status  string     `json:"status" gorm:"index;size:10"`
+	Reason  string     `json:"reason" gorm:"size:500"`
+	RetryAt *time.Time `json:"retry_at"`
+	Points  int        `json:"points"` // 为它花了多少 RE0 积分（每日预算按它累计）
 	// Wash 洗版的尝试（换掉库里没达标的集），不是补缺集：洗版只认洗版试过的，补缺试过没用的资源洗版还能再看
-	Wash bool `json:"wash"`
+	Wash       bool       `json:"wash"`
 	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
 	ResolvedAt *time.Time `json:"resolved_at"`
 }

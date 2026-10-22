@@ -477,10 +477,8 @@ func (h *Handler) GetSubscription(c *gin.Context) {
 	var atts []model.SubAttempt
 	h.DB.Where("sub_id = ?", sub.ID).Order("id DESC").Limit(100).Find(&atts)
 	linkIDs := []uint{}
-	for _, a := range atts {
-		if a.LinkID > 0 {
-			linkIDs = append(linkIDs, a.LinkID)
-		}
+	for i := range atts {
+		linkIDs = append(linkIDs, subAttemptLinkIDs(&atts[i])...)
 	}
 	recCount := map[uint]int{}
 	if len(linkIDs) > 0 {
@@ -495,7 +493,10 @@ func (h *Handler) GetSubscription(c *gin.Context) {
 	}
 	list := make([]subAttemptDTO, 0, len(atts))
 	for _, a := range atts {
-		d := subAttemptDTO{SubAttempt: a, Records: recCount[a.LinkID], Episodes: []string{}}
+		d := subAttemptDTO{SubAttempt: a, Episodes: []string{}}
+		for _, id := range subAttemptLinkIDs(&a) {
+			d.Records += recCount[id]
+		}
 		for _, k := range unmarshalEpKeys(a.Episodes) {
 			d.Episodes = append(d.Episodes, k.String())
 		}

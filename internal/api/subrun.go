@@ -209,8 +209,8 @@ type subRunner struct {
 	mkdir   func(parent, name string) (string, error)
 	rmdir   func(cid string) error
 	offline func(link, target string) (status int, msg string, linkID uint, hash string)
-	// landed 包装目录里有没有东西了（离线秒传到了没有）；nil = 不等，当作到了（测试）
-	landed func(cid string) bool
+	// landed 包装目录里现在有哪些条目（名字）：看离线秒传到了没有；出错返回 nil。nil = 不等，当作到了（测试）
+	landed func(cid string) []string
 	// dropTask 删掉等不到秒传的离线任务；nil = 不删（测试）
 	dropTask func(hash string) error
 	quota    func() (left, total int, err error) // 115 离线剩余配额
@@ -311,9 +311,16 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		// 不做秒传试探：tryOffline 自己等 30 秒，没秒传就弃用；到了的跟这一轮一起整理
 		return h.offlineSubmitTask(link, target, "订阅", false)
 	}
-	r.landed = func(cid string) bool {
+	r.landed = func(cid string) []string {
 		entries, _, err := ops.listEntries(cid, 0)
-		return err == nil && len(entries) > 0
+		if err != nil {
+			return nil
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, fmt.Sprint(e["n"]))
+		}
+		return names
 	}
 	r.dropTask = func(hash string) error { return offlineDeleteTask(r.cookie, hash) }
 	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
@@ -698,7 +705,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		}
 		if att.Kind == "offline" && att.LinkID > 0 {
 			offlineUsed = true
-			r.offlineSpent()
+			r.offlineSpent(max(att.Tasks, 1))
 		}
 		if att.Status == subAttemptInflight {
 			submitted = true
@@ -822,20 +829,35 @@ func (r *subRunner) offlineGate() string {
 	return r.offlineStop
 }
 
-// offlineSpent 提交了一个离线任务：本地扣一次，用完就停（不再请求 115）
-func (r *subRunner) offlineSpent() {
+// offlineSpent 提交了 n 个离线任务：本地扣掉，用完就停（不再请求 115）
+func (r *subRunner) offlineSpent(n int) {
 	if r.offlineLeft > 0 {
-		r.offlineLeft--
+		r.offlineLeft = max(r.offlineLeft-n, 0)
 		if r.offlineLeft == 0 {
 			r.offlineStop = "本月离线任务到了上限"
 		}
 	}
 	if r.quotaLeft > 0 {
-		r.quotaLeft--
+		r.quotaLeft = max(r.quotaLeft-n, 0)
 		if r.quotaLeft < r.cfg.OfflineReserve {
 			r.offlineStop = fmt.Sprintf("115 离线配额只剩 %d", r.quotaLeft)
 		}
 	}
+}
+
+// offlineRoom 这一轮还能不能一次提交 n 个离线任务（一批链接）：本月剩余次数要够 n，
+// 115 剩余配额扣掉 n 之后不低于保留数。offlineGate 只核过「至少还能下一个」
+func (r *subRunner) offlineRoom(n int) string {
+	if why := r.offlineGate(); why != "" {
+		return why
+	}
+	if r.offlineLeft >= 0 && r.offlineLeft < n {
+		return fmt.Sprintf("要提交 %d 个离线任务，本月只剩 %d 个", n, r.offlineLeft)
+	}
+	if r.quotaLeft >= 0 && r.quotaLeft-n < r.cfg.OfflineReserve {
+		return fmt.Sprintf("要提交 %d 个离线任务，115 离线配额剩 %d，提交后低于保留的 %d 次", n, r.quotaLeft, r.cfg.OfflineReserve)
+	}
+	return ""
 }
 
 // stopOffline 这一轮不再提交离线；同一个原因在 quiet 之内只通知一次
@@ -861,8 +883,10 @@ func subOfflineUsedThisMonth(db *gorm.DB, now time.Time) int {
 		return 0
 	}
 	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	// 一批链接一起提交的一笔记着几个任务（Tasks），老记录是 0，按 1 算
 	var n int64
-	db.Model(&model.SubAttempt{}).Where("kind = ? AND created_at >= ? AND (link_id > 0 OR status <> ?)", "offline", start, subAttemptFailed).Count(&n)
+	db.Model(&model.SubAttempt{}).Where("kind = ? AND created_at >= ? AND (link_id > 0 OR status <> ?)", "offline", start, subAttemptFailed).
+		Select("COALESCE(SUM(CASE WHEN tasks > 1 THEN tasks ELSE 1 END), 0)").Scan(&n)
 	return int(n)
 }
 
@@ -946,11 +970,8 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 		r.notify("🔓 订阅自动解锁"+botSourceLabel(c.Item.Source)+"资源", r.re0SpentText(sub, c), sub, false)
 	}
 	att.URL = truncateStr(rl.URL, 1000)
-	if len(rl.More) > 0 {
-		// 解锁出一批离线链接：订阅一轮只提交一个离线任务，不替用户拆，链接交给用户手动提交
-		r.notify("⚠ 订阅：解锁出多条离线链接", fmt.Sprintf("订阅《%s》解锁「%s」得到 %d 条离线链接，订阅不自动提交，请手动处理：\n%s",
-			sub.Title, truncateStr(c.Item.Title, 60), len(rl.More)+1, strings.Join(append([]string{rl.URL}, rl.More...), "\n")), sub, true)
-		return fail(fmt.Sprintf("解锁出 %d 条离线链接，订阅不自动提交（已推通知）", len(rl.More)+1), false)
+	if len(rl.More) > 0 && rl.Action == "offline" {
+		return r.tryOfflineBatch(sub, c, rl, missing, maxEps, &att, fail)
 	}
 
 	switch rl.Action {
@@ -1154,7 +1175,7 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 		return fail(msg, true)
 	}
 	att.LinkID = linkID // 配额已经扣了：弃用的也算这一轮的那一个离线、也计入每月上限
-	if !r.waitOfflineLanded(cid) {
+	if _, ok := r.waitOfflineLanded(cid, nil); !ok {
 		why := fmt.Sprintf("%d 秒内没秒传，弃用", int(subOfflineWait/time.Second))
 		if r.dropTask != nil && hash != "" {
 			if err := r.dropTask(hash); err != nil {
@@ -1168,6 +1189,7 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 	}
 	att.Status, att.Wrapper = subAttemptInflight, wrapper
 	att.Reason = "整包离线下载"
+	r.claimByWrapper(wrapper, linkID)
 	if sub.MediaType == "tv" {
 		att.Episodes = marshalEpKeys(covered)
 	}
@@ -1176,28 +1198,224 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 	return *att, covered
 }
 
+// tryOfflineBatch RE0 / 癫影一条离线资源解锁出一批链接（多是按集拆开的 ed2k，一集一条）。
+// 积分已经花了，停下来交给用户等于白花，所以照分享那套按文件挑：ed2k 链接里带文件名与体积，
+// 当成一棵只有一层的分享交给 pickShareEpisodes（缺集、资源条件、优先级、同集挑一份，与 tryShare 同口径），
+// 只提交挑中的；这几个任务一起放进同一个包装目录、算这一轮的那一个离线，配额与每月上限按任务数核（offlineRoom）。
+// 提交后照样只等秒传：到了的留下，没到的删掉任务，一个都没到就整笔弃用。
+// 有链接认不出文件名（磁力等）时挑不了集，退回推通知让用户手动处理
+func (r *subRunner) tryOfflineBatch(sub *model.Subscription, c subCand, rl resLink, missing map[epKey]bool, maxEps int, att *model.SubAttempt, fail subFailFn) (model.SubAttempt, []epKey) {
+	att.Kind = "offline"
+	links := append([]string{rl.URL}, rl.More...)
+	manual := func(why string) (model.SubAttempt, []epKey) {
+		r.notify("⚠ 订阅：解锁出多条离线链接", fmt.Sprintf("订阅《%s》解锁「%s」得到 %d 条离线链接，%s，订阅没有提交，请手动处理：\n%s",
+			sub.Title, truncateStr(c.Item.Title, 60), len(links), why, strings.Join(links, "\n")), sub, true)
+		return fail(fmt.Sprintf("解锁出 %d 条离线链接，%s（已推通知）", len(links), why), false)
+	}
+	entries := make([]shareEntry, 0, len(links))
+	for i, l := range links {
+		name := downloadLinkName(l)
+		if name == "" || !strings.HasPrefix(strings.ToLower(l), "ed2k://") {
+			return manual("有链接认不出文件名、挑不了集")
+		}
+		var size int64
+		if parts := strings.Split(l, "|"); len(parts) >= 4 {
+			size, _ = strconv.ParseInt(parts[3], 10, 64)
+		}
+		entries = append(entries, shareEntry{ID: strconv.Itoa(i), Name: name, Size: size})
+	}
+	opts := r.sharePickOpts(sub, c.Item, missing)
+	opts.HaveSha1 = nil // ed2k 没有 sha1
+	opts.MaxEps = maxEps
+	pick := pickShareEpisodes(entries, opts)
+	if len(pick.Picks) == 0 {
+		reason := "里面没有缺的集（" + pick.summary() + "）"
+		if att.Wash {
+			reason = "里面没有比库里更好的（" + pick.summary() + "）"
+		} else if sub.MediaType == "movie" {
+			reason = "里面没有能用的视频（" + pick.summary() + "）"
+		}
+		now := r.now()
+		att.Status, att.Reason, att.ResolvedAt = subAttemptUseless, truncateStr(reason, 480), &now
+		r.h.DB.Create(att)
+		log.Printf("[订阅] ○ 《%s》资源「%s」没用上：%s", sub.Title, truncateStr(c.Item.Title, 50), reason)
+		return *att, nil
+	}
+	if why := r.offlineRoom(len(pick.Picks)); why != "" {
+		return manual(why)
+	}
+	coveredOf := func(p sharePick) []epKey {
+		if sub.MediaType == "movie" {
+			return []epKey{{}}
+		}
+		return p.Covered
+	}
+	wrapper, cid, err := r.makeWrapper(sub, coveredOf(pick))
+	if err != nil {
+		return fail("建包装目录失败："+err.Error(), true)
+	}
+
+	// 逐条提交：115 上已有同一个任务（409）的不算这一笔，下回来的东西不会进这个包装目录
+	type sent struct {
+		e      shareEntry
+		linkID uint
+		hash   string
+	}
+	var ok []sent
+	var errs []string
+	for _, e := range pick.Picks {
+		i, _ := strconv.Atoi(e.ID)
+		status, msg, linkID, hash := r.offline(links[i], cid)
+		if status != 200 {
+			errs = append(errs, truncateStr(e.Name, 40)+"："+msg)
+			if strings.Contains(msg, "配额") || strings.Contains(msg, "次数") {
+				r.offlineStop = "115 离线配额用完了"
+				break
+			}
+			continue
+		}
+		ok = append(ok, sent{e, linkID, hash})
+	}
+	if len(ok) == 0 {
+		r.dropWrapper(cid, wrapper)
+		return fail(strings.Join(errs, "；"), true)
+	}
+	// 配额已经扣了：弃用的也算这一轮的那一个离线、按任务数计入每月上限
+	att.LinkID, att.Tasks = ok[0].linkID, len(ok)
+	var more []string
+	for _, s := range ok[1:] {
+		more = append(more, strconv.FormatUint(uint64(s.linkID), 10))
+	}
+	if len(more) > 0 {
+		att.LinkIDs = "," + strings.Join(more, ",") + ","
+	}
+
+	want := make([]string, 0, len(ok))
+	for _, s := range ok {
+		want = append(want, s.e.Name)
+	}
+	got, landed := r.waitOfflineLanded(cid, want)
+	gotSet := map[string]bool{}
+	for _, n := range got {
+		gotSet[n] = true
+	}
+	var dropped, kept []shareEntry
+	for _, s := range ok {
+		if gotSet[s.e.Name] {
+			kept = append(kept, s.e)
+			continue
+		}
+		dropped = append(dropped, s.e)
+		if r.dropTask != nil && s.hash != "" {
+			if err := r.dropTask(s.hash); err != nil {
+				log.Printf("[订阅] ✗ 《%s》删离线任务失败，请到 115 离线列表手动删除（%s）: %v", sub.Title, s.e.Name, err)
+			}
+		}
+	}
+	if !landed {
+		r.dropWrapper(cid, wrapper)
+		return fail(fmt.Sprintf("%d 个离线任务 %d 秒内都没秒传，弃用（已删掉离线任务）", len(ok), int(subOfflineWait/time.Second)), false)
+	}
+	// 实际补上的集按到了的文件重算（没到的那几集下一轮接着找）
+	covered := coveredOf(pickShareEpisodes(kept, opts))
+	att.Status, att.Wrapper = subAttemptInflight, wrapper
+	att.Reason = fmt.Sprintf("解锁出 %d 条离线链接，提交 %d 个", len(links), len(ok))
+	if len(dropped) > 0 {
+		att.Reason += fmt.Sprintf("，%d 个没秒传已删掉", len(dropped))
+	}
+	if len(errs) > 0 {
+		att.Reason += "，" + fmt.Sprintf("%d 个提交失败", len(errs))
+	}
+	att.Reason = truncateStr(att.Reason, 480)
+	if sub.MediaType == "tv" {
+		att.Episodes = marshalEpKeys(covered)
+	}
+	r.h.DB.Create(att)
+	// 只给头一条记包装目录名：按名字认领时落到 att.LinkID 上，订阅详情跳整理记录（?link_id=）对得上
+	r.claimByWrapper(wrapper, att.LinkID)
+	log.Printf("[订阅] ✓ 《%s》「%s」解锁出 %d 条离线链接，提交 %d 个、秒传到了 %d 个（%s）→ %s", sub.Title, truncateStr(c.Item.Title, 50),
+		len(links), len(ok), len(kept), subEpisodesText(sub, covered), wrapper)
+	return *att, covered
+}
+
+// subAttemptLinkIDs 一笔尝试对应的全部来源链接（LinkID + 一批离线的 LinkIDs）
+func subAttemptLinkIDs(a *model.SubAttempt) []uint {
+	var ids []uint
+	if a.LinkID > 0 {
+		ids = append(ids, a.LinkID)
+	}
+	for _, f := range strings.Split(a.LinkIDs, ",") {
+		if n, err := strconv.ParseUint(f, 10, 64); err == nil && n > 0 {
+			ids = append(ids, uint(n))
+		}
+	}
+	return ids
+}
+
 // subOfflineWait 订阅提交的离线等多久秒传。离线一般都是秒传，等不到的多半要真下载几个小时，
 // 不值得让它拖着这一轮、也不让它下完单独再整理一轮（维护者定的：等 30 秒，不到就弃用）
 const subOfflineWait = 30 * time.Second
 
-// waitOfflineLanded 每 5 秒看一次包装目录，东西到了返回 true。
-// 中途被叫停的按到了算：不替用户删任务，下完照旧由离线监视器触发整理
-func (r *subRunner) waitOfflineLanded(cid string) bool {
+// waitOfflineLanded 每 5 秒看一次包装目录。want 为空（整包离线）= 有东西就算到了；
+// 否则（一批 ed2k）等这几个文件名都到，返回到了的那些（got），ok = 至少到了一个。
+// 中途被叫停的按全到了算：不替用户删任务，下完照旧由离线监视器触发整理
+func (r *subRunner) waitOfflineLanded(cid string, want []string) (got []string, ok bool) {
 	if r.landed == nil {
-		return true
+		return want, true
 	}
 	subLane.setSub("等离线秒传", 0, 0, fmt.Sprintf("最多 %d 秒", int(subOfflineWait/time.Second)))
 	for waited := time.Duration(0); ; {
 		step := 5 * time.Second
 		if r.sleep != nil && !r.sleep(step) {
-			return true
+			return want, true
 		}
 		waited += step
-		if r.landed(cid) {
-			return true
+		have := r.landed(cid)
+		if len(want) == 0 {
+			if len(have) > 0 {
+				return nil, true
+			}
+		} else if got = landedOf(want, have); len(got) == len(want) {
+			return got, true
 		}
 		if waited >= subOfflineWait {
-			return false
+			return got, len(want) > 0 && len(got) > 0
+		}
+	}
+}
+
+// landedOf want 里已经出现在包装目录的那些。115 存 ed2k 用链接里的文件名；
+// 名字对不上、条目数却一样多的（115 替换了名字里的字符）按全到了算：包装目录是这一轮新建的，不会有别的东西
+func landedOf(want, have []string) []string {
+	set := map[string]bool{}
+	for _, n := range have {
+		set[n] = true
+	}
+	var got []string
+	for _, n := range want {
+		if set[n] {
+			got = append(got, n)
+		}
+	}
+	if len(got) < len(want) && len(have) >= len(want) {
+		return want
+	}
+	return got
+}
+
+// claimByWrapper 给这次提交的来源链接记上包装目录名：整理记录（Source = 包装目录名）按名字就认得出来源，
+// 不用等离线监视器 30 秒一轮的轮询回填产物 fid（包装目录在这一轮结束就放行整理，可能抢在回填之前）
+func (r *subRunner) claimByWrapper(wrapper string, ids ...uint) {
+	if r.h == nil || r.h.DB == nil || wrapper == "" {
+		return
+	}
+	for _, id := range ids {
+		var row model.DownloadLink
+		if id == 0 || r.h.DB.First(&row, id).Error != nil {
+			continue
+		}
+		if names := unmarshalStrs(row.ResultNames); !containsStr(names, wrapper) {
+			r.h.DB.Model(&model.DownloadLink{}).Where("id = ?", row.ID).Update("result_names", marshalStrs(append(names, wrapper)))
 		}
 	}
 }

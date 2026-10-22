@@ -95,8 +95,9 @@ func settleSubscription(db *gorm.DB, sub *model.Subscription, now time.Time) (re
 	for i := range rows {
 		a := &rows[i]
 		var recs []model.OrganizeRecord
-		if a.LinkID > 0 {
-			db.Where("link_id = ?", a.LinkID).Find(&recs)
+		// 一批离线链接一起提交的，整理记录认领到其中哪一条都不一定，连 LinkIDs 一起查
+		if ids := subAttemptLinkIDs(a); len(ids) > 0 {
+			db.Where("link_id IN ?", ids).Find(&recs)
 		}
 		r := settleSubAttempt(sub, a, recs, now)
 		if r.Status == subAttemptInflight {
