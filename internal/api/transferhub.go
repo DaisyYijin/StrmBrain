@@ -958,7 +958,7 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			return resSubmitResult{}, fmt.Errorf("%s", msg)
 		}
 		if len(rl.More) > 0 {
-			// 癫影一条离线分享常是一批 ed2k（一集一条）：逐条提交，一条一个离线任务
+			// 癫影 / RE0 一条离线资源常是一批 ed2k（一集一条）：逐条提交，一条一个离线任务
 			var failed []string
 			for _, l := range rl.More {
 				if status, msg := h.offlineSubmitCore(l, target, label, true); status != http.StatusOK {
@@ -993,7 +993,7 @@ type resLink struct {
 	URL      string
 	Code     string   // 分享提取码
 	Unlocked bool     // RE0 刚解锁出来的：积分可能已经花了，后续失败也要把链接交回去
-	More     []string // 癫影一条离线分享解锁出好几条链接：URL 之外的那些（一条一个离线任务）
+	More     []string // 癫影 / RE0 一条离线资源解锁出好几条链接：URL 之外的那些（一条一个离线任务）
 }
 
 // resolveResourceLink 把一条资源换成能直接用的链接：直接贴的链接按形态分流、观影详情页取磁力、RE0 解锁。
@@ -1068,13 +1068,14 @@ func (h *Handler) resolveResourceLink(req resSubmitReq) (resLink, error) {
 			}
 			return resLink{Action: "open", URL: strings.Join(u.Links, "\n"), Unlocked: true}, nil
 		}
-		unlocked, ucode, err := re0UnlockSlug(h, req.Ref, req.Points)
+		links, ucode, err := re0UnlockSlug(h, req.Ref, req.Points)
 		if err != nil {
 			return resLink{}, fmt.Errorf("解锁失败: %w", err)
 		}
+		unlocked := links[0]
 		switch classifyLink(unlocked) {
 		case "magnet", "ed2k":
-			return resLink{Action: "offline", URL: unlocked, Unlocked: true}, nil
+			return resLink{Action: "offline", URL: unlocked, More: links[1:], Unlocked: true}, nil
 		}
 		if !is115ShareLink(unlocked) {
 			return resLink{Action: "open", URL: unlocked, Code: ucode, Unlocked: true}, nil

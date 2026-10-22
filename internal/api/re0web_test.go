@@ -179,3 +179,24 @@ func TestRe0BotFree(t *testing.T) {
 		t.Fatalf("自动择优应当跳过要花积分的，挑到 %d", i)
 	}
 }
+
+// 一条 ED2K 资源解锁出一批链接：全部拆出来、按 hash 去重（2026-10-22 现场 8 条只下了 1 条）
+func TestRe0SplitLinks(t *testing.T) {
+	a := "ed2k://|file|The.Terminal.List.S02E01.2160p.mkv|123|7F6F9C916B777C9E5CB9A9CAC517F2D3|/"
+	b := "ed2k://|file|The Terminal List S02E02.mkv|456|0123456789abcdef0123456789abcdef|h=XYZ|/"
+	got := re0SplitLinks(a + "\n" + b + "\n" + strings.ToLower(a))
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("got %q", got)
+	}
+	if got := re0SplitLinks(" https://115cdn.com/s/abc?password=x "); len(got) != 1 || got[0] != "https://115cdn.com/s/abc?password=x" {
+		t.Fatalf("share: %q", got)
+	}
+	if got := re0SplitLinks(a); len(got) != 1 || got[0] != a {
+		t.Fatalf("single: %q", got)
+	}
+	// 「复制全部」的文本：链接之间夹着说明文字，也可能挨在一起
+	if got := re0SplitLinks("第1集：" + a + "\n第2集：" + b + a[:0] + "ed2k://|file|c.mkv|7|ffffffffffffffffffffffffffffffff|/"); len(got) != 3 ||
+		got[0] != a || got[1] != b || got[2] != "ed2k://|file|c.mkv|7|ffffffffffffffffffffffffffffffff|/" {
+		t.Fatalf("copy-all: %q", got)
+	}
+}

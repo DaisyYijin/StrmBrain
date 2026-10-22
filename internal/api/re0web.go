@@ -1351,16 +1351,24 @@ const re0ShareJS = `() => {
 		if (v && ok(v.trim())) return v.trim();
 	}
 	for (const v of (document.body?.innerText || '').match(/https?:\/\/[^\s<>"']+/g) || []) if (ok(v)) return v;
-	// ED2K 资源解锁出来的是 ed2k 链接（文件名可能带空格，按 |file|名|大小|hash| 的结构抓）
-	const ed = /ed2k:\/\/\|file\|[^|\r\n]+\|\d+\|[0-9a-fA-F]{32}\|(?:[^|\s]*\|)*\/?/;
+	// ED2K 资源解锁出来的是 ed2k 链接（文件名可能带空格，按 |file|名|大小|hash| 的结构抓）。
+	// 一条资源常是一批 ed2k（一集一条），要全部抓下来按 hash 去重、换行拼起来；
+	// 只取第一条的话 8 集只下了 1 集（2026-10-22 现场）。结尾的可选段不许吞进下一条 ed2k://
+	const ed = /ed2k:\/\/\|file\|[^|\r\n]+\|\d+\|[0-9a-fA-F]{32}\|(?:(?!ed2k:)[^|\s]*\|)*\/?/g;
 	const dec = v => { try { return decodeURIComponent(v); } catch { return v; } };
+	const seen = new Set(), out = [];
+	const add = s => {
+		for (const m of s.match(ed) || []) {
+			const k = (m.split('|')[4] || '').toLowerCase();
+			if (k && !seen.has(k)) { seen.add(k); out.push(m); }
+		}
+	};
 	for (const el of document.querySelectorAll('a[href], input, textarea')) {
 		const v = (el.tagName === 'A' ? el.getAttribute('href') : el.value) || '';
-		const m = (v.startsWith('ed2k') ? dec(v) : v).match(ed);
-		if (m) return m[0];
+		add(v.startsWith('ed2k') ? dec(v) : v);
 	}
-	const m = (document.body?.innerText || '').match(ed);
-	return m ? m[0] : '';
+	add(document.body?.innerText || '');
+	return out.join('\n');
 }`
 
 // isRe0ShareURL 是不是 115 分享链接
@@ -1384,13 +1392,75 @@ func isRe0Ed2k(v string) bool {
 
 var re0ConfirmRe = regexp.MustCompile(`^\s*(确认解锁|确定解锁|Confirm unlock)\s*$`)
 
+// re0CopyHookJS 拦下页面写剪贴板的动作，把要复制的文本记在 window.__re0Copied。
+// 无头浏览器里剪贴板读不回来（也不该动用户的剪贴板），所以不真写、只截下来
+const re0CopyHookJS = `() => {
+	window.__re0Copied = '';
+	const cap = t => { window.__re0Copied = String(t ?? ''); };
+	const c = navigator.clipboard;
+	if (c) {
+		try { c.writeText = t => { cap(t); return Promise.resolve(); }; } catch {}
+		try {
+			c.write = async items => {
+				for (const it of items || []) {
+					if ((it.types || []).includes('text/plain')) cap(await (await it.getType('text/plain')).text());
+				}
+			};
+		} catch {}
+	}
+	const orig = document.execCommand.bind(document);
+	document.execCommand = (cmd, ...a) => {
+		if (String(cmd).toLowerCase() === 'copy') {
+			const el = document.activeElement;
+			const s = (el && 'value' in el && el.value) || String(window.getSelection() || '');
+			if (s) { cap(s); return true; }
+		}
+		return orig(cmd, ...a);
+	};
+	return true;
+}`
+
+const re0CopyAllRe = `^\s*(复制全部|全部复制|一键复制|复制所有|Copy all)`
+
+// re0CopyAll 点资源页的「复制全部」，返回它要复制的全文（没有这个按钮 / 没截到返回空）。
+// 一条 ED2K 资源常是一批链接，页面上未必全展开，以这个按钮给的为准
+func re0CopyAll(p *rod.Page) string {
+	btn, err := p.Sleeper(rod.NotFoundSleeper).ElementR("button", re0CopyAllRe)
+	if err != nil {
+		return ""
+	}
+	if vis, _ := btn.Visible(); !vis {
+		return ""
+	}
+	if _, err := p.Eval(re0CopyHookJS); err != nil {
+		log.Printf("[RE0网页]   ⚠ 拦剪贴板失败，只用页面上看得到的链接：%v", err)
+		return ""
+	}
+	if err := re0Click(btn); err != nil {
+		log.Printf("[RE0网页]   ⚠ 点「复制全部」失败，只用页面上看得到的链接：%v", err)
+		return ""
+	}
+	for i := 0; i < 12; i++ {
+		time.Sleep(250 * time.Millisecond)
+		if res, err := p.Eval(`() => window.__re0Copied || ''`); err == nil {
+			if s := strings.TrimSpace(res.Value.Str()); s != "" {
+				log.Printf("[RE0网页]   「复制全部」拿到 %d 条链接", len(re0SplitLinks(s)))
+				return s
+			}
+		}
+	}
+	log.Printf("[RE0网页]   ⚠ 点了「复制全部」但没截到内容，只用页面上看得到的链接")
+	return ""
+}
+
 // re0WebUnlock 网页解锁一条资源。已解锁过的页面直接显示链接，不会再点按钮（不扣积分）。
 // 只能从 resolveResourceLink 的 confirm 分支进来
-func re0WebUnlock(slug string, points *int) (link, code string, err error) {
+func re0WebUnlock(slug string, points *int) (links []string, code string, err error) {
 	if !re0SlugRe.MatchString(slug) {
-		return "", "", fmt.Errorf("RE0 资源编号无效")
+		return nil, "", fmt.Errorf("RE0 资源编号无效")
 	}
 	submitted := false
+	var link string
 	err = re0Web("解锁 "+truncateStr(slug, 16), "/resource/115/"+slug, 3*time.Minute, func(p *rod.Page) error {
 		re0Step("找分享链接 / 解锁按钮")
 		deadline := time.Now().Add(30 * time.Second)
@@ -1404,7 +1474,14 @@ func re0WebUnlock(slug string, points *int) (link, code string, err error) {
 				return nil
 			}
 			if res, err := p.Eval(re0ShareJS); err == nil {
-				if s := res.Value.Str(); isRe0ShareURL(s) || isRe0Ed2k(s) {
+				if s := res.Value.Str(); isRe0ShareURL(s) {
+					link = s
+					return nil
+				} else if isRe0Ed2k(firstLine(s)) {
+					// 页面上的列表可能折叠 / 只显示一部分，「复制全部」给的才是全的；页面上抓到的并在后面兜底
+					if all := re0CopyAll(p); all != "" {
+						s = all + "\n" + s
+					}
 					link = s
 					return nil
 				}
@@ -1438,15 +1515,60 @@ func re0WebUnlock(slug string, points *int) (link, code string, err error) {
 		return fmt.Errorf("页面上既没有分享链接也没有「确认解锁」按钮（%s）", re0URL(p))
 	})
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	if isRe0Ed2k(link) {
+	links = re0SplitLinks(link)
+	if isRe0Ed2k(links[0]) {
 		// ed2k 没有提取码；文件名里的 ? 会被 url.Parse 当成查询串
 	} else if u, perr := url.Parse(link); perr == nil {
 		code = firstNonEmpty(u.Query().Get("password"), u.Query().Get("pwd"))
 	}
-	log.Printf("[RE0] ✦ 网页解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), re0SpendNote(submitted, points))
-	return link, code, nil
+	log.Printf("[RE0] ✦ 网页解锁: %s → %s%s（%s）", truncateStr(slug, 16), truncateStr(links[0], 60), re0MoreNote(links), re0SpendNote(submitted, points))
+	return links, code, nil
+}
+
+// re0Ed2kHeadRe 一段以 ed2k:// 开头的文本里取出这条链接（文件名可能带空格，不跨行）
+var re0Ed2kHeadRe = regexp.MustCompile(`^ed2k://\|file\|[^|\r\n]+\|\d+\|[0-9a-fA-F]{32}\|(?:[^|\s]*\|)*/?`)
+
+// re0SplitLinks 解锁结果拆成一条条链接：一条资源可能给出一批 ed2k（一集一条），
+// 网页上抓到的 / 「复制全部」给的是一段文本（链接之间可能夹着「第1集：」之类），OpenAPI 的 full_url 也可能是多行。
+// 先按 ed2k:// 切段再在每段开头取链接（切段在先，结尾的可选段就吞不进下一条），按 hash 去重；
+// 不是 ed2k 的原样一条
+func re0SplitLinks(s string) []string {
+	s = strings.TrimSpace(s)
+	if !strings.Contains(s, "ed2k://") {
+		return []string{s}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for i, part := range strings.Split(s, "ed2k://") {
+		if i == 0 {
+			continue // 第一个 ed2k:// 之前的东西
+		}
+		l := re0Ed2kHeadRe.FindString("ed2k://" + part)
+		if l == "" {
+			continue
+		}
+		key := l
+		if f := strings.Split(l, "|"); len(f) > 4 {
+			key = strings.ToLower(f[4])
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, l)
+		}
+	}
+	if len(out) == 0 {
+		return []string{s}
+	}
+	return out
+}
+
+func re0MoreNote(links []string) string {
+	if len(links) > 1 {
+		return fmt.Sprintf(" 等 %d 条", len(links))
+	}
+	return ""
 }
 
 // re0SpendNote 解锁日志里的积分说明。网页通道里免费资源也要点「确认解锁」，

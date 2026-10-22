@@ -860,8 +860,9 @@ func re0ListResources(h *Handler, mediaType string, tmdbID int) ([]re0Resource, 
 }
 
 // re0UnlockSlug 解锁一条资源，拿到分享链接与访问码。已解锁过的再调一次不扣积分（already_owned）
-// points 是列表上标的解锁积分（nil = 不知道），只用于日志
-func re0UnlockSlug(h *Handler, slug string, points *int) (link, code string, err error) {
+// points 是列表上标的解锁积分（nil = 不知道），只用于日志。
+// ED2K 资源一次可能给出一批链接（一集一条），所以返回的是列表，至少一条
+func re0UnlockSlug(h *Handler, slug string, points *int) (links []string, code string, err error) {
 	cfg := loadRe0Cfg()
 	if re0Channel(cfg) == "web" {
 		return re0WebUnlock(slug, points)
@@ -874,14 +875,11 @@ func re0UnlockSlug(h *Handler, slug string, points *int) (link, code string, err
 	}
 	if err := re0Call(h, cfg, http.MethodPost, "/api/open/resources/unlock", nil,
 		map[string]string{"slug": slug}, &data); err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	link = data.FullURL
-	if link == "" {
-		link = data.URL
-	}
-	log.Printf("[RE0] ✦ 解锁: %s → %s（%s）", truncateStr(slug, 16), truncateStr(link, 60), re0SpendNote(!data.AlreadyOwned, points))
-	return link, data.AccessCode, nil
+	links = re0SplitLinks(firstNonEmpty(data.FullURL, data.URL))
+	log.Printf("[RE0] ✦ 解锁: %s → %s%s（%s）", truncateStr(slug, 16), truncateStr(links[0], 60), re0MoreNote(links), re0SpendNote(!data.AlreadyOwned, points))
+	return links, data.AccessCode, nil
 }
 
 // ==================== 文件列表预览（不解锁、不花积分） ====================
