@@ -950,28 +950,17 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		return resSubmitResult{Message: msg + "，完成后自动整理入库"}, nil
 
 	case "offline":
+		if len(rl.More) > 0 {
+			// 癫影 / RE0 一条离线资源常是一批 ed2k（一集一条）：逐条提交，一条一个离线任务。
+			// 之前提交过的（115 报任务已存在）跳过、接着提交别的 —— 原来第一条撞上就整批返回，后面几集一条没提交
+			return h.submitOfflineBatch(append([]string{rl.URL}, rl.More...), target, label), nil
+		}
 		if status, msg := h.offlineSubmitCore(rl.URL, target, label, true); status != http.StatusOK {
 			if rl.Unlocked {
 				// 积分已经花了：把链接交回去，用户还能自己提交离线
-				return resSubmitResult{Message: "已解锁，但提交离线失败：" + msg, OpenURL: strings.Join(append([]string{rl.URL}, rl.More...), "\n")}, nil
+				return resSubmitResult{Message: "已解锁，但提交离线失败：" + msg, OpenURL: rl.URL}, nil
 			}
 			return resSubmitResult{}, fmt.Errorf("%s", msg)
-		}
-		if len(rl.More) > 0 {
-			// 癫影 / RE0 一条离线资源常是一批 ed2k（一集一条）：逐条提交，一条一个离线任务
-			var failed []string
-			for _, l := range rl.More {
-				if status, msg := h.offlineSubmitCore(l, target, label, true); status != http.StatusOK {
-					failed = append(failed, l)
-					log.Printf("[资源] ✗ 离线提交失败（%s）：%s", truncateStr(l, 60), msg)
-				}
-			}
-			n := len(rl.More) + 1
-			if len(failed) > 0 {
-				return resSubmitResult{Message: fmt.Sprintf("已解锁，%d 条链接里 %d 条提交离线失败（链接附在下面，可以手动提交）", n, len(failed)),
-					OpenURL: strings.Join(failed, "\n")}, nil
-			}
-			return resSubmitResult{Message: fmt.Sprintf("已解锁并提交 %d 个 115 离线任务，完成后自动整理入库", n)}, nil
 		}
 		if rl.Unlocked {
 			return resSubmitResult{Message: "已解锁并提交 115 离线下载，完成后自动整理入库"}, nil
@@ -985,6 +974,40 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		return resSubmitResult{Message: "请手动打开链接", OpenURL: rl.URL, Code: rl.Code}, nil
 	}
 	return resSubmitResult{}, fmt.Errorf("不支持的操作：%s", rl.Action)
+}
+
+// submitOfflineBatch 一次解锁出的一批离线链接逐条提交（只在解锁之后用：积分已经花了，失败的链接要交回去）
+func (h *Handler) submitOfflineBatch(links []string, target, label string) resSubmitResult {
+	var failed []string
+	ok, dup := 0, 0
+	for _, l := range links {
+		switch status, msg := h.offlineSubmitCore(l, target, label, true); status {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			dup++
+			log.Printf("[资源] ○ 115 上已有这条离线任务，跳过（%s）", truncateStr(l, 60))
+		default:
+			failed = append(failed, l)
+			log.Printf("[资源] ✗ 离线提交失败（%s）：%s", truncateStr(l, 60), msg)
+		}
+	}
+	parts := []string{fmt.Sprintf("已解锁 %d 条链接", len(links))}
+	if ok > 0 {
+		parts = append(parts, fmt.Sprintf("提交 %d 个 115 离线任务", ok))
+	}
+	if dup > 0 {
+		parts = append(parts, fmt.Sprintf("%d 条之前提交过、115 上已有任务", dup))
+	}
+	if len(failed) > 0 {
+		parts = append(parts, fmt.Sprintf("%d 条提交失败（链接附在下面，可以手动提交）", len(failed)))
+		return resSubmitResult{Message: strings.Join(parts, "，"), OpenURL: strings.Join(failed, "\n")}
+	}
+	msg := strings.Join(parts, "，")
+	if ok > 0 {
+		msg += "，完成后自动整理入库"
+	}
+	return resSubmitResult{Message: msg}
 }
 
 // resLink 一条资源最终落到的链接

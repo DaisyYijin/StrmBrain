@@ -26,6 +26,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// offlineErrTaskExists 115 离线「任务已存在，请勿输入重复的链接地址」的 errcode；offlineSubmitTask 对它回 409
+const offlineErrTaskExists = 10008
+
 // offlineSubmitCore 提交离线下载任务核心（/offline/add 与影巢磁力转存共用）。
 // target 空则回落分享同步接收文件夹；organize 时挂秒传试探与延迟整理；
 // source 是提交来源（web / 机器人等），只用于台账留痕。
@@ -113,6 +116,10 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 		}
 		if errMsg == "" {
 			errMsg = "未知原因（响应: " + truncateStr(string(body), 100) + "）"
+		}
+		if resp.ErrCode == offlineErrTaskExists {
+			// 之前提交过同一条链接：115 上已有这个任务，不算提交失败，调用方据此跳过、接着提交别的
+			return http.StatusConflict, errMsg, 0, resp.InfoHash
 		}
 		return http.StatusBadGateway, errMsg, 0, ""
 	}
