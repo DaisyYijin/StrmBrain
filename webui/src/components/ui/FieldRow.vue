@@ -25,7 +25,7 @@ defineProps<{
       <span v-if="required" class="req">*</span>
       <span>{{ label }}</span>
       <HHelpTip v-if="tip" :text="tip" />
-      <span v-if="changed" class="changed" title="已改动（与默认值不同）" aria-label="已改动" />
+      <span v-if="changed" class="changed" title="非默认值（与默认值不同，不代表没保存）" aria-label="非默认值" />
     </div>
     <div class="row-control field-row-control" :class="{ wide }">
       <slot />
@@ -62,7 +62,7 @@ defineProps<{
   height: 6px;
   flex-shrink: 0;
   border-radius: 999px;
-  background: var(--warning);
+  background: var(--accent);
 }
 .req {
   color: var(--danger);

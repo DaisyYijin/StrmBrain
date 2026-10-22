@@ -41,7 +41,8 @@ watch(open, (v) => {
     <button type="button" class="adv-bar" :aria-expanded="open" @click="open = !open">
       <SlidersHorizontal :size="14" />
       <span class="adv-title">高级设置</span>
-      <span v-if="changed" class="adv-changed">{{ changed }} 项已改动</span>
+      <!-- 说的是「和默认值不一样」，不是「没保存」：原来写「N 项已改动」配警告色，保存后还挂着，被读成没存上 -->
+      <span v-if="changed" class="adv-changed" title="这几项用的不是默认值（已保存的也算）">{{ changed }} 项非默认</span>
       <span v-else-if="hint && !open" class="adv-hint">{{ hint }}</span>
       <ChevronDown :size="15" class="adv-caret" />
     </button>
@@ -78,8 +79,8 @@ watch(open, (v) => {
   padding: 0 6px;
   border-radius: var(--r-sm);
   font-size: 11.5px;
-  color: var(--warning-foreground);
-  background: var(--warning);
+  color: var(--muted);
+  background: var(--default);
 }
 .adv-hint {
   min-width: 0;
