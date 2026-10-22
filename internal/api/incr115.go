@@ -853,6 +853,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					// 本地已有实体：只补台账，不重复下载
 					upsertSyncedFile(h.DB, f, rel, "asset")
 					sum.AssetsSkipped++
+				case errors.Is(err, errAssetLocalGone):
+					// 本站回传上去、本地随后被删的元数据：不拉回来，也不记台账（网盘那份交给深度删除）
+					lg.vlogf("○ 不下载 %s：本站从本地回传上去的，本地已删除", rel)
+					sum.AssetsSkipped++
 				default:
 					sum.AssetsFailed++
 				}

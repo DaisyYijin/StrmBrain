@@ -501,6 +501,16 @@ func uploadStampDone(db *gorm.DB, path string, st fileStamp) bool {
 	return m.ModTime == st.modTime.UnixNano() && m.Size == st.size
 }
 
+// uploadedFromHere 这个本地路径的文件是不是本站回传上去过的（有上传指纹）
+func uploadedFromHere(db *gorm.DB, path string) bool {
+	if db == nil {
+		return false
+	}
+	var n int64
+	db.Model(&model.UploadMark{}).Where("path = ?", path).Count(&n)
+	return n > 0
+}
+
 // markUploadedStamp 记录上传指纹（存在则更新；Emby 覆盖文件后指纹变化触发重传）
 func markUploadedStamp(db *gorm.DB, path string, st fileStamp) {
 	db.Clauses(clause.OnConflict{

@@ -71,6 +71,12 @@ type incrDeps interface {
 // 调用方据此记「跳过」而不是「下载」或「失败」
 var errAssetExists = errors.New("附属文件已存在")
 
+// errAssetLocalGone 这份附属文件是本站从本地传上去的（有上传指纹），本地那份后来没了。
+// 上传在 115 上产生的 upload_file 事件绕回来时本地常常已经被删（2026-10-22 现场：
+// 刮削完回传 NFO，用户随即在 Emby 里删了这部片，增量把 NFO 又下回来，
+// 留下一个只有 NFO 的空片目目录）。本地是源头，删了就不该从网盘再拉回来
+var errAssetLocalGone = errors.New("本地已删除的回传文件")
+
 // incrRetryDelay 拉取/遍历失败后的重试间隔。
 // 做成变量只为让测试不必真等 30 秒，生产行为不变
 var incrRetryDelay = 30 * time.Second
@@ -211,6 +217,9 @@ func (d *realIncrDeps) downloadAsset(f remoteFile, localPath string) error {
 	dst := filepath.Join(localPath, filepath.FromSlash(path.Join(f.Path, f.Name)))
 	if _, err := os.Stat(dst); err == nil {
 		return errAssetExists
+	}
+	if uploadedFromHere(d.h.DB, dst) {
+		return errAssetLocalGone
 	}
 	u, hdrs, err := d.ops.downloadURLFull(f.PickCode, "")
 	if err != nil {
