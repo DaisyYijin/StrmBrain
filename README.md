@@ -124,7 +124,8 @@ flowchart LR
 ## 🚀 三分钟部署
 
 镜像发布在 GitHub Container Registry，支持 `linux/amd64` 与 `linux/arm64`。
-n详细部署说明(端口 / 目录 / MetaTube 配置 / 升级备份)见 [DEPLOY.md](DEPLOY.md)。
+
+详细部署说明(端口 / 目录 / MetaTube 配置 / 升级备份)见 [DEPLOY.md](DEPLOY.md)。
 
 新建一个目录，写入 `docker-compose.yml`（仓库根目录已附带一份）：
 
