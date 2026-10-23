@@ -93,11 +93,14 @@ func (h *Handler) WecomCallback(c *gin.Context) {
 	msgSig := c.Query("msg_signature")
 	timestamp, nonce := c.Query("timestamp"), c.Query("nonce")
 	if wecomSign(cb.Token, timestamp, nonce, env.Encrypt) != msgSig {
+		// 用户反馈「发指令没反应」时，消息没进来和回复没发出去要分得清：收消息这一侧此前一行日志都没有
+		log.Printf("[企微] ✗ 收到消息但签名不对，已丢弃：检查消息配置里的 Token 是否与企微后台「接收消息」一致")
 		c.String(http.StatusForbidden, "sign mismatch")
 		return
 	}
 	plainXML, derr := key.wecomDecrypt(env.Encrypt)
 	if derr != nil {
+		log.Printf("[企微] ✗ 收到消息但解密失败，已丢弃：检查 EncodingAESKey 与企业 ID（%v）", derr)
 		c.String(http.StatusOK, "success")
 		return
 	}
@@ -119,6 +122,7 @@ func (h *Handler) WecomCallback(c *gin.Context) {
 	// 5 秒内必须应答：指令异步执行 + 异步回复
 	switch {
 	case msg.MsgType == "text":
+		log.Printf("[企微] ← %s：%s", msg.FromUser, truncateStr(strings.TrimSpace(msg.Content), 60))
 		go h.wecomHandleCommand(msg.FromUser, strings.TrimSpace(msg.Content))
 	case msg.MsgType == "event" && msg.Event == "click":
 		// 聊天底栏菜单按钮（wecomMenuCreate 创建）→ key 即指令文本
