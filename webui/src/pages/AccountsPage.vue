@@ -7,11 +7,10 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HTabs from '@/components/hero/HTabs.vue'
-import { ChevronRight, QrCode, ShieldCheck } from '@lucide/vue'
+import { ChevronRight, QrCode } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import SharedDirs from '@/components/accounts/SharedDirs.vue'
 import MediaLibs from '@/components/accounts/MediaLibs.vue'
@@ -105,21 +104,14 @@ async function cleanLeftover(l: LibLeftover) {
   }
 }
 
-const DEFAULT_COOKIE_PATH = '/config/115-cookies.txt'
 const DEFAULT_INTERVAL = 3.0
 
 const form = ref({
-  cookie_path: DEFAULT_COOKIE_PATH,
   device: 'web',
   interval: DEFAULT_INTERVAL,
   openapi_enabled: false,
   app_id: '',
 })
-
-/** Cookie 路径、请求间隔装好后几乎不改，收在「高级设置」里；收起时报出几项不是默认值 */
-const cookiePathChanged = computed(() => form.value.cookie_path.trim() !== DEFAULT_COOKIE_PATH)
-const intervalChanged = computed(() => form.value.interval !== DEFAULT_INTERVAL)
-const advChanged = computed(() => Number(cookiePathChanged.value) + Number(intervalChanged.value))
 
 const account = ref<StorageCheck | null>(null)
 /** 首次静默检测还没回来：账号卡显示骨架，而不是先闪一下「未绑定」 */
@@ -139,7 +131,6 @@ async function load() {
     const acc = (res.data ?? []).find((s) => s.type === '115')
     if (acc) {
       form.value = {
-        cookie_path: acc.cookie_path || DEFAULT_COOKIE_PATH,
         // 保存过的设备值不在选项里时保持默认网页端
         device: DEVICE_OPTIONS.some((o) => o.value === acc.device) ? acc.device : 'web',
         interval: acc.interval || DEFAULT_INTERVAL,
@@ -204,8 +195,7 @@ async function saveAndScan() {
 
 function reset() {
   form.value = {
-    cookie_path: DEFAULT_COOKIE_PATH,
-    device: 'web',
+      device: 'web',
     interval: DEFAULT_INTERVAL,
     openapi_enabled: false,
     app_id: '',
@@ -284,27 +274,11 @@ onMounted(() => {
               </div>
             </FieldRow>
 
-            <AdvancedSection id="accounts-conn" :changed="advChanged" hint="Cookie 文件路径、API 请求间隔">
-              <FieldRow label="Cookie 路径" :changed="cookiePathChanged" tip="指定 115 Cookie 文件路径，扫码登录后自动写入该文件。">
-                <div class="h-field-row">
-                  <HInput v-model="form.cookie_path" :placeholder="DEFAULT_COOKIE_PATH" :input-attrs="plainProps('acc-cookie-path')" />
-                  <HButton variant="secondary" :loading="checking" @click="check">
-                    <template #icon><ShieldCheck :size="15" /></template>
-                    检测
-                  </HButton>
-                </div>
-              </FieldRow>
-
-              <FieldRow
-                label="API 请求间隔"
-                :changed="intervalChanged"
-                tip="设置 API 请求间隔可以减少风控概率。读接口默认 1s，写接口建议 ≥3s。"
-              >
-                <HNumberInput v-model="form.interval" :min="0.5" :step="0.5" style="width: 150px">
-                  <template #suffix>秒</template>
-                </HNumberInput>
-              </FieldRow>
-            </AdvancedSection>
+            <FieldRow label="API 请求间隔" tip="设置 API 请求间隔可以减少风控概率。读接口默认 1s，写接口建议 ≥3s。">
+              <HNumberInput v-model="form.interval" :min="0.5" :step="0.5" style="width: 150px">
+                <template #suffix>秒</template>
+              </HNumberInput>
+            </FieldRow>
 
             <FormActions>
               <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>

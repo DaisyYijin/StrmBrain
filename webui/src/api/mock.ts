@@ -536,8 +536,74 @@ function mockSaveLibraries(init?: RequestInit) {
   return { message: '已保存', jobs: [], subs_moved: 0, data: mockLibrariesView() }
 }
 
+// ---- 115 账号（主号 id 恒为 0）与媒体库页面（V2） ----
+
+type MockAcct = { id: number; name: string; user_name: string; main: boolean; status: string; device: string; logged_in: boolean }
+const mockAccts: MockAcct[] = [
+  { id: 0, name: '影迷小王', user_name: '影迷小王', main: true, status: 'online', device: 'web', logged_in: true },
+  { id: 1, name: '小王的家', user_name: '小王的家', main: false, status: 'online', device: 'web', logged_in: true },
+  { id: 2, name: 'backup_115', user_name: 'backup_115', main: false, status: 'invalid', device: 'web', logged_in: true },
+  { id: 3, name: '未登录账号', user_name: '', main: false, status: '', device: 'web', logged_in: false },
+]
+let mockAcctSeq = 4
+const acctName = (id: number) => mockAccts.find((a) => a.id === id)?.name ?? `账号 ${id}`
+
+/** 4K 库挂在附加账号「小王的家」上，账号页签能看到「挂了几个库」 */
+const MOCK_LIB_ACCT: Record<string, number> = { '300': 1 }
+const mockMediaLibsView = () => ({
+  media_root: '/media',
+  libs: mockLibs.map((l, i) => {
+    const account = MOCK_LIB_ACCT[l.cid] ?? 0
+    const self = mockOpts[l.cid]?.mode === 'self'
+    return {
+      id: i + 1, name: l.name, account, account_name: acctName(account), cid: l.cid, path: l.path,
+      local: l.name, local_abs: `/media/${l.name}`,
+      staging_cid: self ? '' : `s${l.cid}`, staging_path: self ? '' : `/转存/${l.name}`,
+      scheme_id: self ? 0 : 1, scheme_name: self ? '' : '默认分类', depth: mockOpts[l.cid]?.depth ?? 1,
+      scrape: mockScrapeOf(l.cid), local_locked: true, organize: !self,
+      last_sync: { at: Math.floor(Date.now() / 1000) - 3600 * (i + 1), ok: true, mode: 'fast', seconds: 42, videos: 800, created: 3, failed: 0 },
+      emby: { covered: true, partial: false, unmapped: false },
+    }
+  }),
+  schemes: [{ id: 1, name: '默认分类', used_by: mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self').map((l) => l.name), movie: 6, tv: 5 }],
+  accounts: mockAccts.filter((a) => a.logged_in).map((a) => ({ id: a.id, name: a.name, main: a.main })),
+  notice: [],
+  existing: '/StrmStation/已存在',
+  redundant: '/StrmStation/冗余',
+  emby_configured: true,
+})
+
+/** 带 id 的路径：精确表查不到时按顺序匹配 */
+const PATTERN_ROUTES: [RegExp, (m: RegExpMatchArray, q: URLSearchParams, init?: RequestInit) => unknown][] = [
+  [/^\/storage\/115\/accounts\/(\d+)\/check$/, (m) => {
+    const a = mockAccts.find((x) => x.id === Number(m[1]))
+    if (!a) return { __status: 404, error: '账号不存在' }
+    if (!a.logged_in) return { valid: false, message: '还没登录' }
+    if (a.status === 'invalid') return { valid: false, message: 'Cookie 已失效，请重新扫码' }
+    return { valid: true, channel: 'Cookie', username: a.user_name, capacity: '2.10 TB / 6.00 TB' }
+  }],
+  [/^\/storage\/115\/accounts\/(\d+)$/, (m, _q, init) => {
+    const i = mockAccts.findIndex((x) => x.id === Number(m[1]))
+    if (i < 0) return { __status: 404, error: '账号不存在' }
+    if (init?.method === 'DELETE') mockAccts.splice(i, 1)
+    return { message: 'ok' }
+  }],
+]
+
 const ROUTES: Record<string, Route> = {
   ...(subRoutes as Record<string, Route>),
+  '/storage/115/accounts': (_q: URLSearchParams, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      // 同后端：已有没登录过的就复用
+      const idle = mockAccts.find((a) => !a.main && !a.logged_in)
+      if (idle) return { data: idle }
+      const a = { id: mockAcctSeq++, name: '未登录账号', user_name: '', main: false, status: '', device: 'web', logged_in: false }
+      mockAccts.push(a)
+      return { data: a }
+    }
+    return { data: mockAccts }
+  },
+  '/media-libs': mockMediaLibsView,
   '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
     init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
   '/libraries/preview': (q: URLSearchParams) =>
@@ -809,11 +875,13 @@ export function installMockApi() {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const [path, query = ''] = url.replace(/^.*\/api/, '').split('?')
-    if (path in ROUTES) {
+    const pattern = path in ROUTES ? undefined : PATTERN_ROUTES.find(([re]) => re.test(path))
+    if (path in ROUTES || pattern) {
       // 留一点延迟，好让骨架屏/加载态在演示里真的出现
       await new Promise((r) => setTimeout(r, 180))
-      const route = ROUTES[path]
-      const body = typeof route === 'function' ? route(new URLSearchParams(query), init) : route
+      const q = new URLSearchParams(query)
+      const route = pattern ? (qq: URLSearchParams, i?: RequestInit) => pattern[1](path.match(pattern[0])!, qq, i) : ROUTES[path]
+      const body = typeof route === 'function' ? route(q, init) : route
       // 路由可以带 __status 模拟非 200（409 要用户确认之类）
       const status = (body as { __status?: number } | null)?.__status ?? 200
       return new Response(JSON.stringify(body), {

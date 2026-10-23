@@ -100,7 +100,7 @@ func (h *Handler) cookieOf(acct uint) (string, error) {
 	if s.Cookie != "" {
 		return s.Cookie, nil
 	}
-	return "", fmt.Errorf("附加账号「%s」还没登录 115", s.Name)
+	return "", fmt.Errorf("附加账号「%s」还没登录 115", acctLabel(s))
 }
 
 // opsFor 某个账号的操作通道。0 = 主号（newPan115Ops，OpenAPI 优先）；附加账号只走 Cookie、只读
@@ -150,7 +150,7 @@ func (h *Handler) acctDupOf(self uint, cookie string) string {
 			ck = r.Cookie
 		}
 		if ck != "" && cookieUserID(ck) == uid {
-			return "附加账号「" + r.Name + "」"
+			return "附加账号「" + acctLabel(r) + "」"
 		}
 	}
 	return ""
@@ -188,7 +188,7 @@ func (h *Handler) saveExtraCookie(acct uint, cookie, device, username string) (w
 		updates["user_name"] = username
 	}
 	h.DB.Model(&model.Storage{}).Where("id = ?", acct).Updates(updates)
-	log.Printf("[账号] ✓ 附加账号「%s」已登录 115（%s）", s.Name, firstNonEmpty(username, "用户名未知"))
+	log.Printf("[账号] ✓ 附加账号（id=%d）已登录 115（%s）", acct, firstNonEmpty(username, "用户名未知"))
 	return warning, nil
 }
 
@@ -224,52 +224,41 @@ func (h *Handler) ListAccounts115(c *gin.Context) {
 			continue
 		}
 		ck, _ := h.Config.LoadCookieOf(r.ID)
-		out = append(out, acctView{ID: r.ID, Name: r.Name, UserName: r.UserName, Status: r.Status, Device: r.Device,
+		out = append(out, acctView{ID: r.ID, Name: acctLabel(r), UserName: r.UserName, Status: r.Status, Device: r.Device,
 			LoggedIn: ck != "" || r.Cookie != ""})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
 
-// acctNameOK 附加账号的名字：给人看的标签，不能空、不能太长
-func acctNameOK(name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", errors.New("给这个账号起个名字（比如「副号」「老婆的号」）")
-	}
-	if len([]rune(name)) > 30 {
-		return "", errors.New("名字最多 30 个字")
-	}
-	return name, nil
+// acctLabel 附加账号显示的名字：就是 115 用户名，不另起昵称；没登录过的还不知道用户名。
+// 老版本让用户起过名字（Name），还没重新登录 / 检测拿到用户名之前先用它
+func acctLabel(s model.Storage) string {
+	return firstNonEmpty(s.UserName, s.Name, "未登录账号")
 }
 
-// CreateAccount115 POST /storage/115/accounts {name}：只建一行，登录走扫码或导入 Cookie
+// CreateAccount115 POST /storage/115/accounts：只建一行，前端接着扫码登录；名字登录后取 115 用户名。
+// 已经有一行从没登录过的（上次点了添加又没扫码）就复用它，不然每点一次多一行「未登录账号」
 func (h *Handler) CreateAccount115(c *gin.Context) {
-	var req struct {
-		Name string `json:"name"`
-	}
-	_ = c.ShouldBindJSON(&req)
-	name, err := acctNameOK(req.Name)
+	mainS, err := mainStorage115(h.DB)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if _, err := mainStorage115(h.DB); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "先登录主账号，再添加附加账号"})
 		return
 	}
-	var n int64
-	h.DB.Model(&model.Storage{}).Where("type = ? AND main = ? AND name = ?", "115", false, name).Count(&n)
-	if n > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "已经有一个叫「" + name + "」的账号了"})
-		return
+	var rows []model.Storage
+	h.DB.Where("type = ? AND main = ? AND id <> ? AND cookie = ? AND user_name = ?", "115", false, mainS.ID, "", "").Order("id").Find(&rows)
+	for _, r := range rows {
+		if ck, _ := h.Config.LoadCookieOf(r.ID); ck == "" {
+			c.JSON(http.StatusOK, gin.H{"data": acctView{ID: r.ID, Name: acctLabel(r), Status: r.Status, Device: r.Device}})
+			return
+		}
 	}
-	s := model.Storage{Name: name, Type: "115", Device: "web", Status: "offline", Interval: 3}
+	s := model.Storage{Type: "115", Device: "web", Status: "offline", Interval: 3}
 	if err := h.DB.Create(&s).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	log.Printf("[账号] ✓ 已添加附加账号「%s」（id=%d），等登录", name, s.ID)
-	c.JSON(http.StatusOK, gin.H{"data": acctView{ID: s.ID, Name: s.Name, Status: s.Status, Device: s.Device}})
+	log.Printf("[账号] ✓ 已添加附加账号（id=%d），等登录", s.ID)
+	c.JSON(http.StatusOK, gin.H{"data": acctView{ID: s.ID, Name: acctLabel(s), Status: s.Status, Device: s.Device}})
 }
 
 // paramAcct 路由参数 :id → 附加账号
@@ -285,31 +274,6 @@ func (h *Handler) paramAcct(c *gin.Context) (model.Storage, bool) {
 		return model.Storage{}, false
 	}
 	return s, true
-}
-
-// UpdateAccount115 PUT /storage/115/accounts/:id {name}：改名字（主号的名字就是 115 用户名，不在这里改）
-func (h *Handler) UpdateAccount115(c *gin.Context) {
-	s, ok := h.paramAcct(c)
-	if !ok {
-		return
-	}
-	var req struct {
-		Name string `json:"name"`
-	}
-	_ = c.ShouldBindJSON(&req)
-	name, err := acctNameOK(req.Name)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	var n int64
-	h.DB.Model(&model.Storage{}).Where("type = ? AND main = ? AND name = ? AND id <> ?", "115", false, name, s.ID).Count(&n)
-	if n > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "已经有一个叫「" + name + "」的账号了"})
-		return
-	}
-	h.DB.Model(&model.Storage{}).Where("id = ?", s.ID).Update("name", name)
-	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 
 // DeleteAccount115 DELETE /storage/115/accounts/:id：删行、删 Cookie 文件。
@@ -332,7 +296,7 @@ func (h *Handler) DeleteAccount115(c *gin.Context) {
 		return
 	}
 	dirCacheForgetAcct(s.ID)
-	log.Printf("[账号] ✓ 已删除附加账号「%s」（id=%d），网盘上的东西不动", s.Name, s.ID)
+	log.Printf("[账号] ✓ 已删除附加账号「%s」（id=%d），网盘上的东西不动", acctLabel(s), s.ID)
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 

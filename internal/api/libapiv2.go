@@ -95,7 +95,7 @@ func accountOptions() []acctOption {
 			out = append([]acctOption{{ID: acctMain, Name: firstNonEmpty(s.UserName, "主账号"), Main: true}}, out...)
 			continue
 		}
-		out = append(out, acctOption{ID: s.ID, Name: firstNonEmpty(s.Name, s.UserName, fmt.Sprintf("账号 %d", s.ID))})
+		out = append(out, acctOption{ID: s.ID, Name: acctLabel(s)})
 	}
 	if len(out) == 0 || !out[0].Main {
 		out = append([]acctOption{{ID: acctMain, Name: "主账号", Main: true}}, out...)

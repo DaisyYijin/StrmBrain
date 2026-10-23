@@ -190,7 +190,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 附加 115 账号（account115.go，MULTI-ACCOUNT-PLAN.md 阶段 2）
 		protected.GET("/storage/115/accounts", h.ListAccounts115)
 		protected.POST("/storage/115/accounts", h.CreateAccount115)
-		protected.PUT("/storage/115/accounts/:id", h.UpdateAccount115)
 		protected.DELETE("/storage/115/accounts/:id", h.DeleteAccount115)
 		protected.POST("/storage/115/accounts/:id/check", h.CheckAccount115)
 
@@ -720,7 +719,6 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 	}
 	if findErr == nil {
 		updates := map[string]interface{}{
-			"cookie_path":     storage.CookiePath,
 			"device":          storage.Device,
 			"interval":        storage.Interval,
 			"openapi_enabled": storage.OpenapiEnabled,
