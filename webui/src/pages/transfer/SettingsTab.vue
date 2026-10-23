@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { BellRing, FolderInput, Globe } from '@lucide/vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
@@ -13,17 +13,30 @@ import Re0Source from '@/components/transfer/sources/Re0Source.vue'
 import DianSource from '@/components/transfer/sources/DianSource.vue'
 import FolderSettings from './FolderSettings.vue'
 import SubSettings from '@/pages/subscribe/SubSettings.vue'
-import type { SourceKey } from '@/api/transfer'
+import { transferApi } from '@/api'
+import type { SourceKey, XferTargets } from '@/api/transfer'
 import { useTransferSources } from '@/composables/transferSources'
 
 /**
- * 影视转存的全部设置：转存目录、五个资源来源、订阅。原来来源设置是五张卡片竖着排、
+ * 影视转存的全部设置：默认转存库、各资源来源、订阅。原来来源设置是五张卡片竖着排、
  * 订阅设置又是五张，要找一项得滚很久；现在左边列小节、右边一次只显示一张（?sec=）。
  * 手机上小节列表变成顶上一排横滑。
  */
 const route = useRoute()
 const router = useRouter()
 const { state, reload, setEnabled } = useTransferSources()
+
+// 「默认转存库」只在有两个以上能转存的库时才有得选；一个库或还没有库时整个小节不显示，
+// 转存文件夹本身在「账号与媒体库 → 媒体库」里设
+const targets = ref<XferTargets | null>(null)
+onMounted(async () => {
+  try {
+    targets.value = await transferApi.xferTargets()
+  } catch {
+    targets.value = null
+  }
+})
+const showFolder = computed(() => (targets.value?.libs.length ?? 0) > 1)
 
 type SubSec = 'check' | 'cond' | 'offline' | 'unlock' | 'notify'
 
@@ -54,14 +67,22 @@ function srcTone(key: SourceKey): Tone | undefined {
 }
 
 const GROUPS = computed<{ label: string; icon: Component; items: { key: string; title: string; tone?: Tone }[] }[]>(() => [
-  { label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '转存/待整理目录', tone: (state.value?.folder_path || state.value?.folder ? 'ok' : 'warn') as Tone }] },
+  ...(showFolder.value
+    ? [{ label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '默认转存库', tone: (targets.value?.default ? 'ok' : 'warn') as Tone }] }]
+    : []),
   { label: '资源来源', icon: Globe, items: SOURCES.map((s) => ({ key: s.key as string, title: s.title, tone: srcTone(s.key) })) },
   { label: '订阅', icon: BellRing, items: SUB_SECS.map((s) => ({ key: s.key as string, title: s.title, tone: undefined as Tone | undefined })) },
 ])
 
+// 没写 ?sec= 时打开第一个小节；收藏的 ?sec=folder 在没有默认转存库可选时落到第一个来源
+const firstSec = computed(() => (showFolder.value ? 'folder' : SOURCES[0].key))
 const sec = computed({
-  get: () => (route.query.sec as string) || 'folder',
-  set: (v: string) => void router.replace({ query: { ...route.query, sec: v === 'folder' ? undefined : v } }),
+  get: () => {
+    const q = route.query.sec as string | undefined
+    if (!q || (q === 'folder' && !showFolder.value)) return firstSec.value
+    return q
+  },
+  set: (v: string) => void router.replace({ query: { ...route.query, sec: v === firstSec.value ? undefined : v } }),
 })
 const source = computed(() => SOURCES.find((s) => s.key === sec.value))
 const subSec = computed(() => SUB_SECS.find((s) => s.key === sec.value)?.key)
@@ -88,7 +109,7 @@ const subSec = computed(() => SUB_SECS.find((s) => s.key === sec.value)?.key)
     </nav>
 
     <div class="spane">
-      <FolderSettings v-if="sec === 'folder'" />
+      <FolderSettings v-if="sec === 'folder' && targets" :targets="targets" @saved="(t) => (targets = t)" />
 
       <SectionCard v-else-if="source" :key="source.key" :title="source.title" :hint="source.hint">
         <template #extra>

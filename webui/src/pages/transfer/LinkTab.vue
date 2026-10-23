@@ -105,7 +105,7 @@ async function submit() {
   <div class="stack">
     <SectionCard title="提交链接" hint="115 分享转存，磁力 / ed2k / HTTP 提交 115 离线下载">
       <template #extra>
-        <button type="button" class="folder" @click="router.push({ query: { tab: 'settings' } })">
+        <button type="button" class="folder" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
           <template v-if="folderPath">存到 <b>{{ folderPath }}</b></template>
           <span v-else-if="srcState" class="warn">还没设置转存目录</span>
           <span class="link">{{ folderPath ? '更改' : '去设置' }}</span>

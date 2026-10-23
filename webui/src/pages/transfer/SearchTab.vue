@@ -162,8 +162,8 @@ const selOwned = computed(() => {
           v-else-if="srcState"
           type="button"
           class="folder"
-          :title="folderPath ? `找到的资源转存到 ${folderPath}，完成后自动整理入库。点击更改` : '去设置转存目录'"
-          @click="router.push({ query: { tab: 'settings' } })"
+          :title="folderPath ? `找到的资源转存到 ${folderPath}，完成后自动整理入库。点击到媒体库里更改` : '去设置转存目录'"
+          @click="router.push({ name: 'accounts', query: { tab: 'library' } })"
         >
           <FolderInput :size="14" />
           <span v-if="folderPath" class="mono">{{ folderPath }}</span>

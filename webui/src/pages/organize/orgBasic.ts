@@ -1,6 +1,6 @@
 /**
  * org-basic 这个 setting key 的形状：已存在 / 冗余两个工作目录 + 人工确认开关（「基础配置」页签）。
- * 原来的 pending（待整理）已并进 setting `share`（转存/待整理，见 composables/stagingDir.ts），后端保存时会剥掉它
+ * 原来的 pending（待整理）已并进 setting `share`（转存/待整理；媒体库表 V2 下改为每个库各设一个），后端保存时会剥掉它
  */
 export interface OrgBasic {
   existing: string
