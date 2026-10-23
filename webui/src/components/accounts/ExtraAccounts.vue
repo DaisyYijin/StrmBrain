@@ -19,6 +19,8 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
  * 订阅还只进主账号的库 —— 文案里要说清楚。
  */
 
+/** 每个账号挂了几个库（页面按媒体库表算好；读不到时不显示） */
+const props = defineProps<{ libCount?: Record<number, number> }>()
 const { message, dialog } = useFeedback()
 
 const enabled = ref(false)
@@ -127,7 +129,9 @@ async function check(a: Account115) {
 async function remove(a: Account115) {
   const ok = await dialog.confirm({
     title: `删除附加账号「${a.name}」`,
-    content: '只删本站记下的登录信息，115 网盘上的东西不动。',
+    content: props.libCount?.[a.id]
+      ? `这个账号上还有 ${props.libCount[a.id]} 个媒体库，删了账号它们就同步不了。只删本站记下的登录信息，115 网盘上的东西不动。`
+      : '只删本站记下的登录信息，115 网盘上的东西不动。',
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
       { label: '删除', value: true, variant: 'danger' },
@@ -145,13 +149,22 @@ async function remove(a: Account115) {
 </script>
 
 <template>
-  <SectionCard v-if="enabled" title="附加账号" hint="别的 115 账号：在「媒体库」里建库时可以选它，整理、生成 STRM 和播放与主账号一样；订阅还只进主账号的库">
+  <SectionCard v-if="enabled" title="附加账号" hint="建库时可选；整理、STRM、播放与主账号一样，订阅只进主账号的库">
+    <template #extra>
+      <HButton size="sm" variant="secondary" @click="openAdd"><Plus :size="14" />添加账号</HButton>
+    </template>
     <ul v-if="extras.length" class="accts">
       <li v-for="a in extras" :key="a.id" class="acct">
+        <span class="acct-avatar" :class="{ 'is-on': a.logged_in && a.status !== 'invalid' }">{{ a.name.slice(0, 1).toUpperCase() }}</span>
         <div class="acct-main">
-          <span class="acct-name">{{ a.name }}</span>
-          <HChip :color="statusOf(a).color">{{ statusOf(a).text }}</HChip>
-          <span v-if="a.user_name" class="muted small">115：{{ a.user_name }}</span>
+          <div class="acct-line">
+            <span class="acct-name">{{ a.name }}</span>
+            <HChip :color="statusOf(a).color">{{ statusOf(a).text }}</HChip>
+          </div>
+          <div class="acct-sub">
+            <span v-if="a.user_name">115：{{ a.user_name }}</span>
+            <span v-if="libCount">{{ libCount[a.id] ? `${libCount[a.id]} 个媒体库` : '还没有媒体库' }}</span>
+          </div>
         </div>
         <div class="acct-ops">
           <HButton size="sm" variant="secondary" @click="scan(a.id)"><QrCode :size="14" />{{ a.logged_in ? '重新登录' : '扫码登录' }}</HButton>
@@ -162,8 +175,7 @@ async function remove(a: Account115) {
         </div>
       </li>
     </ul>
-    <p v-else class="muted small empty">还没有附加账号。</p>
-    <HButton size="sm" variant="secondary" @click="openAdd"><Plus :size="14" />添加账号</HButton>
+    <p v-else class="muted small empty">还没有附加账号。别的 115 账号登录进来后，在「媒体库」里建库时就能选它。</p>
 
     <HModal v-model:show="nameDlg.show" :title="nameDlg.id ? '改名' : '添加附加账号'" width="380px" persistent>
       <HInput v-model="nameDlg.name" placeholder="比如「副号」「老婆的号」" :input-attrs="{ 'aria-label': '账号名字', maxlength: '30' }" />
@@ -192,23 +204,45 @@ async function remove(a: Account115) {
 <style scoped>
 .accts {
   list-style: none;
-  margin: 0 0 12px;
+  margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 .acct {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  gap: 8px 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--separator);
+}
+.acct:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.acct:last-child {
+  padding-bottom: 0;
+}
+.acct-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: var(--default);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+.acct-avatar.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .acct-main {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.acct-line {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -220,18 +254,26 @@ async function remove(a: Account115) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.acct-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
 .acct-ops {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 .empty {
-  margin: 0 0 12px;
+  margin: 0;
 }
 .muted {
   color: var(--muted);
 }
 .small {
-  font-size: 12px;
+  font-size: 12.5px;
 }
 </style>
