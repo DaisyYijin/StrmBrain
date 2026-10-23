@@ -18,6 +18,7 @@ import (
 	"115-station/internal/model"
 
 	"github.com/mozillazg/go-pinyin"
+	"gopkg.in/yaml.v3"
 )
 
 // ==================== 整理引擎 ====================
@@ -317,6 +318,10 @@ type RenameConfig struct {
 	MovieFile   string `json:"movie_file"`   // 电影文件命名规则
 	TVFolder    string `json:"tv_folder"`    // 电视剧文件夹命名规则
 	TVFile      string `json:"tv_file"`      // 电视剧文件命名规则
+
+	// AV 命名规范 = 番号 + AV 标题（"ABC-123 XXXXXX"），不带画质附加信息
+	AVFolder string `json:"av_folder"` // AV 文件夹命名规则
+	AVFile   string `json:"av_file"`   // AV 文件命名规则
 }
 
 // defaultRenameConfig 是唯一内置方案。界面只允许在此基础上自定义，不再维护多套预设，
@@ -327,6 +332,8 @@ func defaultRenameConfig() *RenameConfig {
 		MovieFile:   "{title}<.{en_title.replace('.', ' ')}>.{year}<.{resource_type}><.{resource_effect.replace('.', ' ')}><.{resource_pix}><.{video_encode}><.{audio_encode}>{ext}",
 		TVFolder:    "{title}.{year}<.[[tmdbid={tmdb_id}]]>/Season {season_num}",
 		TVFile:      "{title}<.{en_title.replace('.', ' ')}>.{season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}>{ext}",
+		AVFolder:    "{first_letter}-{num}",
+		AVFile:      "{num}< {av_title}>{ext}",
 	}
 }
 
@@ -342,6 +349,12 @@ func mergeRenameConfig(dst, src *RenameConfig) {
 	}
 	if src.TVFile != "" {
 		dst.TVFile = src.TVFile
+	}
+	if src.AVFolder != "" {
+		dst.AVFolder = src.AVFolder
+	}
+	if src.AVFile != "" {
+		dst.AVFile = src.AVFile
 	}
 }
 
@@ -744,6 +757,8 @@ func mediaTypeCategory(mediaType string) string {
 		return "电影"
 	case "tv":
 		return "剧集"
+	case "av":
+		return "AV"
 	default:
 		return "未分类"
 	}
@@ -2115,6 +2130,17 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	onLog(fmt.Sprintf("▶ 开始识别: %s/（%s；样本: %s）",
 		shortLogName(dir.Name), fileKindSummary(files), shortLogName(mainVideo.Name)))
 
+	// AV 番号检测：文件名或目录名含番号格式（如 START-622、MIDV-001）时
+	// 跳过 TMDB 识别，直接用番号作为标题归入 AV 分类
+	if avNum := detectAVNumber(dir.Name, mainVideo.Name); avNum != "" {
+		onLog(fmt.Sprintf("✦ 检测到 AV 番号: %s（跳过 TMDB）", avNum))
+		media := &TmdbMedia{
+			Title:     avNum,
+			MediaType: "av",
+		}
+		return processAVDirectory(ops, cfg, media, dir, files, onLog, results)
+	}
+
 	// 文件名缺的片名 / 年份 / 季号 / id 标签由各级目录补：子目录 → 顶层目录 → 容器目录。
 	// 场景：/西游记.1987/ep01.mkv（片名年份在目录上）、/狂飙/Season 2/E05.mkv（季号在子目录上）
 	dirNames := pathDirs(mainVideo.Path, dir.Parent)
@@ -2171,6 +2197,17 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 					onLog(fmt.Sprintf("○ %s/ - TMDB 暂时不可达（%v），留在待整理目录下轮重试", dir.Name, err))
 					fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
 					return results
+				}
+				// 无番号 AV 的标题兜底：TMDB 未命中时用目录名/标题搜 MetaTube，
+				// 命中则按命中番号走 AV 流程（元数据已落缓存，直接复用）
+				avMedia, avNumDisplay := metatubeSearchTitle(dir.Name)
+				if avMedia == nil && parsed.Title != "" && parsed.Title != dir.Name {
+					avMedia, avNumDisplay = metatubeSearchTitle(parsed.Title)
+				}
+				if avMedia != nil && avMedia.Status == "ok" && avNumDisplay != "" {
+					onLog(fmt.Sprintf("✦ MetaTube 标题匹配: %q → 番号 %s，按 AV 入库", dir.Name, avNumDisplay))
+					media2 := &TmdbMedia{Title: avNumDisplay, MediaType: "av"}
+					return processAVDirectory(ops, cfg, media2, dir, files, onLog, results)
 				}
 				if ctx.holdable() {
 					return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", nil, parsed, mainVideo.Name,
@@ -3138,6 +3175,18 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	ctx.enterLib("") // 库由分类决定，先切回主库
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
+
+	// AV 番号检测（与目录流程对齐）：散文件直接放待整理根目录同样要能走
+	// AV 通道——此前此路径缺检测，SSNI-056.mp4 这类番号文件被打去 TMDB
+	// 搜索后进冗余
+	if avNum := detectAVNumber("", f.Name); avNum != "" {
+		onLog(fmt.Sprintf("✦ 检测到 AV 番号: %s（跳过 TMDB）", avNum))
+		media := &TmdbMedia{
+			Title:     avNum,
+			MediaType: "av",
+		}
+		return processAVDirectory(ops, cfg, media, dirEntry{Name: f.Name, IsDir: false}, []remoteFile{f}, onLog, nil)[0], nil
+	}
 	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
 	appendSelf := func(files []remoteFile) {
 		for _, a := range files {
@@ -3826,6 +3875,622 @@ func missingAired(aired []int, have map[int]bool) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+// ==================== AV 番号识别与处理 ====================
+
+// avCategoryConfig AV 分类配置（与 UI 上的 YAML 对应）
+type avCategoryConfig struct {
+	Name     string   // 分类名 = 网盘目录名（可任意命名，如英文）
+	Prefixes []string // 自定义番号前缀（可选）
+	Builtin  string   // 内置库绑定："uncensored" / "domestic"（可选）；
+	// 未填写时按分类名含"无码"/"国产"自动映射
+}
+
+// avBuiltinUncensored 内置无码番号前缀库（常见厂牌；命中即归入名字含
+// "无码"的分类）——无码厂牌是有限集合，适合内置；有码厂牌上千个，
+// 由"兜底分类"自然承接，用户无需枚举
+var avBuiltinUncensored = []string{
+	"FC2", "HEYZO", "N10", // Tokyo Hot（n1xxx）
+	"10MU", "1PON", "CARIB", "PACO", // 10Musume/1Pondo/Caribbean/Pacopacomama
+	"MURA", "KIN8", "C0930", "H0930", "SCUTE", "XXXAV", "AV9898", "GACHI", "MESU",
+}
+
+// avBuiltinDomestic 内置国产番号前缀库（命中归入名字含"国产"的分类）
+var avBuiltinDomestic = []string{
+	"MD", "MDX", "MDT", "PMC", "JD", "TZ", "MT", "91", "CHARU", "MKY", "MSN",
+}
+
+// normalizeAVNum 番号归一化：去分隔符、转大写（"fc2-ppv-123" → "FC2PPV123"）
+func normalizeAVNum(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(s) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// loadAVCategories 读 AV 分类：优先解析用户在分类策略 YAML 里保存的
+// av: 段（此前该段被解析器跳过、保存无效果）；无 av: 段时回退默认两分类
+func loadAVCategories() []avCategoryConfig {
+	if model.DB != nil {
+		var rule model.ScrapeRule
+		model.DB.Where("type = ?", "category_config").First(&rule)
+		if cats := parseAVCategoriesFromYAML(rule.Config); len(cats) > 0 {
+			return cats
+		}
+	}
+	// 默认分类：无码走内置前缀库识别；有码排最后作兜底
+	//（兜底=最后一个空前缀分类；未配置国产分类时国产内容也落有码）
+	return []avCategoryConfig{
+		{Name: "无码", Builtin: "uncensored"},
+		{Name: "有码"},
+	}
+}
+
+// parseAVCategoriesFromYAML 解析分类 YAML 中的 av: 段
+//
+//	av:
+//	  无码:
+//	    num_prefix: 'FC2,HEYZO'
+//	  有码:
+//	    num_prefix: ''   ← 空 = 兜底分类
+func parseAVCategoriesFromYAML(src string) []avCategoryConfig {
+	var root yaml.Node
+	if yaml.Unmarshal([]byte(src), &root) != nil || len(root.Content) == 0 {
+		return nil
+	}
+	mp := root.Content[0]
+	for i := 0; i+1 < len(mp.Content); i += 2 {
+		if mp.Content[i].Value != "av" {
+			continue
+		}
+		val := mp.Content[i+1]
+		if val.Kind != yaml.MappingNode {
+			return nil
+		}
+		var cats []avCategoryConfig
+		for j := 0; j+1 < len(val.Content); j += 2 {
+			name := strings.TrimSpace(val.Content[j].Value)
+			if name == "" {
+				continue
+			}
+			c := avCategoryConfig{Name: name}
+			if val.Content[j+1].Kind == yaml.MappingNode {
+				sub := val.Content[j+1]
+				for k := 0; k+1 < len(sub.Content); k += 2 {
+					if sub.Content[k].Value == "builtin" {
+						c.Builtin = strings.ToLower(strings.TrimSpace(sub.Content[k+1].Value))
+						continue
+					}
+					if sub.Content[k].Value != "num_prefix" {
+						continue
+					}
+					raw := strings.Trim(strings.TrimSpace(sub.Content[k+1].Value), "'\"")
+					for _, p := range strings.Split(raw, ",") {
+						if p = strings.TrimSpace(p); p != "" {
+							c.Prefixes = append(c.Prefixes, p)
+						}
+					}
+				}
+			}
+			cats = append(cats, c)
+		}
+		return cats
+	}
+	return nil
+}
+
+// classifyAVNumber AV 分类判定（顺序）：
+//  1. 用户 YAML 里配的 num_prefix 前缀匹配
+//  2. 内置无码/国产前缀库 → 名字含"无码"/"国产"的分类
+//  3. 目录名关键词提示（无码/破解/uncensored → 无码；国产/麻豆/探花 → 国产）
+//  4. 第一个 num_prefix 为空的分类（兜底，如"有码"）
+//  5. 未分类
+func classifyAVNumber(avNum, hint string) string {
+	cats := loadAVCategories()
+	norm := normalizeAVNum(avNum)
+
+	// 1) 用户自定义前缀
+	for _, cat := range cats {
+		for _, p := range cat.Prefixes {
+			if p != "" && strings.HasPrefix(norm, normalizeAVNum(p)) {
+				return cat.Name
+			}
+		}
+	}
+
+	// 2) 内置前缀库 → 解析到绑定了对应内置库的分类（Builtin 字段优先，
+	// 旧式"分类名含无码/国产"兼容回退）
+	matchBuiltinCat := func(code, nameHint string) string {
+		for _, cat := range cats {
+			if cat.Builtin == code || (cat.Builtin == "" && strings.Contains(cat.Name, nameHint)) {
+				return cat.Name
+			}
+		}
+		return ""
+	}
+	for _, p := range avBuiltinUncensored {
+		if strings.HasPrefix(norm, p) {
+			if n := matchBuiltinCat("uncensored", "无码"); n != "" {
+				return n
+			}
+			break
+		}
+	}
+	for _, p := range avBuiltinDomestic {
+		if strings.HasPrefix(norm, p) {
+			if n := matchBuiltinCat("domestic", "国产"); n != "" {
+				return n
+			}
+			break
+		}
+	}
+
+	// 3) 目录名关键词提示（文件名常自带"无码/破解/国产/麻豆"字样）
+	hintLower := strings.ToLower(hint)
+	switch {
+	case strings.Contains(hintLower, "无码") || strings.Contains(hint, "無碼") || strings.Contains(hintLower, "uncensored") || strings.Contains(hintLower, "破解"):
+		if n := matchBuiltinCat("uncensored", "无码"); n != "" {
+			return n
+		}
+	case strings.Contains(hint, "国产") || strings.Contains(hint, "麻豆") || strings.Contains(hint, "探花"):
+		if n := matchBuiltinCat("domestic", "国产"); n != "" {
+			return n
+		}
+	}
+
+	// 4) 兜底：最后一个 num_prefix 为空的分类（与 movie/tv「兜底放最后」
+	// 约定一致——无码留空走内置库、有码留空作兜底时顺序无关歧义）
+	fallback := ""
+	for _, cat := range cats {
+		if len(cat.Prefixes) == 0 {
+			fallback = cat.Name
+		}
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "未分类"
+}
+
+// sanitizeAVFilename 清洗 AV 文件名中的广告前缀
+// "4k688.com@START-622.mp4" → "START-622.mp4"
+// "www.xxx.com@MIDV-001.mp4" → "MIDV-001.mp4"
+func sanitizeAVFilename(name string) string {
+	// 保留扩展名，只清洗基名
+	ext := pathExt(name)
+	base := baseName(name)
+
+	// ===== 1. 网站域名类前缀 =====
+	// "4k688.com@XXX-001" / "www.xxx.com@XXX-001" / "xxx.com-XXX-001"
+	// @ 分隔符：取 @ 之后
+	if idx := strings.LastIndex(base, "@"); idx >= 0 && idx < len(base)/2 {
+		base = base[idx+1:]
+	}
+	// www.xxx.com 前缀
+	base = reAdWwwPrefix.ReplaceAllString(base, "")
+	// 纯域名前缀（4k688.com、avxxx.net 等）
+	base = reAdDomPrefix.ReplaceAllString(base, "")
+
+	// ===== 2. 括号类广告 =====
+	// 【高清xxx网】【广告】等全角括号
+	base = reAdBracket.ReplaceAllString(base, "")
+	// (www.xxx.com) [4k688.com] 等半角括号（只清开头/结尾的，不清中间的标签）
+	base = reAdParenHead.ReplaceAllString(base, "")
+	base = reAdSquareHead.ReplaceAllString(base, "")
+
+	// ===== 3. 文字类广告前缀/后缀 =====
+	// "高清剧集网"、"破解版"、"完整版"、"中文字幕" 等常见前缀
+	adPrefixes := []string{
+		"高清剧集网", "高清网站", "最新地址", "永久地址", "官方网址",
+		"破解版", "完整版", "无修正版", "高清版", "无码版", "有码版",
+		"中文字幕", "无码破解", "字幕版", "4K修复版",
+	}
+	for _, ad := range adPrefixes {
+		if strings.HasPrefix(base, ad) {
+			base = strings.TrimPrefix(base, ad)
+			// 清除前缀后面的分隔符
+			base = strings.TrimLeft(base, "-_. ")
+		}
+	}
+
+	// ===== 4. URL 参数类后缀 =====
+	// "XXX-001?from=4k688" / "XXX-001 - www.4k688.com"
+	base = reAdUrlTail.ReplaceAllString(base, "")
+	base = reAdQueryTail.ReplaceAllString(base, "")
+
+	// ===== 5. 多余分隔符 =====
+	base = strings.Trim(base, "-_. ")
+	for strings.Contains(base, "  ") {
+		base = strings.ReplaceAll(base, "  ", " ")
+	}
+	base = strings.Trim(base, "-_. ")
+
+	return base + ext
+}
+
+// avNumRegex 匹配常见 AV 番号格式：ABC-123、ABCD-12 等
+
+var avNumRegex = regexp.MustCompile(`(?i)\b([A-Z]{2,6})-?(\d{2,5})\b`)
+
+// avNumLooseRe 番号后带发布标记的变体（hmn-898ch = HMN-898 中字版、
+// xxx898uc = 无码版）：数字后紧跟小写标记导致词边界断开，主正则失配。
+// 标记限定为常见后缀白名单，避免 top10mv 之类随机词误判成番号
+var avNumLooseRe = regexp.MustCompile(`(?i)\b([A-Z]{2,6})-?(\d{2,5})(?:ch|unc|uc|leak|4k|8k|cd\d?|c\d|u\d|v\d|c|u)?\b`)
+
+// avNumDigitPrefixRe 数字前缀系列（259LUXU-666）：字母段 ≥3 位避免把
+// "1080px265" 这类画质词误判成番号；字母段仍过排除前缀表
+var avNumDigitPrefixRe = regexp.MustCompile(`(?i)\b(\d{2,4}[A-Z]{3,6})-?(\d{2,5})\b`)
+
+var avLettersRe = regexp.MustCompile(`[A-Z]+`)
+
+// fc2NumRegex 匹配 FC2 番号：FC2-PPV-1234567、FC2_1234567 等（数字 5-8 位）
+var fc2NumRegex = regexp.MustCompile(`(?i)\bfc2[-_]?(?:ppv[-_]?)?(\d{5,8})\b`)
+
+// avExcludedPrefixes 常见非 AV 前缀（画质/编码/剧集标记），命中则视为误匹配
+var avExcludedPrefixes = map[string]bool{
+	"THE": true, "AND": true, "FOR": true, "HD": true, "SD": true, "XX": true,
+	"WEB": true, "DL": true, "BLU": true, "UHD": true, "HDR": true, "DTS": true,
+	"AAC": true, "H264": true, "H265": true, "X264": true, "X265": true,
+	"HEVC": true, "AVC": true, "1080P": true, "720P": true, "2160P": true,
+	"4K": true, "2K": true, "CD": true, "DVD": true, "BDRIP": true, "HDRIP": true,
+	"WP": true, "XXX": true,
+	// 剧集/动漫常见标记（ep01、se02、sp01、ova、ncop 等）
+	"EP": true, "SE": true, "SP": true, "EPT": true, "OVA": true, "OAD": true,
+	"NCOP": true, "NCED": true, "PV": true, "CM": true, "TV": true, "VOL": true,
+}
+
+// detectAVNumber 从目录名和文件名中检测 AV 番号
+// 优先用目录名（更干净），文件名作为补充；返回规范化的番号（前缀大写）
+func detectAVNumber(dirName, fileName string) string {
+	for _, s := range []string{dirName, fileName} {
+		if s == "" {
+			continue
+		}
+		// FC2 番号优先（通用规则匹配不到 7 位数字）
+		if m := fc2NumRegex.FindStringSubmatch(s); m != nil {
+			return "FC2-PPV-" + m[1]
+		}
+		if m := avNumRegex.FindStringSubmatch(s); m != nil {
+			prefix := strings.ToUpper(m[1])
+			if !avExcludedPrefixes[prefix] {
+				return prefix + "-" + m[2]
+			}
+		}
+		if m := avNumLooseRe.FindStringSubmatch(s); m != nil {
+			prefix := strings.ToUpper(m[1])
+			if !avExcludedPrefixes[prefix] {
+				return prefix + "-" + m[2]
+			}
+		}
+		if m := avNumDigitPrefixRe.FindStringSubmatch(s); m != nil {
+			prefix := strings.ToUpper(m[1])
+			letters := avLettersRe.FindString(prefix)
+			if letters != "" && !avExcludedPrefixes[letters] {
+				return prefix + "-" + m[2]
+			}
+		}
+	}
+	return ""
+}
+
+// avAdDomainRegex 广告域名（清洗后仍任意位置出现即视为广告载体）
+var avAdDomainRegex = regexp.MustCompile(`(?i)(?:https?://|www\.)?[a-z0-9][a-z0-9-]{1,15}\.(?:com|net|org|cc|xyz|me|tv|info|vip|top|app|club|site|online|icu|fun|win)\b`)
+
+// avAdKeywords 广告文件常见关键词
+var avAdKeywords = []string{
+	"18+", "游戏大全", "最新地址", "永久地址", "永久导航", "网址导航", "导航网",
+	"发布页", "发布器", "天天更新", "每周更新", "免费观看", "在线观看", "手机看片",
+	"福利网", "福利社", "破解版", "高清资源网", "资源网", "看片网", "影片网",
+	"电影网", "安卓版", "app版", "app下载", "磁力搜索", "同城约",
+}
+
+// isAVAdFile 判断 AV 目录内的文件是否为广告/引流文件。
+// 以「清洗后的文件名」为准：正规片的广告前缀会被 sanitizeAVFilename 清掉
+// （"4k688.com@START-622.mp4" → "START-622.mp4"，不含域名，正常入库）；
+// 清完仍残留域名或广告词的才是真广告（如 "18+游戏大全(996gg.cc)-…"）
+func isAVAdFile(name string) bool {
+	cleaned := baseName(sanitizeAVFilename(name))
+	if avAdDomainRegex.MatchString(cleaned) {
+		return true
+	}
+	lower := strings.ToLower(cleaned)
+	for _, kw := range avAdKeywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAVAdKeyword 广告词检测（大小写不敏感）
+func containsAVAdKeyword(s string) bool {
+	lower := strings.ToLower(s)
+	for _, kw := range avAdKeywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAdOnlyVideo 判断视频文件是否为纯广告/引流载体：
+// 清洗发布站广告（【…】块/域名）后连片名都没剩下（文件名整体是广告），
+// 或清洗后仍残留域名/广告词。"【更多无水印蓝光原盘请访问 www.BBQDDQ.com】.MP4"
+// 清洗后为空 → 广告；"骗不了人的男人.Softie...mkv" 清洗后保留完整片名 → 正片
+//
+// 站点水印前缀 ≠ 广告本体："4k688.com@START-635.mp4" 开头的 4k688.com 只是
+// 发布站水印（sanitizeAVFilename 能剥掉）。剥掉水印后剩干净片名/番号的算
+// avSubLangRegex 字幕语言标记（.chs/.cht/.eng 等）
+var avSubLangRegex = regexp.MustCompile(`\.(chs|cht|eng|chi|jap)\b`)
+
+// avCarriesNumber 正片文件名（清洗后）应携带番号，不带番号的多为引流视频；
+// FC2 文件名常省略 PPV 段（FC2-1234567 / FC2-PPV-1234567 两种写法都认），
+// 连字符差异（START622 / START-622）也容忍
+func avCarriesNumber(cleanedBase, avNum string) bool {
+	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, "_", "-")) }
+	lc := norm(cleanedBase)
+	lcc := strings.ReplaceAll(lc, "-", "")
+	for _, c := range []string{norm(avNum), strings.ReplaceAll(norm(avNum), "-ppv", "")} {
+		if c != "" && (strings.Contains(lc, c) || strings.Contains(lcc, strings.ReplaceAll(c, "-", ""))) {
+			return true
+		}
+	}
+	// 分词模糊匹配：发布方常把番号数字段补零且不带连字符
+	//（JUVR-303 ↔ 文件名 juvr00303_1_8k）。按分隔符切词，词内
+	// 「字母前缀+数字」的数字段去掉前导零后与番号数字段精确比对
+	alnum := func(s string) string {
+		var b strings.Builder
+		for _, r := range strings.ToLower(s) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+			}
+		}
+		return b.String()
+	}
+	m := avPrefixNumRe.FindStringSubmatch(alnum(avNum))
+	if m == nil {
+		return false
+	}
+	prefixes := []string{m[1]}
+	if p := strings.TrimSuffix(m[1], "ppv"); p != m[1] {
+		prefixes = append(prefixes, p) // FC2-PPV ↔ 文件 fc2_xxx
+	}
+	num := strings.TrimLeft(m[2], "0")
+	if num == "" {
+		return false
+	}
+	for _, tok := range strings.FieldsFunc(lc, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	}) {
+		if tm := avPrefixNumRe.FindStringSubmatch(tok); tm != nil {
+			for _, p := range prefixes {
+				if tm[1] == p && strings.TrimLeft(tm[2], "0") == num {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// avPrefixNumRe 「字母前缀+纯数字段」（juvr303 / fc2ppv1234567 → 前缀+番号数字）
+var avPrefixNumRe = regexp.MustCompile(`^([a-z]+)(\d+)$`)
+
+// processAVDirectory 处理 AV 目录（跳过 TMDB，直接用番号入库）
+func processAVDirectory(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, dir dirEntry, files []remoteFile, onLog func(string), results []OrganizeResult) []OrganizeResult {
+	// AV 目录结构：/AV/分类/<AVFolder 模板>/（分类 = 无码/有码，按番号前缀匹配）。
+	// 目录与文件名走重命名模板（AVFolder/AVFile，UI 可配）；模板缺省时
+	// 降级为番号直命名（旧行为）
+	// MetaTube 识别（配置后生效）：番号 → 真实标题/演员 → AVMeta 缓存，
+	// 供重命名模板 {av_title} 等变量使用；不写任何元数据文件到媒体目录。
+	// 未配置/识别不到 → meta 为 nil，完全退回纯番号行为
+	avMeta := metatubeFetchCached(media.Title)
+	if avMeta != nil && avMeta.Status == "ok" {
+		onLog(fmt.Sprintf("✦ MetaTube 识别: %s《%s》%s（%s）",
+			media.Title, avMeta.Title, strings.Join(avMetaActors(avMeta), "、"), avMeta.Year))
+	} else if metatubeEnabled() {
+		onLog(fmt.Sprintf("○ %s - MetaTube 未识别到，按番号入库", media.Title))
+	}
+	category := classifyAVNumber(media.Title, dir.Name)
+	// 模板变量（画质/制作组等）取自体积最大的视频
+	mainName, mainSize := "", int64(-1)
+	for _, f := range files {
+		if classifyFile(f.Name) == FileTypeVideo && f.Size > mainSize {
+			mainSize, mainName = f.Size, f.Name
+		}
+	}
+	avFolder, baseFile := "", ""
+	if rel := buildNewNameWithTemplate(media, &ParsedName{Title: media.Title}, mainName); rel != "" {
+		parts := strings.SplitN(rel, "/", 2)
+		if parts[0] != "" {
+			avFolder = parts[0]
+		}
+		if len(parts) == 2 && parts[1] != "" {
+			baseFile = parts[1]
+		}
+	}
+	if avFolder == "" || baseFile == "" {
+		avFolder = media.Title
+		baseFile = media.Title + pathExt(mainName)
+	}
+	avDir := category + "/" + avFolder
+	baseNoExt := strings.TrimSuffix(baseFile, pathExt(baseFile))
+
+	// 分流：正片视频（含多分卷）/ 字幕 / 元数据 / 广告垃圾
+	var videos, subs, metas []remoteFile
+	var junkFids []string
+	var junkFiles []remoteFile // 指纹登记用
+	minBytes := int64(cfg.MinSize) * 1024 * 1024
+	for _, f := range files {
+		switch classifyFile(f.Name) {
+		case FileTypeVideo:
+			cleanedBase := baseName(sanitizeAVFilename(f.Name))
+			switch {
+			case isAVAdFile(f.Name):
+				junkFids = append(junkFids, f.Fid)
+				junkFiles = append(junkFiles, f)
+				onLog(fmt.Sprintf("○ %s - 广告/引流视频，移到冗余", f.Name))
+			case !avCarriesNumber(cleanedBase, media.Title):
+				junkFids = append(junkFids, f.Fid)
+				junkFiles = append(junkFiles, f)
+				onLog(fmt.Sprintf("○ %s - 清洗后不含番号 %s，疑似引流视频，移到冗余", f.Name, media.Title))
+			case minBytes > 0 && f.Size > 0 && f.Size < minBytes:
+				junkFids = append(junkFids, f.Fid)
+				junkFiles = append(junkFiles, f)
+				onLog(fmt.Sprintf("○ %s - 仅 %.1fMB（小于最小体积 %dMB），移到冗余",
+					f.Name, float64(f.Size)/1024/1024, cfg.MinSize))
+			default:
+				videos = append(videos, f)
+			}
+		case FileTypeSubtitle:
+			subs = append(subs, f)
+		case FileTypeNFO, FileTypeStdImage:
+			metas = append(metas, f)
+		default:
+			junkFids = append(junkFids, f.Fid)
+			junkFiles = append(junkFiles, f)
+			onLog(fmt.Sprintf("○ %s - 垃圾文件，移到冗余", f.Name))
+		}
+	}
+
+	// 正片全被过滤（整包都是广告）→ 整目录进冗余
+	if len(videos) == 0 {
+		if err := ops.moveFiles(cfg.Redundant, []string{dir.Fid}); err != nil {
+			onLog(fmt.Sprintf("✗ %s/ - 移动到冗余失败: %v", dir.Name, err))
+		} else {
+			onLog(fmt.Sprintf("○ %s/ - 无有效视频（全部为广告/垃圾），已移到冗余", dir.Name))
+		}
+		return results
+	}
+
+	// 广告/垃圾先行移到冗余（登记指纹：重复投放的引流内容秒判）
+	if len(junkFiles) > 0 {
+		if err := ops.moveFiles(cfg.Redundant, junkFids); err != nil {
+			onLog(fmt.Sprintf("○ %s/ - 垃圾文件移到冗余失败: %v", dir.Name, err))
+		}
+	}
+
+	onLog(fmt.Sprintf("▣ AV 目标目录: %s（分类: %s）", avDir, category))
+	targetCid, err := ops.ensurePath(cfg.Library, avDir)
+	if err != nil {
+		onLog(fmt.Sprintf("✗ AV 创建目录失败: %v", err))
+		return results
+	}
+
+	// 重命名：正片按体积降序，主片 = AVFile 模板名，其余分卷 = 基名-CDn.ext
+	//（广告包里常见"引流视频+正片"，过去全部重命名为番号导致同名冲突）。
+	// 全部重命名合并为一次 batch_rename（逐个调用要过 3 秒/次的 API 限流）
+	sort.Slice(videos, func(i, j int) bool { return videos[i].Size > videos[j].Size })
+	names := map[string]string{}
+	var moveFids []string
+	for i, v := range videos {
+		newName := baseNoExt + pathExt(v.Name)
+		if i > 0 {
+			newName = fmt.Sprintf("%s-CD%d%s", baseNoExt, i+1, pathExt(v.Name))
+		}
+		if newName != v.Name {
+			names[v.Fid] = newName
+		}
+		moveFids = append(moveFids, v.Fid)
+	}
+	for _, sub := range subs {
+		subSuffix := ""
+		if m := avSubLangRegex.FindStringSubmatch(baseName(sub.Name)); m != nil {
+			subSuffix = m[0]
+		}
+		newName := baseNoExt + subSuffix + pathExt(sub.Name)
+		if newName != sub.Name {
+			names[sub.Fid] = newName
+		}
+		moveFids = append(moveFids, sub.Fid)
+	}
+	for _, m := range metas {
+		newName := baseNoExt + pathExt(m.Name)
+		if newName != m.Name {
+			names[m.Fid] = newName
+		}
+		moveFids = append(moveFids, m.Fid)
+	}
+	if len(names) > 0 {
+		if _, err := ops.renameBatch(names); err != nil {
+			onLog(fmt.Sprintf("✗ AV 批量重命名失败（%d 个文件保持原名）: %v", len(names), err))
+		} else {
+			onLog(fmt.Sprintf("✓ AV 批量重命名 %d 个文件（例: %s → %s）", len(names), videos[0].Name, baseNoExt+pathExt(videos[0].Name)))
+		}
+	}
+
+	if err := ops.moveFiles(targetCid, moveFids); err != nil {
+		onLog(fmt.Sprintf("✗ AV 移动失败: %v", err))
+		return results
+	}
+
+	// 移空的源目录到冗余
+	ops.moveFiles(cfg.Redundant, []string{dir.Fid})
+
+	onLog(fmt.Sprintf("✓ AV 入库: %s → %s", dir.Name, avDir))
+	// 识别结果落库（总览面板最近整理显示真实标题）；媒体目录不写任何文件
+	recordAVMedia(avMeta, media.Title, category, avDir)
+	// 入库富通知（与电影/剧集同款：封面卡片 + 类型/演员/厂牌信息）
+	notifyAVStored(avMeta, media.Title, category, videos)
+	for _, v := range videos {
+		results = append(results, OrganizeResult{
+			FileName: v.Name, Status: "success",
+			Title: media.Title, MediaType: "av",
+			Category: category, TargetDir: avDir,
+			Message: fmt.Sprintf("AV %s/%s", category, media.Title),
+		})
+	}
+	return results
+}
+
+// avCleanMaker 厂牌展示清洗：JavBus 原始厂牌名常带全角连接符和尾部
+// 分隔符（"KMPVR－彩－"），统一半角并去掉首尾装饰后展示
+func avCleanMaker(s string) string {
+	out := strings.TrimSpace(strings.NewReplacer("－", "-", "‐", "-", "–", "-", "—", "-").Replace(s))
+	return strings.Trim(out, "-_~～ ")
+}
+
+// notifyAVStored AV 入库富通知：MetaTube 封面卡片（企微 news / TG 图片），
+// 内容含 类别/演员/厂牌/文件数与大小——与电影剧集的 notifyMediaStoredFull 同级
+func notifyAVStored(m *model.AVMeta, num, category string, videos []remoteFile) {
+	var totalBytes int64
+	for _, v := range videos {
+		totalBytes += v.Size
+	}
+	entry := mediaNotifEntry{
+		Title: num, Kind: "AV", Source: "organize",
+		Category: category,
+		Files:    fmt.Sprintf("%d 个文件 · %s", len(videos), humanSizeBytes(totalBytes)),
+	}
+	if m != nil && m.Status == "ok" {
+		if m.Title != "" {
+			entry.Title = num + " " + m.Title
+		}
+		entry.Year = m.Year
+		if actors := avMetaActors(m); len(actors) > 0 {
+			entry.Notes = append(entry.Notes, "演员："+strings.Join(actors, "、"))
+		}
+		if maker := avCleanMaker(m.Publisher); maker != "" {
+			entry.Notes = append(entry.Notes, "厂牌："+maker)
+		}
+		if m.CoverURL != "" {
+			entry.PosterURL = m.CoverURL // 源站公网封面（字节抓取失败时的兜底）
+			// 封面字节优先从 metatube-server 图片代理取（免源站防盗链）：
+			// TG 直接上传，企微转存官方图床后 picurl 必然显示
+			data, err := metatubeFetchCoverBytes(m)
+			if err != nil || len(data) <= 100 {
+				data, err = fetchHTTPBytes(m.CoverURL, 10*time.Second)
+			}
+			if err == nil && len(data) > 100 {
+				entry.PosterData = data
+			}
+		}
+	}
+	QueueMediaNotif(entry)
 }
 
 // notifyMediaStoredFull 整理入库 → 入库卡片（TMDB 封面 + 画质/文件数/集数）。

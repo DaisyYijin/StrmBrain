@@ -180,6 +180,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 代理测试
 		protected.POST("/proxy/test", h.TestProxyLatency)
+		// MetaTube AV 元数据刮削（自部署 metatube-server）
+		protected.POST("/metatube/check", h.MetatubeCheck)
 		protected.GET("/network/check", h.NetworkCheck)
 
 		// 存储管理

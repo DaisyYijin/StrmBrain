@@ -15,6 +15,8 @@ export interface RenameVar {
   example: string
   /** 仅剧集可用（电影字段不展示） */
   tv?: true
+  /** 仅 AV 可用 */
+  av?: true
   /** 只在文件名里有意义（文件夹字段不展示） */
   fileOnly?: true
   /** 可能取不到值 —— 建议包进 <> 块，示例预览的「信息缺失」一行会清空它 */
@@ -68,6 +70,17 @@ export const RENAME_VAR_GROUPS: RenameVarGroup[] = [
       { token: '{video_encode}', label: '视频编码', example: 'H265.10bit', optional: true },
       { token: '{audio_encode}', label: '音频编码', example: 'TrueHD.7.1', optional: true },
       { token: '{resource_team}', label: '发布组', example: 'TnT', optional: true },
+    ],
+  },
+  {
+    key: 'av',
+    title: 'AV（MetaTube）',
+    vars: [
+      { token: '{num}', label: '番号', example: 'ABC-123', av: true },
+      { token: '{av_title}', label: 'AV 标题', example: '真实标题', av: true, optional: true },
+      { token: '{av_year}', label: '发行年份', example: '2024', av: true, optional: true },
+      { token: '{actor}', label: '第一主演', example: '演员A', av: true, optional: true },
+      { token: '{actors}', label: '全部主演', example: '演员A、演员B', av: true, optional: true },
     ],
   },
 ]
@@ -183,6 +196,8 @@ export interface RenameConfig {
   movie_file: string
   tv_folder: string
   tv_file: string
+  av_folder: string
+  av_file: string
 }
 
 /** 与后端 defaultRenameConfig() 保持一致，改这里要同步改 internal/api/organize.go */
@@ -191,4 +206,6 @@ export const DEFAULT_RENAME: RenameConfig = {
   movie_file: "{title}<.{en_title.replace('.', ' ')}>.{year}<.{resource_type}><.{resource_effect.replace('.', ' ')}><.{resource_pix}><.{video_encode}><.{audio_encode}>{ext}",
   tv_folder: '{title}.{year}<.[[tmdbid={tmdb_id}]]>/Season {season_num}',
   tv_file: "{title}<.{en_title.replace('.', ' ')}>.{season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}>{ext}",
+  av_folder: '{first_letter}-{num}',
+  av_file: '{num}< {av_title}>{ext}',
 }

@@ -205,6 +205,13 @@ func localScrapeJobTitle(ledger map[string]*ledgerTitleEntry, keys []string) str
 // strict = 同步后自动刮削：识别只认片名完全相等（recognizeStrict），认不准就不刮
 func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid string, pick *TmdbMedia, strict bool) (scrapeTitle, error) {
 	t := scrapeTitle{Key: e.Key, Kind: e.MediaType, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID}
+
+	// AV 条目（整理按番号入库，台账没有 TMDB 编号）：目录名认得出番号就按 AV 刮削，
+	// 不进下面的 TMDB 识别——番号当片名搜 TMDB 既搜不到又会报「请指定 TMDB 条目」
+	if e.MediaType != "tv" && e.TmdbID <= 0 && pick == nil && detectAVNumber(titleKeyName(e.Key), "") != "" {
+		t.Kind = "av"
+		return t, nil
+	}
 	switch {
 	case pick != nil:
 		t.Kind, t.TmdbID, t.Title, t.Year = pick.MediaType, pick.TmdbID, pick.Title, pick.Year
@@ -243,7 +250,7 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 			t.Kind = media.MediaType
 		}
 	}
-	if t.Kind != "tv" {
+	if t.Kind != "tv" && t.Kind != "av" {
 		t.Kind = "movie"
 	}
 	// 网盘落点：媒体库根 cid + 去掉库名的相对路径（本地第一层是库名，网盘上库名就是媒体库根本身）
@@ -676,6 +683,18 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		if !t.alive() {
 			problems = append(problems, name+"：本地片目目录里已经没有 STRM（被移走或删除了）")
 			log.Printf("[影视刮削] ○ %s：本地片目目录里已经没有 STRM，跳过 → %s", name, t.Dir.Local)
+			continue
+		}
+		if t.Kind == "av" {
+			start := time.Now()
+			log.Printf("[影视刮削] ▶ %s（AV）MetaTube 元数据 → %s", t.Title, t.Dir.Local)
+			avWrote, avFailed := scrapeAVTitle(t, o)
+			mark := "✓"
+			if avFailed > 0 {
+				mark = "○"
+			}
+			log.Printf("[影视刮削] %s %s：写入 %d 个，失败 %d，用时 %s", mark, t.Title, avWrote, avFailed, time.Since(start).Round(time.Second))
+			done = i + 1
 			continue
 		}
 		start := time.Now()

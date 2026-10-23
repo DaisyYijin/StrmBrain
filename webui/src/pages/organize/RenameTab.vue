@@ -29,6 +29,13 @@ const GROUPS = [
     folderTip: '入库后的文件夹名模板。默认带 /Season {season_num} 一层；若去掉，入库时会自动补一层 Season 目录。',
     fileTip: '入库后的文件名模板，必须以 {ext} 结尾才能保住扩展名。',
   },
+  {
+    type: 'av' as const,
+    label: 'AV',
+    tagType: 'warning' as const,
+    folderTip: 'AV 入库后的文件夹名模板，常用变量 {num}（番号）、{first_letter}。',
+    fileTip: 'AV 入库后的文件名模板，默认「番号 + MetaTube 刮到的标题」；未刮到时 <> 块整体省略。',
+  },
 ]
 
 const rulesVisible = ref(false)
@@ -95,7 +102,7 @@ function gotoProbe() {
     ref="probeEl"
     class="probe-card"
     @enabled="probeOn = $event"
-    :templates="[model.movie_folder, model.movie_file, model.tv_folder, model.tv_file]"
+    :templates="[model.movie_folder, model.movie_file, model.tv_folder, model.tv_file, model.av_folder, model.av_file]"
   />
 
   <HModal v-model:show="rulesVisible" title="重命名规则说明" width="920px">

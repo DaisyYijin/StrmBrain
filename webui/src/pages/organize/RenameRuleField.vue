@@ -26,7 +26,7 @@ const props = defineProps<{
   label: string
   tip?: string
   /** 电影只展示通用变量，剧集额外放开季集变量 */
-  scope: 'movie' | 'tv'
+  scope: 'movie' | 'tv' | 'av'
   /** 文件夹规则里 {ext}/{original_name} 没有意义，过滤掉 */
   kind: 'folder' | 'file'
   /** 「恢复默认」写回的内容 */
@@ -57,6 +57,7 @@ const groups = computed(() => {
     title: g.title,
     vars: g.vars.filter(v => {
       if (v.tv && props.scope !== 'tv') return false
+      if (v.av && props.scope !== 'av') return false
       if (v.fileOnly && props.kind !== 'file') return false
       return !q || v.token.toLowerCase().includes(q) || v.label.toLowerCase().includes(q)
     }),

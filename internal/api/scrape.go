@@ -909,3 +909,66 @@ func (tc *TmdbClient) tmdbSeasonEpisodesLang(tvID, season int, lang string) (eps
 	scrapeSeasonMu.Unlock()
 	return m, false, nil
 }
+
+// ==================== AV 刮削（MetaTube） ====================
+
+// nfoAV JAV/Kodi 元数据（番号/标题/演员/厂牌/日期），Emby 与 Kodi 通用
+type nfoAV struct {
+	XMLName       xml.Name   `xml:"movie"`
+	Title         string     `xml:"title"`
+	OriginalTitle string     `xml:"originaltitle"`
+	Num           string     `xml:"num"`
+	UniqueNum     string     `xml:"uniqueid"`
+	Premiered     string     `xml:"premiered"`
+	Runtime       int        `xml:"runtime"`
+	Studio        string     `xml:"studio"`
+	Director      string     `xml:"director"`
+	Actors        []nfoActor `xml:"actor"`
+	Plot          string     `xml:"plot"`
+}
+
+// scrapeAVTitle AV 片目刮削：MetaTube 元数据 → <番号>.nfo + poster.jpg。
+// 只写本地媒体库（不进上传与 Emby 探测链路）；原来独立的 WriteAV 开关并入
+// NFO / 图片两个全局开关，语义由它们覆盖，不再单设一项
+func scrapeAVTitle(t scrapeTitle, o fileScrapeOpts) (wrote, failed int) {
+	num := t.Title
+	meta := metatubeFetchCached(num)
+	if meta == nil || meta.Status != "ok" {
+		log.Printf("[影视刮削] ✗ %s: MetaTube 未命中（未配置 metatube-server 或源未收录）", num)
+		return 0, 1
+	}
+	actors := avMetaActors(meta)
+	if o.WriteNFO {
+		nfo := nfoAV{
+			Title: meta.Title, OriginalTitle: meta.OriginalTitle,
+			Num: meta.Num, UniqueNum: meta.Num,
+			Premiered: meta.ReleaseDate, Runtime: meta.Runtime,
+			Studio: meta.Publisher, Director: meta.Director, Plot: meta.Plot,
+		}
+		for _, a := range actors {
+			nfo.Actors = append(nfo.Actors, nfoActor{Name: a})
+		}
+		if b, err := marshalNFO(nfo); err == nil {
+			if _, err := writeMetaFile(t.Dir.Local, meta.Num+".nfo", b, o.Force); err != nil {
+				log.Printf("[影视刮削] ✗ %s: 写 %s.nfo 失败 %v", num, meta.Num, err)
+				failed++
+			} else {
+				wrote++
+			}
+		}
+	}
+	if o.WriteImages && meta.CoverURL != "" {
+		if data, err := metatubeFetchCoverBytes(meta); err == nil {
+			if _, err := writeMetaFile(t.Dir.Local, "poster.jpg", data, o.Force); err != nil {
+				log.Printf("[影视刮削] ✗ %s: 写 poster.jpg 失败 %v", num, err)
+				failed++
+			} else {
+				wrote++
+			}
+		} else {
+			log.Printf("[影视刮削] ✗ %s: 封面拉取失败 %v", num, err)
+			failed++
+		}
+	}
+	return wrote, failed
+}

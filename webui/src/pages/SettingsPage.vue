@@ -3,6 +3,7 @@ import HTabs from '@/components/hero/HTabs.vue'
 import TmdbTab from './settings/TmdbTab.vue'
 import ProxyTab from './settings/ProxyTab.vue'
 import EmbyTab from './settings/EmbyTab.vue'
+import MetatubeTab from './settings/MetatubeTab.vue'
 import UpdateTab from './settings/UpdateTab.vue'
 import SecurityTab from './settings/SecurityTab.vue'
 import BackupTab from './settings/BackupTab.vue'
@@ -16,6 +17,7 @@ const TABS = [
   { value: 'emby', label: 'EMBY 管理' },
   { value: 'security', label: '登录安全' },
   { value: 'backup', label: '备份恢复' },
+  { value: 'metatube', label: 'MetaTube' },
   { value: 'update', label: '版本更新' },
 ]
 </script>
@@ -26,6 +28,7 @@ const TABS = [
     <TmdbTab v-if="tab === 'tmdb'" />
     <ProxyTab v-else-if="tab === 'proxy'" />
     <EmbyTab v-else-if="tab === 'emby'" />
+    <MetatubeTab v-else-if="tab === 'metatube'" />
     <SecurityTab v-else-if="tab === 'security'" />
     <BackupTab v-else-if="tab === 'backup'" />
     <UpdateTab v-else-if="tab === 'update'" />

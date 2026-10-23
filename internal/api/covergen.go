@@ -284,6 +284,18 @@ func (h *Handler) coverCollectLibs(cfg coverGenCfg) []coverLib {
 }
 
 func coverFetchPoster(path string) image.Image {
+	// AV 真实封面（/av:<完整URL>）：直连下载（连接层只放行公网地址，与 /poster 的 AV 分支同一套防护）
+	if strings.HasPrefix(path, "/av:") {
+		data, err := avCoverGet(strings.TrimPrefix(path, "/av:"))
+		if err != nil {
+			return nil
+		}
+		im, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil
+		}
+		return im
+	}
 	base := strings.TrimSuffix(tmdbImageBase(), "/t/p")
 	client := &http.Client{Timeout: 12 * time.Second}
 	proxyURL := getProxyURL()

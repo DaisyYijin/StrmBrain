@@ -53,6 +53,13 @@ type RenameContext struct {
 	SeasonYear   string
 	EpisodeName  string
 	CustomRegex  string
+
+	// MetaTube AV 元数据（缓存直读，绝不触发网络；整理流程已提前刮好入库）
+	Num     string // AV 番号（{num} 变量；AV 流程由 detectAVNumber 填充）
+	AvTitle string // 真实标题 {av_title}
+	AvYear  string // 发行年份 {av_year}
+	Actor   string // 第一主演 {actor}
+	Actors  string // 全部主演（、连接）{actors}
 }
 
 // buildRenameContext 构建重命名上下文
@@ -63,6 +70,28 @@ func buildRenameContext(media *TmdbMedia, parsed *ParsedName, originalName strin
 		Media:        media,
 		Parsed:       parsed,
 		Resource:     ParseResourceInfo(originalName),
+	}
+	// AV 流程：番号就是 media.Title（detectAVNumber 的产出），供 {num} 使用
+	if media.MediaType == "av" {
+		ctx.Num = media.Title
+		// MetaTube 刮削结果只从缓存读：整理流程在进模板前已通过
+		// metatubeFetchCached 提前刮好入库；预览等场景查不到就保持空值，
+		// 不发起网络请求
+		if model.DB != nil {
+			var av model.AVMeta
+			if model.DB.Where("num = ? AND status = ?", normalizeAVNum(media.Title), "ok").First(&av).Error == nil {
+				// 真实标题会进文件名，必须过 sanitizeName（日文标题常含 / : 等非法字符）
+				ctx.AvTitle = sanitizeName(av.Title)
+				ctx.AvYear = av.Year
+				if actors := avMetaActors(&av); len(actors) > 0 {
+					ctx.Actor = sanitizeName(actors[0])
+					for i, a := range actors {
+						actors[i] = sanitizeName(a)
+					}
+					ctx.Actors = strings.Join(actors, "、")
+				}
+			}
+		}
 	}
 	if parsed != nil && parsed.Media != nil {
 		ctx.Resource = parsed.Media.apply(ctx.Resource) // 文件名没写的画质信息由整理时读到的补上
@@ -221,6 +250,13 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 		"{original_name}":      ctx.OriginalName,
 		"{ext}":                ctx.Ext,
 		"{custom_regex_match}": ctx.CustomRegex,
+
+		// AV 元数据（MetaTube 刮削；未刮到时为空，配合 <> 块语法使用）
+		"{num}":      ctx.Num,
+		"{av_title}": ctx.AvTitle,
+		"{av_year}":  ctx.AvYear,
+		"{actor}":    ctx.Actor,
+		"{actors}":   ctx.Actors,
 
 		// TMDB 信息。TMDB 来的文本一律先过 sanitizeName 再进模板（MoviePilot 的
 		// __convert_invalid_characters 同一时机）：标题里的「/」不洗会被当成目录分隔符
@@ -412,11 +448,12 @@ func (h *Handler) BuildPathWithTemplate(media *TmdbMedia, parsed *ParsedName, or
 	case "tv":
 		folder = ctx.ApplyTemplate(tpl.TVFolder)
 		file = ctx.ApplyTemplate(tpl.TVFile)
-	default:
-		return ""
+	default: // AV 等
+		folder = ctx.ApplyTemplate(tpl.AVFolder)
+		file = ctx.ApplyTemplate(tpl.AVFile)
 	}
 
-	return folder + "/" + file
+	return collapseDuplicateAVNum(folder+"/"+file, ctx.Num)
 }
 
 // sanitizePath 清理路径中的空段和连续分隔符
@@ -435,4 +472,15 @@ func sanitizePath(p string) string {
 		}
 	}
 	return strings.Join(cleaned, "/")
+}
+
+// collapseDuplicateAVNum AV 兜底：番号在结果中背靠背重复（如历史模板
+// {num}-{title} 渲染出 "ABC-123-ABC-123"）时折叠为单个。AV 流程里
+// {num} 与 {title} 同值，模板同用两个变量必产生重复
+func collapseDuplicateAVNum(s, num string) string {
+	if num == "" || !strings.Contains(s, num) {
+		return s
+	}
+	q := regexp.QuoteMeta(num)
+	return regexp.MustCompile(`(` + q + `)[-_. ]?` + q).ReplaceAllString(s, num)
 }
