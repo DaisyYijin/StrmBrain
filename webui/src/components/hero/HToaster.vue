@@ -57,8 +57,10 @@ const ICON: Record<ToastTone, typeof Info> = {
   max-width: 100%;
   padding: 11px 12px 11px 16px;
   border-radius: 22px;
-  background: var(--overlay);
-  box-shadow: var(--overlay-shadow);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-hi), 0 0 0 1px var(--glass-border), var(--overlay-shadow);
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--foreground);

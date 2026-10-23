@@ -19,23 +19,12 @@ import (
 // EmbyWebhook POST /api/emby/webhook —— 接收 Emby Webhooks 插件的事件推送，转发为企微/TG 通知
 // 可选鉴权：配置的 Webhook 地址带 ?token=xxx 时，请求需携带相同 token 才被接受
 func (h *Handler) EmbyWebhook(c *gin.Context) {
-	var notifyCfg struct {
-		Webhook string `json:"webhook"`
-		Token   string `json:"token"`
-	}
-	if v := h.getSettingValue("emby-notify"); v != "" {
-		_ = json.Unmarshal([]byte(v), &notifyCfg)
-	}
 	// 鉴权 token：优先专用 token 字段（界面自动生成），兼容旧版存在 webhook URL 里的 token
-	wantToken := strings.TrimSpace(notifyCfg.Token)
-	if wantToken == "" && notifyCfg.Webhook != "" {
-		if u, err := url.Parse(notifyCfg.Webhook); err == nil {
-			wantToken = u.Query().Get("token")
-		}
-	}
+	wantToken := h.embyWebhookToken()
 	// token 强制：未配置时拒绝处理（此前可空，任何人可伪造入库/播放事件，
 	// 借站长通知通道外发垃圾内容）。界面会自动生成 token
 	if wantToken == "" {
+		h.noteEmbyWebhook("reject", "本站还没生成 Webhook token")
 		log.Printf("[Emby] ✗ webhook 未配置鉴权 token，已拒绝处理（到 消息配置 生成 token 并更新 Emby 的 webhook URL）")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "webhook 未配置鉴权 token：请到 消息配置 里生成，并更新 Emby 的 webhook URL（加 &token=xxx）"})
 		return
@@ -47,6 +36,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		if got != "" {
 			why = "token 与消息配置里的不一致（重新生成过 token 的话，Emby 里的 URL 要一起更新）"
 		}
+		h.noteEmbyWebhook("reject", why)
 		webhookRejectLog("token", "[Emby Webhook] ✗ 拒绝来自 %s 的推送：%s", c.ClientIP(), why)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "token 无效"})
 		return
@@ -61,6 +51,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	var payload map[string]interface{}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		// Emby 通知里内容类型选成 form 时会走到这里，把开头打出来一眼就能看出来
+		h.noteEmbyWebhook("reject", "请求体不是 JSON（Emby 里的内容类型要选 application/json）")
 		webhookRejectLog("json", "[Emby Webhook] ✗ 来自 %s 的请求体不是 JSON（Content-Type=%q）: %v，开头: %q",
 			c.ClientIP(), c.ContentType(), err, truncateStr(string(body), 200))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 JSON"})
@@ -100,6 +91,12 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	}
 
 	category, title := embyEventCategory(event)
+	switch category {
+	case "test", "deleted":
+		h.noteEmbyWebhook(map[string]string{"test": "test", "deleted": "delete"}[category], "")
+	default:
+		h.noteEmbyWebhook("any", "")
+	}
 	if category == "test" {
 		// Emby 侧点「测试通知」发来的连通测试事件：转发一条测试消息，方便确认全链路
 		log.Printf("[Emby Webhook] 收到 Emby 测试事件，转发连通测试通知")

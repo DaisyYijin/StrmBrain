@@ -33,7 +33,7 @@ defineExpose({ load })
 const LINKS: Record<SetupStep['key'], { to: RouteLocationRaw; label: string }> = {
   pan115: { to: { name: 'accounts', query: { tab: 'account' } }, label: '去登录' },
   library: { to: { name: 'accounts', query: { tab: 'library' } }, label: '去选择' },
-  workspace: { to: { name: 'accounts', query: { tab: 'library' } }, label: '去设置' },
+  workspace: { to: { name: 'organize', query: { tab: 'basic' } }, label: '去设置' },
   tmdb: { to: { name: 'settings', query: { tab: 'tmdb' } }, label: '去填写' },
   full: { to: { name: 'sync', query: { tab: 'full' } }, label: '去同步' },
   emby: { to: { name: 'settings', query: { tab: 'emby' } }, label: '去设置' },

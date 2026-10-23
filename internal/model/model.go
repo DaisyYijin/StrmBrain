@@ -170,7 +170,10 @@ type SyncEvent struct {
 	Status    string `json:"status" gorm:"size:20;default:'pending'"` // pending / applied
 	// Account 哪个 115 账号的事件（0 = 主账号，2026-10-20 V2）。别的账号的 EventID 带前缀 a{账号}:，
 	// 事件 id 跨账号会不会撞没验证过，按最坏情况分开
-	Account   uint       `json:"account" gorm:"index;default:0"`
+	Account uint `json:"account" gorm:"index;default:0"`
+	// Note 消费时怎么处理的，只给「Strm 管理 → 增量同步」的最近事件看（2026-10-23）：
+	// self = 整理自己产生、整理时已落盘，跳过；outside = 不涉及媒体库（转存 / 已存在 / 冗余，或本地本来就没有）；空 = 照常处理
+	Note      string     `json:"note" gorm:"size:16"`
 	CreatedAt time.Time  `json:"created_at"`
 	AppliedAt *time.Time `json:"applied_at"`
 }

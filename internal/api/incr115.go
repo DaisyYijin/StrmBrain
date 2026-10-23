@@ -516,6 +516,18 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 本轮命中抑制表的 fid：事件成功消费后才把这些标记清掉
 	var suppressedHits []string
 
+	// 每条事件最后怎么处理的（SyncEvent.Note），消费时一起写回，给状态页的最近事件看。
+	// 「不涉及媒体库」的分支有好几处，各自 sum.Ignored++ 之后 continue，
+	// 所以不在每处插一行，而是看这条事件处理期间 Ignored 有没有涨
+	notes := map[string]string{}
+	noteEv, noteIg := "", 0
+	flushNote := func() {
+		if noteEv != "" && sum.Ignored > noteIg && notes[noteEv] == "" {
+			notes[noteEv] = "outside"
+		}
+		noteEv = ""
+	}
+
 	// ---- 回退目录遍历的目标集合 ----
 	//
 	// 遍历是整条链路上最贵的动作（每列一次目录 = 一次 115 请求 + 1 秒节流），
@@ -595,6 +607,8 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if yieldNow(fmt.Sprintf("第 %d/%d 条事件", i+1, len(pending))) {
 			break
 		}
+		flushNote()
+		noteEv, noteIg = ev.EventID, sum.Ignored
 		// 路径缓存维护必须在抑制检查【之前】：网盘侧的事实已经变了，
 		// 与本地怎么处理无关。整理自产的目录搬移也会绕回来，那些事件下面会被跳过，
 		// 跳过前不更新缓存的话，缓存就永久停在旧路径上——已搬进冗余的目录
@@ -620,6 +634,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if ev.FileID != "" && peekSuppressed(ev.FileID) {
 			sum.Suppressed++
 			suppressedHits = append(suppressedHits, ev.FileID)
+			notes[ev.EventID] = "self"
 			continue
 		}
 		switch ev.Type {
@@ -1094,6 +1109,14 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if len(ids) > 0 {
 			h.DB.Model(&model.SyncEvent{}).Where("event_id IN ?", ids).
 				Updates(map[string]interface{}{"status": "applied", "applied_at": now})
+		}
+		flushNote()
+		byNote := map[string][]string{}
+		for id, n := range notes {
+			byNote[n] = append(byNote[n], id)
+		}
+		for n, nids := range byNote {
+			h.DB.Model(&model.SyncEvent{}).Where("event_id IN ?", nids).Update("note", n)
 		}
 		// 事件已落定，现在才能清掉抑制标记：同一个 fid 之后被用户真的手动移动时
 		// 必须能正常处理，标记不清就会把那次真实变更也吞了

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -762,7 +763,11 @@ func deepDelRowsForRecord(db *gorm.DB, rec model.OrganizeRecord) (rows []model.S
 	return rows, len(fids), nil
 }
 
-// ListDeepDeleteRecords 深度删除流水。GET /sync/deep-delete/records
+// ListDeepDeleteRecords 深度删除流水。GET /sync/deep-delete/records?status=done|rejected|failed&page=&size=
+//
+// 2026-10-23 起顺带给「Strm 管理 → 深度删除」的概况（近 30 天各状态次数、删了几个视频与空目录）
+// 与每条的类型、季集、海报（参考 p115strmhelper 的同步删除历史）。海报只看本地片目目录里还在不在，
+// 删了整部电影的多半已经没了，前端显示占位
 func (h *Handler) ListDeepDeleteRecords(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
@@ -772,24 +777,133 @@ func (h *Handler) ListDeepDeleteRecords(c *gin.Context) {
 	if size < 1 || size > 100 {
 		size = 20
 	}
+	status := c.Query("status")
+	q := h.DB.Model(&model.DeepDeleteRecord{})
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
 	var total int64
-	h.DB.Model(&model.DeepDeleteRecord{}).Count(&total)
+	q.Count(&total)
 	var rows []model.DeepDeleteRecord
-	h.DB.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
+	q.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
 
+	layout := loadLibCategoryLayout()
+	root := localMediaRoot()
 	items := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
 		var rels []string
 		_ = json.Unmarshal([]byte(r.RelPaths), &rels)
-		items = append(items, gin.H{
+		it := gin.H{
 			"id": r.ID, "reason": r.Reason, "title": r.Title,
 			"video_cnt": r.VideoCnt, "asset_cnt": r.AssetCnt, "pan_dirs": r.PanDirs,
 			"status": r.Status, "message": r.Message,
 			"rel_paths":  rels,
 			"created_at": r.CreatedAt.Format("2006-01-02 15:04:05"),
-		})
+			"episodes":   deepDelEpisodeLabel(rels),
+		}
+		if len(rels) > 0 {
+			if key, _, _, mt, ok := layout.titleOf(rels[0]); ok {
+				it["media_type"] = mt
+				if p := h.deepDelPoster(root, key); p != "" {
+					it["poster"] = p
+				}
+			}
+		}
+		items = append(items, it)
 	}
-	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size})
+
+	// 概况：近 30 天，不受状态筛选影响
+	type agg struct {
+		Status string
+		N      int64
+		Videos int64
+		Dirs   int64
+	}
+	var aggs []agg
+	h.DB.Model(&model.DeepDeleteRecord{}).
+		Select("status, COUNT(*) AS n, COALESCE(SUM(video_cnt), 0) AS videos, COALESCE(SUM(pan_dirs), 0) AS dirs").
+		Where("created_at >= ?", time.Now().AddDate(0, 0, -30)).Group("status").Scan(&aggs)
+	stats := gin.H{"done": 0, "rejected": 0, "failed": 0, "videos": 0, "pan_dirs": 0}
+	for _, a := range aggs {
+		stats[a.Status] = a.N
+		if a.Status == "done" {
+			stats["videos"], stats["pan_dirs"] = a.Videos, a.Dirs
+		}
+	}
+	// 各状态全部的条数（筛选按钮上的数字）
+	counts := gin.H{}
+	var byStatus []agg
+	h.DB.Model(&model.DeepDeleteRecord{}).Select("status, COUNT(*) AS n").Group("status").Scan(&byStatus)
+	var all int64
+	for _, a := range byStatus {
+		counts[a.Status] = a.N
+		all += a.N
+	}
+	counts["all"] = all
+	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size, "stats30": stats, "counts": counts})
+}
+
+// deepDelPoster 片目目录里还有海报就给缩略图查询串（与海报墙同一个签名）；目录没了 / 没海报给空
+func (h *Handler) deepDelPoster(root, key string) string {
+	if root == "" || key == "" || isSoloTitleKey(key) {
+		return ""
+	}
+	dir, ok := underRoot(root, key)
+	if !ok {
+		return ""
+	}
+	file, info := findLocalImage(dir, localPosterNames, "poster")
+	if file == "" {
+		return ""
+	}
+	return h.localPosterQuery(key, info.ModTime().Unix())
+}
+
+var deepDelEpRe = regexp.MustCompile(`(?i)S(\d{1,4})E(\d{1,4})`)
+var deepDelSeasonRe = regexp.MustCompile(`(?i)^Season[ ._]?(\d{1,4})$`)
+
+// deepDelEpisodeLabel 这次删了哪几集：S02E05 / S02E01–E03 / S01（整季）/ 跨季写 S01–S02。
+// 只看 STRM 的文件名与所在的季目录，认不出给空（电影就是空）
+func deepDelEpisodeLabel(rels []string) string {
+	type se struct{ s, e int }
+	var eps []se
+	seasons := map[int]bool{}
+	for _, rel := range rels {
+		if !strings.HasSuffix(strings.ToLower(rel), ".strm") {
+			continue
+		}
+		if m := deepDelEpRe.FindStringSubmatch(path.Base(rel)); m != nil {
+			s, _ := strconv.Atoi(m[1])
+			e, _ := strconv.Atoi(m[2])
+			eps = append(eps, se{s, e})
+			seasons[s] = true
+			continue
+		}
+		if m := deepDelSeasonRe.FindStringSubmatch(path.Base(path.Dir(rel))); m != nil {
+			s, _ := strconv.Atoi(m[1])
+			seasons[s] = true
+		}
+	}
+	if len(seasons) == 0 {
+		return ""
+	}
+	var ss []int
+	for s := range seasons {
+		ss = append(ss, s)
+	}
+	sort.Ints(ss)
+	if len(ss) > 1 {
+		return fmt.Sprintf("S%02d–S%02d", ss[0], ss[len(ss)-1])
+	}
+	if len(eps) == 0 {
+		return fmt.Sprintf("S%02d", ss[0])
+	}
+	sort.Slice(eps, func(i, j int) bool { return eps[i].e < eps[j].e })
+	lo, hi := eps[0].e, eps[len(eps)-1].e
+	if lo == hi {
+		return fmt.Sprintf("S%02dE%02d", ss[0], lo)
+	}
+	return fmt.Sprintf("S%02dE%02d–E%02d", ss[0], lo, hi)
 }
 
 // deepDelAccountOf 这批台账行属于哪个账号；mixed = 不止一个账号（要拆开各用各的通道删）

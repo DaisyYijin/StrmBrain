@@ -26,7 +26,6 @@ func acctSetup(t *testing.T) (*Handler, *gin.Engine) {
 	r.DELETE("/storage/:id", h.DeleteStorage)
 	r.GET("/storage/115/accounts", h.ListAccounts115)
 	r.POST("/storage/115/accounts", h.CreateAccount115)
-	r.PUT("/storage/115/accounts/:id", h.UpdateAccount115)
 	r.DELETE("/storage/115/accounts/:id", h.DeleteAccount115)
 	return h, r
 }
@@ -68,21 +67,29 @@ func TestMigrateMainAccount(t *testing.T) {
 func TestAccountsCRUD(t *testing.T) {
 	h, r := acctSetup(t)
 	// 没有主号时不许加附加账号
-	if code, _ := acctDo(t, r, "POST", "/storage/115/accounts", `{"name":"副号"}`); code != http.StatusBadRequest {
+	if code, _ := acctDo(t, r, "POST", "/storage/115/accounts", `{}`); code != http.StatusBadRequest {
 		t.Fatalf("没主号应拒绝，实得 %d", code)
 	}
 	h.DB.Create(&model.Storage{Name: "主人", Type: "115", Main: true, Status: "online"})
 
-	code, out := acctDo(t, r, "POST", "/storage/115/accounts", `{"name":"副号"}`)
+	code, out := acctDo(t, r, "POST", "/storage/115/accounts", `{}`)
 	if code != http.StatusOK {
 		t.Fatalf("添加失败：%d %v", code, out)
 	}
-	id := uint(out["data"].(map[string]any)["id"].(float64))
-	if code, _ := acctDo(t, r, "POST", "/storage/115/accounts", `{"name":"副号"}`); code != http.StatusBadRequest {
-		t.Error("重名应拒绝")
+	data := out["data"].(map[string]any)
+	id := uint(data["id"].(float64))
+	if data["name"] != "未登录账号" {
+		t.Errorf("还没登录时的名字：%v", data["name"])
 	}
-	if code, _ := acctDo(t, r, "POST", "/storage/115/accounts", `{"name":"  "}`); code != http.StatusBadRequest {
-		t.Error("空名字应拒绝")
+	// 上次添加了没扫码：再点添加复用那一行，不多出一行
+	if _, again := acctDo(t, r, "POST", "/storage/115/accounts", `{}`); uint(again["data"].(map[string]any)["id"].(float64)) != id {
+		t.Error("没登录过的账号应复用")
+	}
+	// 登录后名字就是 115 用户名
+	h.DB.Model(&model.Storage{}).Where("id = ?", id).Update("user_name", "小王的家")
+	_, after := acctDo(t, r, "GET", "/storage/115/accounts", "")
+	if rows := after["data"].([]any); rows[1].(map[string]any)["name"] != "小王的家" {
+		t.Errorf("名字应取 115 用户名：%v", rows[1])
 	}
 
 	// 老接口 /storage 只给主号：老前端拿 type=115 的第一行当主号
@@ -107,9 +114,6 @@ func TestAccountsCRUD(t *testing.T) {
 		t.Error("老接口不该删附加账号")
 	}
 
-	if code, _ := acctDo(t, r, "PUT", "/storage/115/accounts/"+uitoa(id), `{"name":"老婆的号"}`); code != http.StatusOK {
-		t.Error("改名失败")
-	}
 	_ = h.Config.SaveCookieOf(id, "UID=2_A1_x; CID=c; SEID=s")
 	if code, _ := acctDo(t, r, "DELETE", "/storage/115/accounts/"+uitoa(id), ""); code != http.StatusOK {
 		t.Fatal("删除失败")

@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Pencil, Plus, QrCode, ShieldCheck, Trash2, Upload } from '@lucide/vue'
+import { Plus, QrCode, ShieldCheck, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
-import SecretInput from '@/components/ui/SecretInput.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
-import HInput from '@/components/hero/HInput.vue'
-import HModal from '@/components/hero/HModal.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import { storageApi } from '@/api'
 import type { Account115 } from '@/api/storage'
@@ -15,7 +12,8 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 /**
  * 附加 115 账号（后端 account115.go，MULTI-ACCOUNT-V2-PLAN.md §10）。
  *
- * 只管登录、检测、改名、删除。登录好的账号在「媒体库」里建库时可选，整理与 STRM 和主账号一样；
+ * 只管登录、检测、删除。名字就是 115 用户名（后端按它显示），不另起昵称。
+ * 登录好的账号在「媒体库」里建库时可选，整理与 STRM 和主账号一样；
  * 订阅还只进主账号的库 —— 文案里要说清楚。
  */
 
@@ -46,34 +44,20 @@ function statusOf(a: Account115): { text: string; color: 'success' | 'warning' |
   return { text: '未检测', color: 'warning' }
 }
 
-// ---- 添加 / 改名 ----
+// ---- 添加 ----
 
-const nameDlg = ref<{ show: boolean; id: number; name: string; saving: boolean }>({ show: false, id: 0, name: '', saving: false })
-function openAdd() {
-  nameDlg.value = { show: true, id: 0, name: '', saving: false }
-}
-function openRename(a: Account115) {
-  nameDlg.value = { show: true, id: a.id, name: a.name, saving: false }
-}
-async function saveName() {
-  const d = nameDlg.value
-  d.saving = true
+const adding = ref(false)
+/** 建一行就去扫码，名字等登录后用 115 用户名 */
+async function add() {
+  adding.value = true
   try {
-    if (d.id) {
-      await storageApi.renameAccount(d.id, d.name.trim())
-      message.success('已改名')
-      d.show = false
-      await load()
-      return
-    }
-    const r = await storageApi.createAccount(d.name.trim())
-    d.show = false
+    const r = await storageApi.createAccount()
     await load()
-    scan(r.data.id) // 建好就去扫码，少点一次
+    scan(r.data.id)
   } catch (e) {
-    toastError(e, d.id ? '改名失败' : '添加失败')
+    toastError(e, '添加失败')
   } finally {
-    d.saving = false
+    adding.value = false
   }
 }
 
@@ -86,30 +70,6 @@ function scan(id: number) {
 async function onScanned() {
   message.success('附加账号已登录')
   await load()
-}
-
-const cookieDlg = ref<{ show: boolean; id: number; cookie: string; saving: boolean }>({ show: false, id: 0, cookie: '', saving: false })
-function openImport(a: Account115) {
-  cookieDlg.value = { show: true, id: a.id, cookie: '', saving: false }
-}
-async function saveCookie() {
-  const d = cookieDlg.value
-  d.saving = true
-  try {
-    const r = await storageApi.checkAccount(d.id, d.cookie.trim())
-    if (!r.valid) {
-      message.error('Cookie 无效：' + (r.message || '未知原因'))
-      return
-    }
-    if (r.warning) message.warning(r.warning)
-    else message.success(`已导入（${r.username}）`)
-    d.show = false
-    await load()
-  } catch (e) {
-    toastError(e, '导入失败')
-  } finally {
-    d.saving = false
-  }
 }
 
 async function check(a: Account115) {
@@ -151,7 +111,7 @@ async function remove(a: Account115) {
 <template>
   <SectionCard v-if="enabled" title="附加账号" hint="建库时可选；整理、STRM、播放与主账号一样，订阅只进主账号的库">
     <template #extra>
-      <HButton size="sm" variant="secondary" @click="openAdd"><Plus :size="14" />添加账号</HButton>
+      <HButton size="sm" variant="secondary" :loading="adding" @click="add"><Plus :size="14" />添加账号</HButton>
     </template>
     <ul v-if="extras.length" class="accts">
       <li v-for="a in extras" :key="a.id" class="acct">
@@ -162,40 +122,17 @@ async function remove(a: Account115) {
             <HChip :color="statusOf(a).color">{{ statusOf(a).text }}</HChip>
           </div>
           <div class="acct-sub">
-            <span v-if="a.user_name">115：{{ a.user_name }}</span>
             <span v-if="libCount">{{ libCount[a.id] ? `${libCount[a.id]} 个媒体库` : '还没有媒体库' }}</span>
           </div>
         </div>
         <div class="acct-ops">
           <HButton size="sm" variant="secondary" @click="scan(a.id)"><QrCode :size="14" />{{ a.logged_in ? '重新登录' : '扫码登录' }}</HButton>
-          <HButton size="sm" variant="ghost" @click="openImport(a)"><Upload :size="14" />导入 Cookie</HButton>
           <HButton v-if="a.logged_in" size="sm" variant="ghost" :loading="busy === a.id" @click="check(a)"><ShieldCheck :size="14" />检测</HButton>
-          <HButton size="sm" variant="ghost" :aria-label="`给 ${a.name} 改名`" @click="openRename(a)"><Pencil :size="14" /></HButton>
           <HButton size="sm" variant="ghost" :aria-label="`删除 ${a.name}`" @click="remove(a)"><Trash2 :size="14" /></HButton>
         </div>
       </li>
     </ul>
     <p v-else class="muted small empty">还没有附加账号。别的 115 账号登录进来后，在「媒体库」里建库时就能选它。</p>
-
-    <HModal v-model:show="nameDlg.show" :title="nameDlg.id ? '改名' : '添加附加账号'" width="380px" persistent>
-      <HInput v-model="nameDlg.name" placeholder="比如「副号」「老婆的号」" :input-attrs="{ 'aria-label': '账号名字', maxlength: '30' }" />
-      <p v-if="!nameDlg.id" class="muted small">只是给你自己看的名字。下一步用 115 App 扫码登录这个账号。</p>
-      <template #footer>
-        <HButton variant="tertiary" @click="nameDlg.show = false">取消</HButton>
-        <HButton variant="primary" :loading="nameDlg.saving" :disabled="!nameDlg.name.trim()" @click="saveName">
-          {{ nameDlg.id ? '保存' : '下一步：扫码登录' }}
-        </HButton>
-      </template>
-    </HModal>
-
-    <HModal v-model:show="cookieDlg.show" title="导入 Cookie" width="460px" persistent>
-      <SecretInput v-model="cookieDlg.cookie" name="extra-acct-cookie" placeholder="UID=...; CID=...; SEID=...; KID=..." />
-      <p class="muted small">扫码被 115 风控时用：从浏览器里复制这个账号的 Cookie，检测有效才保存。</p>
-      <template #footer>
-        <HButton variant="tertiary" @click="cookieDlg.show = false">取消</HButton>
-        <HButton variant="primary" :loading="cookieDlg.saving" :disabled="!cookieDlg.cookie.trim()" @click="saveCookie">检测并保存</HButton>
-      </template>
-    </HModal>
 
     <QrLoginModal v-model:show="qr.show" channel="cookie" device="web" app-id="" :account="qr.id" @success="onScanned" />
   </SectionCard>

@@ -139,6 +139,12 @@ const showPin = computed(() => !!props.docked)
   overflow: hidden;
 }
 
+/* 手机抽屉里的侧栏：底色交给抽屉的毛玻璃，这里再铺实色就把它盖住了 */
+.sidebar:not(.is-docked) {
+  background: transparent;
+  border-right: 0;
+}
+
 /* ---- 桌面形态：宽度在图标栏与完整之间过渡 ---- */
 .sidebar.is-docked {
   position: absolute;
@@ -155,7 +161,18 @@ const showPin = computed(() => !!props.docked)
    固定后投影淡出、宽度不变，占位列在下面跟着展开 */
 .sidebar.is-floating {
   transition-delay: 120ms;
+  /* 浮在内容上面时才是毛玻璃；收起的图标栏与固定后仍是实色，免得和内容区糊在一起 */
+  background: var(--glass-bg-bar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   box-shadow: var(--overlay-shadow), 12px 0 40px -12px rgb(0 0 0 / 0.35);
+}
+/* 背后铺着剧照（AppBackdrop.vue）：收起的图标栏与固定后也是毛玻璃，否则一整条实色挡住画面 */
+html.has-wall .sidebar.is-docked {
+  background: var(--glass-bg-bar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-right-color: var(--glass-border);
 }
 .is-docked .fade {
   transition: opacity 160ms ease 120ms;

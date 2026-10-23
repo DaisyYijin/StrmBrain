@@ -192,7 +192,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 附加 115 账号（account115.go，MULTI-ACCOUNT-PLAN.md 阶段 2）
 		protected.GET("/storage/115/accounts", h.ListAccounts115)
 		protected.POST("/storage/115/accounts", h.CreateAccount115)
-		protected.PUT("/storage/115/accounts/:id", h.UpdateAccount115)
 		protected.DELETE("/storage/115/accounts/:id", h.DeleteAccount115)
 		protected.POST("/storage/115/accounts/:id/check", h.CheckAccount115)
 
@@ -238,6 +237,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 增量事件流状态与探针（回答「为什么没同步」：门禁/通道/游标/上一轮结果）
 		protected.GET("/sync/incr-status", h.IncrStatus)
 		protected.POST("/sync/incr-probe", h.IncrProbe)
+		protected.GET("/sync/incr-events", h.IncrEvents)
+		protected.GET("/sync/incr-rounds", h.IncrRounds)
 		// 快速模式是否可用（规则在后端，前端不自行按通道推断）
 		protected.GET("/sync/capabilities", h.SyncCapabilities)
 		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
@@ -246,6 +247,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/sync/adopt/preview", h.AdoptPreview) // 接管已有 STRM：只读预演（adopt.go）
 		// 深度删除（本地已删、网盘还在）：上一条的镜像，删的是网盘源文件。
 		protected.GET("/sync/deep-delete/records", h.ListDeepDeleteRecords)
+		protected.GET("/emby/webhook-status", h.EmbyWebhookStatus)
 
 		// Cron 未来运行时间预览（校验表达式是否正确）
 		protected.POST("/sync/cron-preview", func(c *gin.Context) {
@@ -354,9 +356,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 媒体库页面（一个库一条，libapiv2.go）与分类方案（catschemeapi.go），V2 阶段 4
 		protected.GET("/media-libs", h.ListMediaLibs)
 		protected.POST("/media-libs", h.CreateMediaLib)
+		protected.POST("/media-libs/batch", h.CreateMediaLibsBatch)
 		protected.PUT("/media-libs/:id", h.UpdateMediaLib)
 		protected.DELETE("/media-libs/:id", h.DeleteMediaLib)
-		protected.POST("/media-libs/:id/move", h.MoveMediaLib)
 		protected.POST("/media-libs/notice/dismiss", h.DismissMediaLibNotice)
 		protected.GET("/category/schemes/:id", h.GetScheme)
 		protected.POST("/category/schemes", h.CreateScheme)
@@ -722,7 +724,6 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 	}
 	if findErr == nil {
 		updates := map[string]interface{}{
-			"cookie_path":     storage.CookiePath,
 			"device":          storage.Device,
 			"interval":        storage.Interval,
 			"openapi_enabled": storage.OpenapiEnabled,

@@ -19,15 +19,15 @@ var washTestRules = []washRule{{ResourcePix: "2160p", ResourceEffect: "DV"}, {Re
 // 哪些集要洗：达标的不洗、认不出画质的不洗、在路上的不洗、范围外的不洗
 func TestPlanSubWash(t *testing.T) {
 	prio := subPriority{Rules: washTestRules}
-	names := map[epKey]string{
-		{1, 1}: "剧.S01E01.2160p.WEB-DL.DV.mkv", // 达标
-		{1, 2}: "剧.S01E02.1080p.WEB-DL.mkv",    // 要洗
-		{1, 3}: "剧 - S01E03 - 第 3 集.mkv",       // 认不出画质
-		{1, 4}: "剧.S01E04.1080p.mkv",           // 在路上
-		{2, 1}: "剧.S02E01.1080p.mkv",           // 范围外
+	names := map[epKey]washFile{
+		{1, 1}: {Name: "剧.S01E01.2160p.WEB-DL.DV.mkv"}, // 达标
+		{1, 2}: {Name: "剧.S01E02.1080p.WEB-DL.mkv"},    // 要洗
+		{1, 3}: {Name: "剧 - S01E03 - 第 3 集.mkv"},       // 认不出画质
+		{1, 4}: {Name: "剧.S01E04.1080p.mkv"},           // 在路上
+		{2, 1}: {Name: "剧.S02E01.1080p.mkv"},           // 范围外
 	}
 	st := planSubWash(names, func(k epKey) bool { return k.S == 1 }, map[epKey]bool{{1, 4}: true}, prio)
-	if st.Top != 1 || st.Unknown != 1 || !reflect.DeepEqual(st.Want, map[epKey]string{{1, 2}: names[epKey{1, 2}]}) {
+	if st.Top != 1 || st.Unknown != 1 || !reflect.DeepEqual(st.Want, map[epKey]washFile{{1, 2}: names[epKey{1, 2}]}) {
 		t.Fatalf("%+v", st)
 	}
 }
@@ -35,7 +35,7 @@ func TestPlanSubWash(t *testing.T) {
 // 标题写明画质、对每一集都不比库里好的不去列；标题没写的不下结论
 func TestSubWashTitleHopeless(t *testing.T) {
 	prio := subPriority{Rules: washTestRules}
-	want := map[epKey]string{{1, 2}: "剧.S01E02.1080p.WEB-DL.mkv"}
+	want := map[epKey]washFile{{1, 2}: {Name: "剧.S01E02.1080p.WEB-DL.mkv"}}
 	if !subWashTitleHopeless("剧 S01 1080p WEBRip", want, prio) {
 		t.Fatal("1080p WEBRip 比 1080p WEB-DL 差，不该去列")
 	}
@@ -47,15 +47,45 @@ func TestSubWashTitleHopeless(t *testing.T) {
 // 洗版挑文件：只要比库里那一集好的
 func TestPickShareEpisodesBeats(t *testing.T) {
 	prio := subPriority{Rules: washTestRules}
-	cur := map[epKey]string{{1, 1}: "剧.S01E01.1080p.WEB-DL.mkv", {1, 2}: "剧.S01E02.2160p.WEB-DL.mkv"}
+	cur := map[epKey]washFile{{1, 1}: {Name: "剧.S01E01.1080p.WEB-DL.mkv"}, {1, 2}: {Name: "剧.S01E02.2160p.WEB-DL.mkv"}}
 	entries := []shareEntry{
 		fileE("e1", "剧.S01E01.2160p.WEB-DL.mkv", 10),
 		fileE("e2", "剧.S01E02.1080p.WEB-DL.mkv", 10), // 比库里差
 	}
 	p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: map[epKey]bool{{1, 1}: true, {1, 2}: true},
-		Compare: prio.compare, Beats: func(k epKey, n string) bool { return prio.compare(n, cur[k]) > 0 }})
+		Compare: prio.compareFiles, Beats: func(k epKey, f washFile) bool { return prio.compareFiles(f, cur[k]) > 0 }})
 	if got := pickIDs(p); !reflect.DeepEqual(got, []string{"e1"}) || !reflect.DeepEqual(p.Covered, epKeys("S01E01")) {
 		t.Fatalf("挑中 %v / %v", got, p.Covered)
+	}
+}
+
+// 规则 1 写了 size_prefer：命中第 1 条也不算洗完；标题同档的不下结论；分享里同档更小的才要
+func TestSubWashSizePrefer(t *testing.T) {
+	prio := subPriority{Rules: []washRule{{ResourcePix: "2160p", SizePrefer: "small"}, {ResourcePix: "1080p"}}}
+	big := washFile{Name: "剧.S01E01.2160p.WEB-DL.mkv", Size: 20 * gib}
+	st := planSubWash(map[epKey]washFile{{1, 1}: big}, func(epKey) bool { return true }, nil, prio)
+	if st.Top != 0 || len(st.Want) != 1 {
+		t.Fatalf("写了体积偏好的第 1 条不该算洗完：%+v", st)
+	}
+	if subWashTitleHopeless("剧 S01 2160p WEB-DL", st.Want, prio) {
+		t.Fatal("同档的标题看不出体积，要去列")
+	}
+	if !subWashTitleHopeless("剧 S01 1080p", st.Want, prio) {
+		t.Fatal("1080p 命中第 2 条，比不过，不用去列")
+	}
+	entries := []shareEntry{
+		fileE("same", "剧.S01E01.2160p.WEB-DL.mkv", 20*gib),  // 一样大
+		fileE("small", "剧.S01E01.2160p.BluRay.mkv", 8*gib), // 更小
+		fileE("hd", "剧.S01E01.1080p.mkv", 2*gib),           // 低一档，再小也不要
+	}
+	p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: map[epKey]bool{{1, 1}: true},
+		Compare: prio.compareFiles, Beats: func(k epKey, f washFile) bool { return prio.compareFiles(f, st.Want[k]) > 0 }})
+	if got := pickIDs(p); !reflect.DeepEqual(got, []string{"small"}) {
+		t.Fatalf("挑中 %v", got)
+	}
+	// 没写体积偏好时命中第 1 条就算洗完（原来的口径）
+	if !(subPriority{Rules: []washRule{{ResourcePix: "2160p"}}}).settled(big) {
+		t.Fatal("没写体积偏好时应算洗完")
 	}
 }
 

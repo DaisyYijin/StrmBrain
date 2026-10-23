@@ -368,6 +368,23 @@ func re0SaveDebug(page *rod.Page, what string) {
 		_ = os.WriteFile(base+".html", []byte(html), 0o644)
 	}
 	log.Printf("[RE0网页]   失败现场已存：%s.png / .html（%s）", base, re0URL(p))
+	// 截图要去容器里翻，日志里先给一段可见文字与弹窗情况：分得清是没登录、被弹窗挡着还是页面改版
+	if res, err := p.Eval(`() => {
+		const dlg = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')].filter(d => d.getClientRects().length)
+			.map(d => (d.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 80));
+		return {text: (document.body?.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 300), dialogs: dlg};
+	}`); err == nil {
+		var v struct {
+			Text    string   `json:"text"`
+			Dialogs []string `json:"dialogs"`
+		}
+		if res.Value.Unmarshal(&v) == nil {
+			if len(v.Dialogs) > 0 {
+				log.Printf("[RE0网页]   当时开着的弹窗：%s", strings.Join(v.Dialogs, " | "))
+			}
+			log.Printf("[RE0网页]   当时页面文字：%s", v.Text)
+		}
+	}
 	if ents, err := os.ReadDir(dir); err == nil && len(ents) > 20 {
 		names := make([]string, 0, len(ents))
 		for _, e := range ents {
@@ -641,9 +658,31 @@ func re0WaitVisible(p *rod.Page, sel string, d time.Duration) (*rod.Element, err
 	}
 }
 
-// re0Click 真实点击（CDP 鼠标事件，isTrusted=true）
+// re0CoverJS 元素中心点上最上层的是谁（被挡住时说清被什么挡着；没被挡回空串）
+const re0CoverJS = `function() {
+	const r = this.getBoundingClientRect();
+	const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+	if (!t || t === this || this.contains(t)) return '';
+	const d = t.closest('[role="dialog"], [role="alertdialog"]');
+	if (d) return '弹窗「' + (d.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60) + '」';
+	return t.tagName.toLowerCase() + (t.className && typeof t.className === 'string' ? '.' + t.className.trim().split(/\s+/).slice(0, 2).join('.') : '');
+}`
+
+// re0Click 真实点击（CDP 鼠标事件，isTrusted=true）。
+// 元素多半出自 re0FindVisible，带着 NotFoundSleeper：rod 点击前「等元素不被挡住」的重试沿用元素的 sleeper，
+// 被挡一次就直接报 cannot find element（2026-10-22 现场：首页公告晚一步弹出、盖住了用户菜单，签到时好时坏）。
+// 换回默认 sleeper，被挡住时等到超时；失败了说清被什么挡着
 func re0Click(el *rod.Element) error {
-	return el.Timeout(10*time.Second).Click(proto.InputMouseButtonLeft, 1)
+	err := el.Sleeper(rod.DefaultSleeper).Timeout(10*time.Second).Click(proto.InputMouseButtonLeft, 1)
+	if err == nil {
+		return nil
+	}
+	if res, e := el.Timeout(3 * time.Second).Eval(re0CoverJS); e == nil {
+		if by := res.Value.Str(); by != "" {
+			return fmt.Errorf("%v（被 %s 挡住）", err, by)
+		}
+	}
+	return err
 }
 
 // ==================== 登录 ====================
@@ -773,6 +812,23 @@ const (
 	re0CheckinBtnSel = `button:has(path[d^="M11.5 21h-5.5"])`
 )
 
+// re0CheckinBtnJS 先按图标认，认不出再按文字认右上角抽屉里的「每日签到」（图标换了也能点；「赌狗签到」不匹配）
+const re0CheckinBtnJS = `(sel) => {
+	const vis = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+	const byIcon = [...document.querySelectorAll(sel)].find(vis);
+	if (byIcon) return byIcon;
+	return [...document.querySelectorAll('button, [role="menuitem"], a')]
+		.find(e => vis(e) && /^(每日签到|Daily check-?in)/i.test((e.innerText || '').trim().replace(/\s+/g, ' '))) || null;
+}`
+
+func re0FindCheckinBtn(p *rod.Page) *rod.Element {
+	el, err := p.Sleeper(rod.NotFoundSleeper).ElementByJS(rod.Eval(re0CheckinBtnJS, re0CheckinBtnSel))
+	if err != nil {
+		return nil
+	}
+	return el
+}
+
 // re0ToastObserverJS 装一个观察者，收集之后新出现 / 变化的提示（toast / alert）
 const re0ToastObserverJS = `() => {
 	window.__s115Obs?.disconnect();
@@ -861,24 +917,51 @@ func re0WebCheckin() (ok bool, msg string, err error) {
 		if err := re0DismissDialogs(p); err != nil {
 			return err
 		}
-		re0Step("打开用户菜单找签到按钮")
-		menu, err := re0WaitVisible(p, re0UserMenuSel, 15*time.Second)
-		if err != nil {
-			return fmt.Errorf("没找到用户菜单，页面可能改版了")
-		}
-		if err := re0Click(menu); err != nil {
-			return fmt.Errorf("点开用户菜单失败: %v", err)
-		}
-		btn, err := re0WaitVisible(p, re0CheckinBtnSel, 10*time.Second)
-		if err != nil {
-			return fmt.Errorf("用户菜单里没找到签到按钮，页面可能改版了")
-		}
-		if _, err := p.Eval(re0ToastObserverJS); err != nil {
-			return fmt.Errorf("装提示观察器失败: %v", err)
-		}
 		defer re0StopToasts(p)
-		if err := re0Click(btn); err != nil {
-			return fmt.Errorf("点签到按钮失败: %v", err)
+		// 公告可能在上面关完之后才弹出来、盖住用户菜单或抽屉：点不了就再关一遍弹窗重来，最多 3 次
+		var lastErr error
+		clicked := false
+		for try := 1; try <= 3 && !clicked; try++ {
+			if try > 1 {
+				log.Printf("[RE0网页]   第 %d 次尝试签到（上次：%v）", try, lastErr)
+				re0Step("重新关闭首页弹窗")
+				if err := re0DismissDialogs(p); err != nil {
+					return err
+				}
+			}
+			re0Step("打开用户菜单找签到按钮")
+			btn := re0FindCheckinBtn(p) // 抽屉可能还开着
+			if btn == nil {
+				menu, err := re0WaitVisible(p, re0UserMenuSel, 15*time.Second)
+				if err != nil {
+					return fmt.Errorf("没找到用户菜单，页面可能改版了（%s）", re0URL(p))
+				}
+				if err := re0Click(menu); err != nil {
+					lastErr = fmt.Errorf("点开用户菜单失败: %v", err)
+					continue
+				}
+				deadline := time.Now().Add(10 * time.Second)
+				for btn == nil && time.Now().Before(deadline) {
+					if btn = re0FindCheckinBtn(p); btn == nil {
+						time.Sleep(250 * time.Millisecond)
+					}
+				}
+				if btn == nil {
+					lastErr = fmt.Errorf("用户菜单里没找到「每日签到」，页面可能改版了")
+					continue
+				}
+			}
+			if _, err := p.Eval(re0ToastObserverJS); err != nil {
+				return fmt.Errorf("装提示观察器失败: %v", err)
+			}
+			if err := re0Click(btn); err != nil {
+				lastErr = fmt.Errorf("点签到按钮失败: %v", err)
+				continue
+			}
+			clicked = true
+		}
+		if !clicked {
+			return lastErr
 		}
 		log.Printf("[RE0网页]   已点每日签到，等结果提示")
 		re0Step("已点每日签到，等结果")
@@ -911,11 +994,21 @@ func re0DismissDialogs(p *rod.Page) error {
 		return fmt.Errorf("首页没加载出用户菜单（%s）", re0URL(p))
 	}
 	deadline := time.Now().Add(45 * time.Second)
+	// 公告是首页数据加载完才弹的，可能比用户菜单晚：没有弹窗也要连续 2 秒都没有才算关干净
+	var clearSince time.Time
 	for {
 		res, err := p.Eval(`() => [...document.querySelectorAll('[role="dialog"]')].filter(d => d.getClientRects().length).length`)
 		if err == nil && res.Value.Int() == 0 {
-			return nil
+			if clearSince.IsZero() {
+				clearSince = time.Now()
+			}
+			if time.Since(clearSince) >= 2*time.Second {
+				return nil
+			}
+			time.Sleep(250 * time.Millisecond)
+			continue
 		}
+		clearSince = time.Time{}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("首页弹窗关不掉，请先在网页上手动处理一次公告或首次登录设置")
 		}

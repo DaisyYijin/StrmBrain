@@ -536,8 +536,149 @@ function mockSaveLibraries(init?: RequestInit) {
   return { message: '已保存', jobs: [], subs_moved: 0, data: mockLibrariesView() }
 }
 
+// ---- 115 账号（主号 id 恒为 0）与媒体库页面（V2） ----
+
+type MockAcct = { id: number; name: string; user_name: string; main: boolean; status: string; device: string; logged_in: boolean }
+const mockAccts: MockAcct[] = [
+  { id: 0, name: '影迷小王', user_name: '影迷小王', main: true, status: 'online', device: 'web', logged_in: true },
+  { id: 1, name: '小王的家', user_name: '小王的家', main: false, status: 'online', device: 'web', logged_in: true },
+  { id: 2, name: 'backup_115', user_name: 'backup_115', main: false, status: 'invalid', device: 'web', logged_in: true },
+  { id: 3, name: '未登录账号', user_name: '', main: false, status: '', device: 'web', logged_in: false },
+]
+let mockAcctSeq = 4
+const acctName = (id: number) => mockAccts.find((a) => a.id === id)?.name ?? `账号 ${id}`
+
+/** 4K 库挂在附加账号「小王的家」上，账号页签能看到「挂了几个库」 */
+const MOCK_LIB_ACCT: Record<string, number> = { '300': 1 }
+const mockMediaLibsView = () => ({
+  media_root: '/media',
+  libs: mockLibs.map((l, i) => {
+    const account = MOCK_LIB_ACCT[l.cid] ?? 0
+    const self = mockOpts[l.cid]?.mode === 'self'
+    return {
+      id: i + 1, name: l.name, account, account_name: acctName(account), cid: l.cid, path: l.path,
+      local: l.name, local_abs: `/media/${l.name}`,
+      staging_cid: self ? '' : `s${l.cid}`, staging_path: self ? '' : `/转存/${l.name}`,
+      scheme_id: self ? 0 : 1, scheme_name: self ? '' : '默认分类', depth: mockOpts[l.cid]?.depth ?? 1,
+      scrape: mockScrapeOf(l.cid), local_locked: true, organize: !self,
+      last_sync: { at: Math.floor(Date.now() / 1000) - 3600 * (i + 1), ok: true, mode: 'fast', seconds: 42, videos: 800, created: 3, failed: 0, assets: 12, orphans: i === 1 ? 4 : 0, complete: true },
+      emby: { covered: true, partial: false, unmapped: false },
+    }
+  }),
+  schemes: [{ id: 1, name: '默认分类', used_by: mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self').map((l) => l.name), movie: 6, tv: 5 }],
+  accounts: mockAccts.filter((a) => a.logged_in).map((a) => ({ id: a.id, name: a.name, main: a.main })),
+  notice: [],
+  emby_configured: true,
+})
+
+/**
+ * 背景剧照（AppBackdrop.vue / 登录页）：假数据拦不住 <img>，所以图直接给 SVG data URI。
+ * 画面要有清楚的形状和对比，透过毛玻璃才看得出是被模糊过的
+ */
+function mockWall(hue: number, hue2: number): string {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'>
+<defs><linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='hsl(${hue} 70% 55%)'/><stop offset='1' stop-color='hsl(${hue2} 75% 22%)'/></linearGradient></defs>
+<rect width='1600' height='900' fill='url(#s)'/>
+<circle cx='1180' cy='260' r='150' fill='hsl(${hue + 30} 95% 70%)'/>
+<g fill='hsl(${hue2} 40% 12%)'>${Array.from({ length: 22 }, (_, i) => `<rect x='${i * 76}' y='${520 - ((i * 53) % 260)}' width='60' height='${380 + ((i * 53) % 260)}'/>`).join('')}</g>
+<g fill='hsl(${hue + 40} 100% 75%)'>${Array.from({ length: 60 }, (_, i) => `<rect x='${(i * 97) % 1600}' y='${560 + ((i * 41) % 300)}' width='10' height='14'/>`).join('')}</g>
+</svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+const MOCK_WALLS = [
+  [220, 260, '沙丘：第二部'],
+  [12, 330, '奥本海默'],
+  [170, 210, '三体'],
+].map(([h1, h2, title]) => {
+  const src = mockWall(h1 as number, h2 as number)
+  return { path: src, title: title as string, year: '2024', thumb: src }
+})
+
+/** 115 目录树（cid → 子目录）：目录选择器与批量添加用。媒体库 cid 与 mockLibs 对得上 */
+const MOCK_DIRS: Record<string, { cid: string; name: string }[]> = {
+  '0': [{ cid: '10', name: '影视' }, { cid: '20', name: '最近接收' }, { cid: '2894561234', name: '媒体库' }],
+  '10': [
+    { cid: '200', name: '动漫' }, { cid: '300', name: '4K' }, { cid: '11', name: '电影' },
+    { cid: '12', name: '剧集' }, { cid: '13', name: '纪录片' }, { cid: '14', name: '综艺' },
+  ],
+  '20': [{ cid: '21', name: '电影' }],
+}
+let mockDirSeq = 1000
+function mockResolve(path: string) {
+  let cid = '0'
+  for (const seg of path.split('/').filter(Boolean)) {
+    const hit = (MOCK_DIRS[cid] ?? []).find((d) => d.name === seg)
+    if (!hit) return null
+    cid = hit.cid
+  }
+  return cid
+}
+function mockEnsure(path: string) {
+  let cid = '0'
+  for (const seg of path.split('/').filter(Boolean)) {
+    const kids = (MOCK_DIRS[cid] ??= [])
+    let hit = kids.find((d) => d.name === seg)
+    if (!hit) kids.push((hit = { cid: String(mockDirSeq++), name: seg }))
+    cid = hit.cid
+  }
+  return cid
+}
+
+/** 带 id 的路径：精确表查不到时按顺序匹配 */
+const PATTERN_ROUTES: [RegExp, (m: RegExpMatchArray, q: URLSearchParams, init?: RequestInit) => unknown][] = [
+  [/^\/storage\/115\/accounts\/(\d+)\/check$/, (m) => {
+    const a = mockAccts.find((x) => x.id === Number(m[1]))
+    if (!a) return { __status: 404, error: '账号不存在' }
+    if (!a.logged_in) return { valid: false, message: '还没登录' }
+    if (a.status === 'invalid') return { valid: false, message: 'Cookie 已失效，请重新扫码' }
+    return { valid: true, channel: 'Cookie', username: a.user_name, capacity: '2.10 TB / 6.00 TB' }
+  }],
+  [/^\/storage\/115\/accounts\/(\d+)$/, (m, _q, init) => {
+    const i = mockAccts.findIndex((x) => x.id === Number(m[1]))
+    if (i < 0) return { __status: 404, error: '账号不存在' }
+    if (init?.method === 'DELETE') mockAccts.splice(i, 1)
+    return { message: 'ok' }
+  }],
+]
+
 const ROUTES: Record<string, Route> = {
   ...(subRoutes as Record<string, Route>),
+  '/storage/115/accounts': (_q: URLSearchParams, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      // 同后端：已有没登录过的就复用
+      const idle = mockAccts.find((a) => !a.main && !a.logged_in)
+      if (idle) return { data: idle }
+      const a = { id: mockAcctSeq++, name: '未登录账号', user_name: '', main: false, status: '', device: 'web', logged_in: false }
+      mockAccts.push(a)
+      return { data: a }
+    }
+    return { data: mockAccts }
+  },
+  '/media-libs': mockMediaLibsView,
+  '/auth/wallpapers': { items: MOCK_WALLS },
+  '/media-libs/batch': (_q: URLSearchParams, init?: RequestInit) => {
+    const { libs } = JSON.parse(String(init?.body ?? '{}')) as {
+      libs: { name: string; account: number; cid: string; path: string; staging_path: string; scheme_id: number; depth: number; scrape: 'auto' | 'manual' | 'off' }[]
+    }
+    const dup = libs.find((l) => mockLibs.some((m) => m.name === l.name || m.cid === l.cid))
+    if (dup) return { __status: 400, error: `「${dup.name}」和已有的库重名或选了同一个 115 目录` }
+    for (const l of libs) {
+      if (l.staging_path) mockEnsure(l.staging_path)
+      mockLibs.push({ cid: l.cid, name: l.name, path: l.path || `/${l.name}` })
+      if (l.account) MOCK_LIB_ACCT[l.cid] = l.account
+      mockOpts[l.cid] = l.staging_path || l.scheme_id ? { mode: 'organize', scrape: l.scrape } : { mode: 'self', depth: l.depth, scrape: l.scrape }
+    }
+    return mockMediaLibsView()
+  },
+  '/storage/115/dirs': (q: URLSearchParams) => {
+    const data = MOCK_DIRS[q.get('cid') || '0'] ?? []
+    return { data, count: data.length, channel: 'Cookie' }
+  },
+  '/storage/115/resolve': (q: URLSearchParams) => {
+    const p = q.get('path') ?? ''
+    const cid = mockResolve(p)
+    return cid ? { cid, path: p } : { __status: 404, error: `路径不存在：${p}` }
+  },
   '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
     init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
   '/libraries/preview': (q: URLSearchParams) =>
@@ -648,12 +789,82 @@ const ROUTES: Record<string, Route> = {
     task_lock: { busy: true, holder: 'full', describe: '全量同步（已运行 84 秒）', running_sec: 84, waiting: ['自动整理'], waited_sec: 12 },
     stall: { rounds: 0, reason: '' },
   },
-  '/sync/deep-delete/records': {
-    data: [
-      { id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, created_at: '2026-09-23 21:04:12', message: '' },
-      { id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, created_at: '2026-09-22 18:40:05', message: '剧/季目录缺少台账布局证据，已拦截' },
+  '/sync/deep-delete/records': (q: URLSearchParams) => {
+    const all = [
+      {
+        id: 4, status: 'done', title: '某综艺 (2024)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 3, pan_dirs: 0,
+        created_at: '2026-09-24 09:12:40', message: '', media_type: 'tv', episodes: 'S2024E41',
+        rel_paths: ['剧集/综艺/某综艺 (2024)/Season 2024/某综艺 - S2024E41.strm', '剧集/综艺/某综艺 (2024)/Season 2024/某综艺 - S2024E41.nfo'],
+      },
+      {
+        id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, pan_dirs: 1,
+        created_at: '2026-09-23 21:04:12', message: '', media_type: 'movie', episodes: '',
+        rel_paths: ['电影/科幻电影/星际穿越 (2014)/星际穿越 (2014) - 2160p.strm'],
+      },
+      {
+        id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, pan_dirs: 0,
+        created_at: '2026-09-22 18:40:05', message: '剧/季目录缺少台账布局证据，已拦截', media_type: 'tv', episodes: 'S01', rel_paths: [],
+      },
+      {
+        id: 1, status: 'failed', title: '三体 (2023)', reason: 'manual_record', video_cnt: 3, asset_cnt: 9, pan_dirs: 0,
+        created_at: '2026-09-20 23:02:00', message: '115 删除接口返回「操作太频繁」，已删 1 个，剩 2 个没删', media_type: 'tv',
+        episodes: 'S01E01–E03', rel_paths: ['剧集/国产剧集/三体 (2023)/Season 01/三体 - S01E01.strm'],
+      },
+    ]
+    const st = q.get('status')
+    const data = all.filter((r) => !st || r.status === st)
+    return {
+      data, total: data.length, page: 1, size: 20,
+      stats30: { done: 2, rejected: 1, failed: 1, videos: 2, pan_dirs: 1 },
+      counts: { all: 4, done: 2, rejected: 1, failed: 1 },
+    }
+  },
+  '/sync/incr-events': (q: URLSearchParams) => {
+    const all = [
+      { id: 9, at: '2026-09-24T09:41:20+08:00', type: 'upload_file', is_dir: false, name: '转生成为史莱姆 S03E14.mkv', path: '/影视/动漫/关于我转生变成史莱姆这档事 (2018)/Season 03', size: 1_200_000_000, account: 0, status: 'applied', note: '' },
+      { id: 8, at: '2026-09-24T09:38:02+08:00', type: 'receive_files', is_dir: false, name: '小巷人家 (2024) S01E25.mp4', path: '/StrmStation/转存', size: 900_000_000, account: 0, status: 'applied', note: 'outside' },
+      { id: 7, at: '2026-09-24T09:37:40+08:00', type: 'move_file', is_dir: false, name: 'Dune.Part.Two.2024.2160p.WEB-DL.mkv', path: '/影视/电影/欧美电影/沙丘2 (2024)', size: 18_000_000_000, account: 0, status: 'applied', note: 'self' },
+      { id: 6, at: '2026-09-24T09:20:11+08:00', type: 'delete_file', is_dir: false, name: '某综艺 2024-09-18 加更版.mp4', path: '/影视/综艺/某综艺 (2024)/Season 2024', size: 0, account: 0, status: 'applied', note: '' },
+      { id: 5, at: '2026-09-24T08:58:30+08:00', type: 'file_rename', is_dir: false, name: '漫长的季节 S01E01.mkv', path: '/影视/剧集/国产剧集/漫长的季节 (2023)/Season 01', size: 0, account: 0, status: 'applied', note: '' },
+      { id: 4, at: '2026-09-24T08:40:00+08:00', type: 'upload_file', is_dir: false, name: 'Severance.S02E10.1080p.mkv', path: '', size: 2_100_000_000, account: 1, status: 'pending', note: '' },
+      { id: 3, at: '2026-09-24T08:39:00+08:00', type: 'new_folder', is_dir: true, name: 'Season 02', path: '/影视/剧集/欧美剧集/Severance (2022)', size: 0, account: 0, status: 'applied', note: 'self' },
+    ]
+    const GROUP: Record<string, string[]> = {
+      add: ['upload_file', 'upload_image_file', 'receive_files', 'copy_file', 'new_folder', 'copy_folder'],
+      del: ['delete_file'],
+      move: ['move_file', 'move_image_file', 'file_rename', 'folder_rename'],
+    }
+    const hide = q.get('hide_self') === '1'
+    const base = all.filter((e) => !(hide && e.note === 'self'))
+    const g = q.get('group') ?? 'all'
+    const data = base.filter((e) => g === 'all' || GROUP[g]?.includes(e.type))
+    const count = (k: string) => base.filter((e) => GROUP[k].includes(e.type)).length
+    return {
+      data, total: data.length, hidden: hide ? all.length - base.length : 0,
+      counts: { all: base.length, add: count('add'), del: count('del'), move: count('move') },
+    }
+  },
+  // 收到过别的事件、还没收到过删除事件：深度删除页提示检查 Emby 的 Webhook 有没有勾删除事件
+  '/emby/webhook-status': {
+    token_set: true, any: '2026-09-24T09:30:00+08:00', delete: '', test: '2026-09-20T12:00:00+08:00', reject_at: '', reject_why: '',
+  },
+  '/sync/incr-rounds': {
+    total: 2712, idle: 2703, since: '2026-09-23T10:02:00+08:00',
+    rounds: [
+      {
+        at: '2026-09-24T09:41:30+08:00',
+        summary: { round: 1873, events_pending: 1, strm_created: 1, deleted: 0, moved: 0, list_calls: 0, elapsed: '0.4s', consumed: true },
+      },
+      {
+        at: '2026-09-24T09:38:10+08:00',
+        summary: { round: 1866, events_pending: 4, strm_created: 1, deleted: 0, moved: 1, list_calls: 2, elapsed: '3.1s', consumed: true },
+      },
+      {
+        at: '2026-09-24T08:40:30+08:00',
+        summary: { round: 1748, events_pending: 2, strm_created: 0, deleted: 0, moved: 0, list_calls: 3, elapsed: '4.0s', consumed: false, not_consumed: '1 个网盘目录暂时读不到' },
+      },
+      { at: '2026-09-24T07:00:00+08:00', error: '拉取生活事件失败：115 返回 405' },
     ],
-    total: 2, page: 1, size: 20,
   },
 
   '/organize/records': { data: records, total: 86, page: 1, size: 20 },
@@ -809,11 +1020,13 @@ export function installMockApi() {
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const [path, query = ''] = url.replace(/^.*\/api/, '').split('?')
-    if (path in ROUTES) {
+    const pattern = path in ROUTES ? undefined : PATTERN_ROUTES.find(([re]) => re.test(path))
+    if (path in ROUTES || pattern) {
       // 留一点延迟，好让骨架屏/加载态在演示里真的出现
       await new Promise((r) => setTimeout(r, 180))
-      const route = ROUTES[path]
-      const body = typeof route === 'function' ? route(new URLSearchParams(query), init) : route
+      const q = new URLSearchParams(query)
+      const route = pattern ? (qq: URLSearchParams, i?: RequestInit) => pattern[1](path.match(pattern[0])!, qq, i) : ROUTES[path]
+      const body = typeof route === 'function' ? route(q, init) : route
       // 路由可以带 __status 模拟非 200（409 要用户确认之类）
       const status = (body as { __status?: number } | null)?.__status ?? 200
       return new Response(JSON.stringify(body), {

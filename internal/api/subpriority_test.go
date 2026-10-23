@@ -82,7 +82,7 @@ func TestPickShareEpisodesCompare(t *testing.T) {
 		fileE("hi", "剧.S01E01.2160p.WEB-DL.mkv", 500),
 	}
 	prio := subPriority{Rules: []washRule{{ResourceType: "WEB-DL"}}}
-	p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: map[epKey]bool{{1, 1}: true}, Compare: prio.compare})
+	p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: map[epKey]bool{{1, 1}: true}, Compare: prio.compareFiles})
 	if got := pickIDs(p); !reflect.DeepEqual(got, []string{"hi"}) {
 		t.Fatalf("挑中 %v", got)
 	}

@@ -193,6 +193,99 @@ html.dark .card--default {
   color: var(--foreground);
 }
 
+/* 毛玻璃（2026-10-23）：只给「压在别的内容上」的浮层用 —— 顶栏、手机底栏、悬停浮出的侧栏、
+   菜单 / 下拉 / 弹窗 / 抽屉 / 提示条。列表、卡片、表单背后是纯色，模糊了看不出，别往上加。
+   着色层不能再低：底色太透时背后的海报会和字打架。
+   液态玻璃（SVG 位移滤镜折射）试过不用：Safari / Firefox 渲染不出折射，可读性也差。
+   这几个值在 :root 上用 var(--overlay) 等算好，html.dark 改了底色会跟着变；
+   .on-dark 局部改 --foreground 不会带着 --glass-border 变，压在海报上的区域别用它 */
+:root {
+  --glass-blur: blur(20px) saturate(170%);
+  /* 浮层：菜单、弹窗、提示条 */
+  --glass-bg: color-mix(in oklab, var(--overlay) 76%, transparent);
+  /* 贴边的栏：顶栏、底栏、浮出的侧栏 */
+  --glass-bg-bar: color-mix(in oklab, var(--background) 74%, transparent);
+  --glass-border: color-mix(in oklab, var(--foreground) 9%, transparent);
+  /* 上沿一道高光，玻璃的厚度感全靠它 */
+  --glass-hi: inset 0 1px 0 0 color-mix(in oklab, var(--snow) 55%, transparent);
+}
+html.dark {
+  --glass-hi: inset 0 1px 0 0 color-mix(in oklab, var(--snow) 7%, transparent);
+}
+/* 系统要求减少透明度、或浏览器不支持 backdrop-filter：退回实色，否则字直接压在内容上 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-blur: none;
+    --glass-bg: var(--overlay);
+    --glass-bg-bar: var(--background);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-bg: var(--overlay);
+    --glass-bg-bar: var(--background);
+  }
+}
+
+/* 背景剧照（2026-10-23，layouts/AppBackdrop.vue 有图铺着时挂 html.has-wall）：
+   页面底透明，卡片 / 侧栏 / 顶栏半透明 + 背景模糊，透出背后的剧照 —— 毛玻璃要背后有东西才看得见。
+   卡片里再套的一层（--surface-secondary / tertiary：库卡片、输入框底）改成前景色的淡淡一层，叠在玻璃上不再是实色补丁。
+   .has-wall 写两遍是为了压过 html[data-palette='fresh']:not(.dark) 的同名变量（同优先级，靠后的赢）。
+   性能：backdrop-filter 只给 .card（全站十几处）和几条栏，海报卡片不加 */
+/* 透明度与模糊按「字看得清」定（2026-10-23 维护者反馈第一版累眼睛）：卡片 / 栏七八成不透明，
+   模糊加重、饱和度压低，背后只剩色块和明暗，不留清楚的形状 */
+html.has-wall.has-wall {
+  --wall-blur: blur(36px) saturate(125%);
+  --wall-card: color-mix(in oklab, var(--surface) 80%, transparent);
+  --surface-secondary: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --surface-tertiary: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --glass-bg-bar: color-mix(in oklab, var(--background) 72%, transparent);
+  --glass-blur: var(--wall-blur);
+}
+html.has-wall.has-wall:not(.dark) {
+  --wall-card: color-mix(in oklab, var(--surface) 84%, transparent);
+  --surface-secondary: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --surface-tertiary: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --glass-bg-bar: color-mix(in oklab, var(--background) 80%, transparent);
+}
+/* body 的底会画在负 z-index 的剧照层上面（html 自己也有底色时 body 的底不再传给画布），得透明；底色留给 html */
+html.has-wall body {
+  background: transparent;
+}
+html.has-wall .card.card--default {
+  background-color: var(--wall-card);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-hi), inset 0 0 0 1px var(--glass-border), var(--surface-shadow);
+}
+
+/* 不在卡片里、自己有底色的几样（页签条、分段选择、提示条）：底色本来就半透明或者被上面改成了淡淡一层，
+   不加模糊的话背后的画面清清楚楚压在字底下 */
+html.has-wall .tabs__list-container,
+html.has-wall .alert {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+html.has-wall .tabs__list-container {
+  background-color: color-mix(in oklab, var(--default) 88%, transparent);
+}
+html.has-wall .alert.alert--default {
+  background: var(--wall-card);
+}
+/* 有颜色的提示条底色是半透明的淡色（--danger-soft 等）：先垫一层卡片底，再把颜色叠上去 */
+html.has-wall .alert.alert--accent {
+  background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--wall-card);
+}
+html.has-wall .alert.alert--success {
+  background: linear-gradient(var(--success-soft), var(--success-soft)), var(--wall-card);
+}
+html.has-wall .alert.alert--warning {
+  background: linear-gradient(var(--warning-soft), var(--warning-soft)), var(--wall-card);
+}
+html.has-wall .alert.alert--danger {
+  background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--wall-card);
+}
+
 /* HeroUI 暗色主题里输入框底色与卡片同色（它的表单默认摆在页面底色上），
    而我们的表单几乎全在卡片里——不改的话暗色下输入框整个隐形。抬一档到 surface-secondary */
 html.dark {

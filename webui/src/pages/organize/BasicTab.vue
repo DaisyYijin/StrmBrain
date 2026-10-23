@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ChevronRight, Info, Play } from '@lucide/vue'
+import { ChevronRight, FolderPlus, Info, Play } from '@lucide/vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
@@ -22,7 +22,7 @@ import { confirmUnsaved } from '@/composables/confirmUnsaved'
 import { ORG_BASIC_DEFAULTS } from './orgBasic'
 import PipelineFlow from './PipelineFlow.vue'
 
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
 const queue = useQueueStore()
 const router = useRouter()
 const tmdbReady = ref<boolean | null>(null)
@@ -73,6 +73,34 @@ const cids = ref<Record<DirKey, { cid: string; path: string }>>({
   redundant: { cid: '', path: '' },
 })
 const inputs = ref<Record<string, InstanceType<typeof Cid115Input> | null>>({})
+
+/**
+ * 已存在 / 冗余只在这一页显示和改（媒体库页签原来那条共用目录已去掉）。
+ * 一键创建走 InitWorkspaceDirs：只补没配的，在网盘根建 /StrmStation/{已存在,冗余}，已配的不动
+ */
+const missingDirs = computed(() => DIRS.filter(({ key }) => !(model.value[key] || '').trim() || model.value[key] === '0'))
+const creating = ref(false)
+async function createDirs() {
+  const names = missingDirs.value.map((d) => d.label.replace('文件夹', ''))
+  const ok = await dialog.confirm({
+    title: '一键创建工作目录',
+    content: `将在 115 网盘根目录下创建 /StrmStation/{${names.join('、')}} 并写入配置。已配置的目录保持不动，同名目录已存在则直接复用。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '创建', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  creating.value = true
+  try {
+    message.success((await organizeApi.initWorkspace()).message)
+    await load()
+  } catch (e) {
+    toastError(e, '创建失败')
+  } finally {
+    creating.value = false
+  }
+}
 
 watch(
   () => model.value,
@@ -376,6 +404,12 @@ const TRIGGERS: { name: string; text: string }[] = [
             placeholder="115 目录 cid"
           />
         </FieldRow>
+        <div v-if="missingDirs.length" class="dir-create">
+          <HButton variant="secondary" size="sm" :loading="creating" @click="createDirs">
+            <template #icon><FolderPlus :size="15" /></template>
+            一键创建缺少的
+          </HButton>
+        </div>
         <p class="dir-note">
           <Info :size="14" />
           <span>
@@ -413,6 +447,9 @@ const TRIGGERS: { name: string; text: string }[] = [
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.dir-create {
+  margin: 4px 0 8px;
 }
 .alert-action {
   margin-top: 12px;

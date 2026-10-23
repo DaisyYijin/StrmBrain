@@ -416,8 +416,8 @@ func (h *Handler) librariesNow() librariesView {
 		}
 		if a := v.Libs[i].Account; a != acctMain && h.DB != nil {
 			var s model.Storage
-			if h.DB.Select("name").First(&s, a).Error == nil {
-				v.Libs[i].AccountName = s.Name
+			if h.DB.Select("name", "user_name").First(&s, a).Error == nil {
+				v.Libs[i].AccountName = acctLabel(s)
 			} else {
 				v.Libs[i].AccountName = fmt.Sprintf("已删除的账号 %d", a)
 			}

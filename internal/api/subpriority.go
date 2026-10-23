@@ -123,10 +123,35 @@ func (p subPriority) top(name string) bool {
 	return len(p.Rules) > 0 && washTier(name, p.Rules) == 0
 }
 
-// compare >0 a 更好，<0 b 更好，0 分不出
+// compare >0 a 更好，<0 b 更好，0 分不出。只有名字（资源标题），体积两项不看
 func (p subPriority) compare(a, b string) int {
 	c, _ := washCompare(a, b, p.Rules)
 	return c
+}
+
+// compareFiles 带体积的比较（分享里的文件、库里的台账行），和整理洗版的 washCompareFiles 同一套：
+// 规则里写了 size_prefer / resource_size 的，订阅和整理判得一样，订阅换进来的才不会被整理移进「已存在」
+func (p subPriority) compareFiles(a, b washFile) int {
+	c, _ := washCompareFiles(a, b, p.Rules)
+	return c
+}
+
+// settled 库里这份洗完了没有：命中第 1 条规则，且这条没写体积偏好。
+// 写了 size_prefer 的话命中第 1 条也可能还有更小（大）的，只有看到资源才知道，所以照样要洗（洗版期限内）
+func (p subPriority) settled(f washFile) bool {
+	if len(p.Rules) == 0 || washTierOf(f, p.Rules) != 0 {
+		return false
+	}
+	return !p.sizePreferAt(0)
+}
+
+// sizePreferAt 第 i 条规则写没写体积偏好（small / large）
+func (p subPriority) sizePreferAt(i int) bool {
+	if i < 0 || i >= len(p.Rules) {
+		return false
+	}
+	sp := strings.ToLower(strings.TrimSpace(p.Rules[i].SizePrefer))
+	return sp == "small" || sp == "large"
 }
 
 // limited 有没有「只要命中前 N 条」这道过滤

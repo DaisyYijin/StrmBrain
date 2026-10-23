@@ -293,7 +293,10 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	seenName := map[string]string{}
 	// 每个库这次的结果，结束时（含提前返回）写给媒体库卡片看（libsyncstat.go）
 	stats := map[string]libSyncStat{}
-	defer func() { h.saveLibSyncStats(stats) }()
+	defer func() {
+		h.saveLibSyncStats(stats)
+		h.saveFullLastScan(p, stats)
+	}()
 	for i, t := range targets {
 		if len(targets) > 1 {
 			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(targets)))

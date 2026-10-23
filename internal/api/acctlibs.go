@@ -193,7 +193,7 @@ func acctCookieByCfg(db *gorm.DB, cfg *config.Config, acct uint) (string, error)
 	if s.Cookie != "" {
 		return s.Cookie, nil
 	}
-	return "", fmt.Errorf("附加账号「%s」没有登录", s.Name)
+	return "", fmt.Errorf("附加账号「%s」没有登录", acctLabel(s))
 }
 
 // firstRelSeg 本地相对路径的第一段（库名）
