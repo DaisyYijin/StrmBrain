@@ -568,10 +568,38 @@ const mockMediaLibsView = () => ({
   schemes: [{ id: 1, name: '默认分类', used_by: mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self').map((l) => l.name), movie: 6, tv: 5 }],
   accounts: mockAccts.filter((a) => a.logged_in).map((a) => ({ id: a.id, name: a.name, main: a.main })),
   notice: [],
-  existing: '/StrmStation/已存在',
-  redundant: '/StrmStation/冗余',
   emby_configured: true,
 })
+
+/** 115 目录树（cid → 子目录）：目录选择器与批量添加用。媒体库 cid 与 mockLibs 对得上 */
+const MOCK_DIRS: Record<string, { cid: string; name: string }[]> = {
+  '0': [{ cid: '10', name: '影视' }, { cid: '20', name: '最近接收' }, { cid: '2894561234', name: '媒体库' }],
+  '10': [
+    { cid: '200', name: '动漫' }, { cid: '300', name: '4K' }, { cid: '11', name: '电影' },
+    { cid: '12', name: '剧集' }, { cid: '13', name: '纪录片' }, { cid: '14', name: '综艺' },
+  ],
+  '20': [{ cid: '21', name: '电影' }],
+}
+let mockDirSeq = 1000
+function mockResolve(path: string) {
+  let cid = '0'
+  for (const seg of path.split('/').filter(Boolean)) {
+    const hit = (MOCK_DIRS[cid] ?? []).find((d) => d.name === seg)
+    if (!hit) return null
+    cid = hit.cid
+  }
+  return cid
+}
+function mockEnsure(path: string) {
+  let cid = '0'
+  for (const seg of path.split('/').filter(Boolean)) {
+    const kids = (MOCK_DIRS[cid] ??= [])
+    let hit = kids.find((d) => d.name === seg)
+    if (!hit) kids.push((hit = { cid: String(mockDirSeq++), name: seg }))
+    cid = hit.cid
+  }
+  return cid
+}
 
 /** 带 id 的路径：精确表查不到时按顺序匹配 */
 const PATTERN_ROUTES: [RegExp, (m: RegExpMatchArray, q: URLSearchParams, init?: RequestInit) => unknown][] = [
@@ -604,6 +632,29 @@ const ROUTES: Record<string, Route> = {
     return { data: mockAccts }
   },
   '/media-libs': mockMediaLibsView,
+  '/media-libs/batch': (_q: URLSearchParams, init?: RequestInit) => {
+    const { libs } = JSON.parse(String(init?.body ?? '{}')) as {
+      libs: { name: string; account: number; cid: string; path: string; staging_path: string; scheme_id: number; depth: number; scrape: 'auto' | 'manual' | 'off' }[]
+    }
+    const dup = libs.find((l) => mockLibs.some((m) => m.name === l.name || m.cid === l.cid))
+    if (dup) return { __status: 400, error: `「${dup.name}」和已有的库重名或选了同一个 115 目录` }
+    for (const l of libs) {
+      if (l.staging_path) mockEnsure(l.staging_path)
+      mockLibs.push({ cid: l.cid, name: l.name, path: l.path || `/${l.name}` })
+      if (l.account) MOCK_LIB_ACCT[l.cid] = l.account
+      mockOpts[l.cid] = l.staging_path || l.scheme_id ? { mode: 'organize', scrape: l.scrape } : { mode: 'self', depth: l.depth, scrape: l.scrape }
+    }
+    return mockMediaLibsView()
+  },
+  '/storage/115/dirs': (q: URLSearchParams) => {
+    const data = MOCK_DIRS[q.get('cid') || '0'] ?? []
+    return { data, count: data.length, channel: 'Cookie' }
+  },
+  '/storage/115/resolve': (q: URLSearchParams) => {
+    const p = q.get('path') ?? ''
+    const cid = mockResolve(p)
+    return cid ? { cid, path: p } : { __status: 404, error: `路径不存在：${p}` }
+  },
   '/libraries': (_q: URLSearchParams, init?: RequestInit) =>
     init?.method === 'PUT' ? mockSaveLibraries(init) : mockLibrariesView(),
   '/libraries/preview': (q: URLSearchParams) =>

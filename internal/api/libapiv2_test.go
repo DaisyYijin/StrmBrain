@@ -36,9 +36,9 @@ func mediaLibsSetup(t *testing.T) (*Handler, *gin.Engine, *config.Config) {
 	r := gin.New()
 	r.GET("/media-libs", h.ListMediaLibs)
 	r.POST("/media-libs", h.CreateMediaLib)
+	r.POST("/media-libs/batch", h.CreateMediaLibsBatch)
 	r.PUT("/media-libs/:id", h.UpdateMediaLib)
 	r.DELETE("/media-libs/:id", h.DeleteMediaLib)
-	r.POST("/media-libs/:id/move", h.MoveMediaLib)
 	r.GET("/category/schemes/:id", h.GetScheme)
 	r.POST("/category/schemes", h.CreateScheme)
 	r.PUT("/category/schemes/:id", h.UpdateScheme)
@@ -146,5 +146,70 @@ func TestSchemesCRUD(t *testing.T) {
 	}
 	if code, _ = libHTTPDo(t, r, "DELETE", fmt.Sprintf("/category/schemes/%d", newID), ""); code != http.StatusConflict {
 		t.Fatal("最后一套也不能删")
+	}
+}
+
+// 批量新建：转存文件夹只给路径的按路径建；整组校验不过时一个目录都不建、一个库都不存
+func TestMediaLibsBatch(t *testing.T) {
+	_, r, _ := mediaLibsSetup(t)
+	var made []string
+	prev := batchEnsureStaging
+	batchEnsureStaging = func(_ *Handler, acct uint, path string) (string, error) {
+		made = append(made, fmt.Sprintf("%d:%s", acct, path))
+		return "new-" + path, nil
+	}
+	t.Cleanup(func() { batchEnsureStaging = prev })
+
+	// 名字重了：先校验，不建目录
+	code, body := libHTTPDo(t, r, "POST", "/media-libs/batch", `{"libs":[
+		{"name":"电影","cid":"100","local":"电影","staging_path":"/最近接收/电影"},
+		{"name":"电影","cid":"200","local":"剧集","staging_path":"/最近接收/剧集"}]}`)
+	if code != http.StatusBadRequest || len(made) != 0 || len(loadLibraries()) != 0 {
+		t.Fatalf("整组校验不过要先拒绝：%d %v made=%v", code, body, made)
+	}
+
+	code, body = libHTTPDo(t, r, "POST", "/media-libs/batch", `{"libs":[
+		{"name":"电影","cid":"100","path":"/影视/电影","local":"电影","staging_path":"/最近接收/电影","scrape":"auto"},
+		{"name":"剧集","cid":"200","path":"/影视/剧集","local":"剧集","staging_cid":"s2","staging_path":"/转存/剧集"},
+		{"name":"纪录片","cid":"300","path":"/影视/纪录片","local":"纪录片"}]}`)
+	if code != http.StatusOK {
+		t.Fatalf("批量新建：%d %v", code, body)
+	}
+	if len(made) != 1 || made[0] != "0:/最近接收/电影" {
+		t.Fatalf("只有只给路径的要建：%v", made)
+	}
+	libs := loadLibraries()
+	if len(libs) != 3 {
+		t.Fatalf("应建 3 个库：%+v", libs)
+	}
+	by := map[string]model.Library{}
+	for _, l := range libs {
+		by[l.Name] = l
+	}
+	if l := by["电影"]; l.StagingCid != "new-/最近接收/电影" || l.StagingPath != "/最近接收/电影" || l.Scrape != "auto" {
+		t.Errorf("电影：%+v", l)
+	}
+	if l := by["剧集"]; l.StagingCid != "s2" || l.Scrape != libScrapeManual {
+		t.Errorf("剧集（给了 cid 不建、刮削默认只手动）：%+v", l)
+	}
+	if l := by["纪录片"]; l.StagingCid != "" {
+		t.Errorf("纪录片没设转存文件夹：%+v", l)
+	}
+
+	// 和已有的库撞目录：整批拒绝
+	made = nil
+	code, _ = libHTTPDo(t, r, "POST", "/media-libs/batch", `{"libs":[
+		{"name":"动漫","cid":"400","local":"动漫","staging_path":"/最近接收/动漫"},
+		{"name":"电影2","cid":"100","local":"电影2"}]}`)
+	if code != http.StatusBadRequest || len(made) != 0 || len(loadLibraries()) != 3 {
+		t.Fatalf("和已有库同一个 115 目录要整批拒绝：%d made=%v", code, made)
+	}
+
+	var many []string
+	for i := 0; i <= libBatchMax; i++ {
+		many = append(many, fmt.Sprintf(`{"name":"库%d","cid":"9%d","local":"库%d"}`, i, i, i))
+	}
+	if code, _ := libHTTPDo(t, r, "POST", "/media-libs/batch", `{"libs":[`+strings.Join(many, ",")+`]}`); code != http.StatusBadRequest {
+		t.Error("超过上限要拒绝")
 	}
 }

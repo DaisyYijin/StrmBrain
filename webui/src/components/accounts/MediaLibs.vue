@@ -4,19 +4,22 @@
  * 卡片只读，改在弹窗里（MediaLibDialog），存一次只动一个库（后端 libapiv2.go）。
  *
  * 数据由页面读（账号页签也要知道有没有库、每个账号挂了几个库），这里只显示、改完把新的交回去。
- * 本地媒体根与已存在 / 冗余在上面的 SharedDirs，这里不再重复。
+ * 已存在 / 冗余只在「自动整理 → 基础配置」里显示和改（只有整理用得上），这里不再提。
+ *
+ * 两种显示：卡片（每项摊开，Emby 缺哪些目录也列出来）/ 列表（一个库一张横扁小卡片，细节放悬浮提示）。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
-  ArrowDown,
   ArrowRight,
-  ArrowUp,
   CircleCheck,
   Cloud,
   FolderInput,
+  FolderPlus,
   FolderTree,
   HardDrive,
   ImageDown,
+  LayoutGrid,
+  List,
   Pencil,
   Plus,
   Trash2,
@@ -26,7 +29,9 @@ import {
 import SectionCard from '@/components/ui/SectionCard.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import MediaLibDialog from './MediaLibDialog.vue'
+import MediaLibBatchDialog from './MediaLibBatchDialog.vue'
 import { libraryApi } from '@/api'
 import type { LibSyncStat, MediaLib, MediaLibsView } from '@/api/library'
 import { fullTime, relTime } from '@/utils/time'
@@ -38,6 +43,7 @@ const { message, dialog } = useFeedback()
 
 const editing = ref<MediaLib | null>(null)
 const dialogShow = ref(false)
+const batchShow = ref(false)
 
 function apply(v: MediaLibsView) {
   emit('update', v)
@@ -67,14 +73,6 @@ async function remove(l: MediaLib) {
     message.success(`已删除「${l.name}」`)
   } catch (e) {
     toastError(e, '删除失败')
-  }
-}
-
-async function move(l: MediaLib, dir: -1 | 1) {
-  try {
-    apply(await libraryApi.moveMediaLib(l.id, dir))
-  } catch (e) {
-    toastError(e, '调整顺序失败')
   }
 }
 
@@ -130,12 +128,63 @@ function missingShown(l: MediaLib) {
   return missOpen.value.has(l.id) || rest.length <= MISS_FOLD ? rest : rest.slice(0, MISS_FOLD)
 }
 const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '只手动刮', off: '不刮（交给 Emby）' }
+
+// ---- 显示方式：记在本浏览器（个人偏好，读不到就用列表） ----
+
+type ViewMode = 'card' | 'list'
+const VIEW_KEY = 'medialibs.view'
+const VIEWS = [
+  { label: '列表', value: 'list' as ViewMode, icon: List },
+  { label: '卡片', value: 'card' as ViewMode, icon: LayoutGrid },
+]
+function readView(): ViewMode {
+  try {
+    const v = localStorage.getItem(VIEW_KEY)
+    if (v === 'card' || v === 'list') return v
+  } catch {
+    // 隐私模式 / 禁用站点数据：用默认
+  }
+  return 'list'
+}
+const viewMode = ref<ViewMode>(readView())
+watch(viewMode, (v) => {
+  try {
+    localStorage.setItem(VIEW_KEY, v)
+  } catch {
+    // 存不下就只在这次生效
+  }
+})
+
+/** 列表里 Emby 一格只放一句话，缺哪些目录、该添加哪个路径放悬浮提示 */
+function embyBrief(l: MediaLib): { text: string; warn: boolean; tip: string } | null {
+  const e = l.emby
+  if (!e) return null
+  if (e.covered) return { text: '已在 Emby', warn: false, tip: e.suggest ? `Emby 路径：${e.suggest}` : '' }
+  if (e.partial && e.missing?.length)
+    return { text: `${e.missing.length} 个目录没进 Emby`, warn: true, tip: e.missing.join('\n') }
+  if (e.partial) return { text: 'Emby 覆盖了部分目录', warn: false, tip: '' }
+  if (e.unmapped) return { text: '路径映射换算不出', warn: true, tip: '设置 → Emby → 路径映射' }
+  return { text: 'Emby 里还没有', warn: true, tip: e.suggest ? `在 Emby 里添加 ${e.suggest}` : '' }
+}
+function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
+  const s = l.last_sync
+  if (!s) return { text: '没跑过全量', warn: false, tip: 'Strm 管理 → 全量同步' }
+  const when = relTime(new Date(s.at * 1000).toISOString())
+  return { text: s.ok ? `全量 ${when}` : `全量失败 ${when}`, warn: !s.ok, tip: `${syncTitle(s)}\n${syncLine(s)}` }
+}
 </script>
 
 <template>
-  <SectionCard title="媒体库" hint="每个库：115 目录 → 本地目录；放进它的转存文件夹的内容整理进它">
+  <SectionCard
+    title="媒体库"
+    :hint="`每个库：115 目录 → 本地目录（都在本地媒体根 ${view?.media_root ?? '/media'} 下，环境变量 MEDIA_ROOT）；放进它的转存文件夹的内容整理进它`"
+  >
     <template #extra>
-      <HButton v-if="view?.libs.length" size="sm" variant="primary" @click="openNew"><Plus :size="14" />添加媒体库</HButton>
+      <div v-if="view?.libs.length" class="extra">
+        <HSegmented v-model="viewMode" :options="VIEWS" size="sm" aria-label="显示方式" />
+        <HButton size="sm" variant="secondary" @click="batchShow = true"><FolderPlus :size="14" />批量添加</HButton>
+        <HButton size="sm" variant="primary" @click="openNew"><Plus :size="14" />添加媒体库</HButton>
+      </div>
     </template>
 
     <template v-if="view">
@@ -155,14 +204,53 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
         <HAlert v-if="view.emby_error" status="default">读不到 Emby 的媒体库（{{ view.emby_error }}），下面不显示 Emby 覆盖情况。</HAlert>
       </div>
 
-      <button v-if="!view.libs.length" type="button" class="empty" @click="openNew">
-        <span class="empty-ico"><Plus :size="20" /></span>
-        <span class="empty-title">添加第一个媒体库</span>
-        <span class="empty-sub">选一个 115 目录同步成本地 STRM；再设个转存文件夹，本站就把新片整理进去</span>
-      </button>
+      <div v-if="!view.libs.length" class="empty-wrap">
+        <button type="button" class="empty" @click="openNew">
+          <span class="empty-ico"><Plus :size="20" /></span>
+          <span class="empty-title">添加第一个媒体库</span>
+          <span class="empty-sub">选一个 115 目录同步成本地 STRM；再设个转存文件夹，本站就把新片整理进去</span>
+        </button>
+        <p class="empty-alt">
+          电影、剧集、动漫都在同一个目录下？
+          <button type="button" class="more" @click="batchShow = true">选上级目录批量添加</button>
+        </p>
+      </div>
+
+      <div v-else-if="viewMode === 'list'" class="rows">
+        <article v-for="l in view.libs" :key="l.id" class="row" :class="{ 'has-problem': l.problem }">
+          <div class="row-main">
+            <div class="lib-title row-name">
+              <h3 :title="l.name">{{ l.name }}</h3>
+              <span v-if="multiAcct" class="tag">{{ l.account_name }}</span>
+              <span class="tag" :class="{ 'tag-on': l.organize }">{{ l.organize ? '本站整理' : '只同步' }}</span>
+            </div>
+            <div class="row-route">
+              <span class="row-path" :title="`115：${l.path || `cid ${l.cid}`}`"><Cloud :size="13" />{{ l.path || `cid ${l.cid}` }}</span>
+              <ArrowRight :size="13" class="route-arrow" />
+              <code class="row-path" :title="`本地：${l.local_abs}`"><HardDrive :size="13" />{{ l.local_abs }}</code>
+            </div>
+            <div class="lib-ops">
+              <HButton size="sm" variant="ghost" :aria-label="`修改 ${l.name}`" @click="openEdit(l)"><Pencil :size="14" /></HButton>
+              <HButton size="sm" variant="ghost" :aria-label="`删除 ${l.name}`" @click="remove(l)"><Trash2 :size="14" /></HButton>
+            </div>
+          </div>
+          <ul class="row-meta">
+            <li :title="l.organize ? `转存/待整理：${l.staging_path || `cid ${l.staging_cid}`}` : '没设转存文件夹：只同步 STRM'">
+              <FolderInput :size="12" /><span>{{ l.organize ? l.staging_path || `cid ${l.staging_cid}` : '没设转存' }}</span>
+            </li>
+            <li><FolderTree :size="12" /><span>{{ l.scheme_id ? l.scheme_name : '不分类' }}</span></li>
+            <li><ImageDown :size="12" /><span>{{ SCRAPE_TEXT[l.scrape] || l.scrape }}</span></li>
+            <li v-if="embyBrief(l)" :class="{ warn: embyBrief(l)!.warn, ok: !embyBrief(l)!.warn }" :title="embyBrief(l)!.tip">
+              <Tv :size="12" /><span>{{ embyBrief(l)!.text }}</span>
+            </li>
+            <li :class="{ warn: syncBrief(l).warn }" :title="syncBrief(l).tip"><span>{{ syncBrief(l).text }}</span></li>
+            <li v-if="l.problem" class="warn row-problem" :title="l.problem"><TriangleAlert :size="12" /><span>{{ l.problem }}</span></li>
+          </ul>
+        </article>
+      </div>
 
       <div v-else class="cards">
-        <article v-for="(l, i) in view.libs" :key="l.id" class="lib" :class="{ 'has-problem': l.problem }">
+        <article v-for="l in view.libs" :key="l.id" class="lib" :class="{ 'has-problem': l.problem }">
           <header class="lib-head">
             <div class="lib-title">
               <h3 :title="l.name">{{ l.name }}</h3>
@@ -170,12 +258,6 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
               <span class="tag" :class="{ 'tag-on': l.organize }">{{ l.organize ? '本站整理' : '只同步' }}</span>
             </div>
             <div class="lib-ops">
-              <template v-if="view.libs.length > 1">
-                <HButton size="sm" variant="ghost" :disabled="i === 0" aria-label="上移" @click="move(l, -1)"><ArrowUp :size="14" /></HButton>
-                <HButton size="sm" variant="ghost" :disabled="i === view.libs.length - 1" aria-label="下移" @click="move(l, 1)">
-                  <ArrowDown :size="14" />
-                </HButton>
-              </template>
               <HButton size="sm" variant="secondary" @click="openEdit(l)"><Pencil :size="14" />修改</HButton>
               <HButton size="sm" variant="ghost" :aria-label="`删除 ${l.name}`" @click="remove(l)"><Trash2 :size="14" /></HButton>
             </div>
@@ -246,6 +328,7 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
     <p v-else-if="loading" class="muted">正在读取…</p>
 
     <MediaLibDialog v-if="view" v-model:show="dialogShow" :view="view" :lib="editing" @saved="apply" />
+    <MediaLibBatchDialog v-if="view" v-model:show="batchShow" :view="view" @saved="apply" />
   </SectionCard>
 </template>
 
@@ -283,6 +366,12 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
 .empty:focus-visible {
   border-color: var(--accent);
 }
+.empty-alt {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
 .empty-ico {
   width: 40px;
   height: 40px;
@@ -300,6 +389,97 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
 .empty-sub {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+.extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 列表：一个库一张横扁小卡片，第一行名字 / 映射 / 操作，第二行一串小字信息 */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px 8px 14px;
+  border-radius: var(--r-lg);
+  background: var(--surface-secondary, var(--default));
+}
+.row.has-problem {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+.row-main {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.row-name {
+  flex-wrap: nowrap;
+}
+.row-name h3 {
+  font-size: 14.5px;
+}
+.row-route {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+}
+.row-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.row-path :deep(svg) {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.row-meta li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.row-meta li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-meta li.warn {
+  font-size: 12px;
+}
+.row-meta :deep(svg) {
+  flex-shrink: 0;
+}
+.row-problem {
+  flex-basis: 100%;
 }
 
 /* 宽屏两三列并排：每张卡片自己装得下，不再被右栏挤成半宽 */
@@ -487,6 +667,13 @@ code {
 }
 
 @media (max-width: 720px) {
+  .row-main {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .row-route {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
   .route {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;

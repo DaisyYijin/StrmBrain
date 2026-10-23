@@ -351,9 +351,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 媒体库页面（一个库一条，libapiv2.go）与分类方案（catschemeapi.go），V2 阶段 4
 		protected.GET("/media-libs", h.ListMediaLibs)
 		protected.POST("/media-libs", h.CreateMediaLib)
+		protected.POST("/media-libs/batch", h.CreateMediaLibsBatch)
 		protected.PUT("/media-libs/:id", h.UpdateMediaLib)
 		protected.DELETE("/media-libs/:id", h.DeleteMediaLib)
-		protected.POST("/media-libs/:id/move", h.MoveMediaLib)
 		protected.POST("/media-libs/notice/dismiss", h.DismissMediaLibNotice)
 		protected.GET("/category/schemes/:id", h.GetScheme)
 		protected.POST("/category/schemes", h.CreateScheme)

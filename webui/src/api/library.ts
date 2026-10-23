@@ -234,8 +234,6 @@ export interface MediaLibsView {
   schemes: SchemeView[]
   accounts: AcctOption[]
   notice: string[]
-  existing: string
-  redundant: string
   emby_configured: boolean
   emby_error?: string
   root_problem?: string
@@ -257,9 +255,10 @@ export interface MediaLibReq {
 
 export const getMediaLibs = () => http.get<MediaLibsView>('/media-libs')
 export const createMediaLib = (req: MediaLibReq) => http.post<MediaLibsView>('/media-libs', req)
+/** 一次建几个库：只给 staging_path 的转存文件夹由后端按路径找、没有就建；全成或全不成 */
+export const createMediaLibsBatch = (libs: MediaLibReq[]) => http.post<MediaLibsView>('/media-libs/batch', { libs })
 export const updateMediaLib = (id: number, req: MediaLibReq) => http.put<MediaLibsView>(`/media-libs/${id}`, req)
 export const deleteMediaLib = (id: number) => http.del<MediaLibsView>(`/media-libs/${id}`)
-export const moveMediaLib = (id: number, dir: -1 | 1) => http.post<MediaLibsView>(`/media-libs/${id}/move`, { dir })
 export const dismissMediaLibNotice = () => http.post<{ ok: boolean }>('/media-libs/notice/dismiss', {})
 
 export const getScheme = (id: number) => http.get<{ id: number; name: string; yaml: string }>(`/category/schemes/${id}`)

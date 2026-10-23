@@ -12,7 +12,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
-import SharedDirs from '@/components/accounts/SharedDirs.vue'
+import StagingLegacyAlert from '@/components/accounts/StagingLegacyAlert.vue'
 import MediaLibs from '@/components/accounts/MediaLibs.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import ExtraAccounts from '@/components/accounts/ExtraAccounts.vue'
@@ -311,8 +311,7 @@ onMounted(() => {
           </ul>
         </HAlert>
 
-        <!-- 所有库共用：本地媒体根、已存在、冗余（原来右栏的工作目录卡，库卡片底部也重复写过一遍） -->
-        <SharedDirs v-if="libView" :media-root="libView.media_root" :has-libs="!!libView.libs.length" />
+        <StagingLegacyAlert />
 
         <MediaLibs :view="libView" :loading="libLoading" @update="onLibsUpdate" />
       </div>

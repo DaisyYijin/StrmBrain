@@ -74,9 +74,6 @@ type mediaLibsView struct {
 	Accounts  []acctOption   `json:"accounts"`
 	// Notice 升级时的提示（转存文件夹要重设、原来的分库方式），点「知道了」清掉
 	Notice []string `json:"notice"`
-	// Existing / Redundant 已存在 / 冗余（设置上一套，每个账号在同一路径下各有一份）
-	Existing       string `json:"existing"`
-	Redundant      string `json:"redundant"`
 	EmbyConfigured bool   `json:"emby_configured"`
 	EmbyError      string `json:"emby_error,omitempty"`
 	RootProblem    string `json:"root_problem,omitempty"` // 媒体根没挂上（mediaroot.go）
@@ -185,18 +182,8 @@ func (h *Handler) mediaLibsNow() mediaLibsView {
 	if json.Unmarshal([]byte(h.getSettingValue(libsV2NoticeKey)), &n) == nil && n.Lines != nil {
 		v.Notice = n.Lines
 	}
-	basic := h.getSettingValue("org-basic")
-	v.Existing = firstNonEmpty(jsonStrField(basic, "existing_path"), cidLabel(jsonStrField(basic, "existing")))
-	v.Redundant = firstNonEmpty(jsonStrField(basic, "redundant_path"), cidLabel(jsonStrField(basic, "redundant")))
 	v.RootProblem = mediaRootProblem()
 	return v
-}
-
-func cidLabel(cid string) string {
-	if cid == "" {
-		return ""
-	}
-	return "cid " + cid
 }
 
 // mediaLibReq 新建 / 修改一个库
@@ -380,6 +367,85 @@ func (h *Handler) CreateMediaLib(c *gin.Context) {
 	c.JSON(http.StatusOK, h.mediaLibsNow())
 }
 
+// libBatchMax 一次批量最多建几个库：一个上级目录下勾子目录，几十个已经很多了；
+// 每个要建转存文件夹的库最多要发几次 115 请求（逐段列目录、mkdir，都过节流）
+const libBatchMax = 30
+
+// batchEnsureStaging 按路径找到或建出转存文件夹，返回 cid。测试里换掉它，不碰 115
+var batchEnsureStaging = func(h *Handler, acct uint, path string) (string, error) {
+	ops, err := h.opsFor(acct)
+	if err != nil {
+		return "", err
+	}
+	return ops.ensurePath("0", strings.Trim(path, "/"))
+}
+
+// CreateMediaLibsBatch POST /media-libs/batch {libs:[…]}：一次建好几个库（选一个上级目录、勾它下面的子目录）。
+// 转存文件夹只给路径（staging_path、staging_cid 空）的，按路径找，没有就建（界面默认填 /最近接收/库名）。
+// 先不带转存文件夹把整组校验一遍再建目录：名字重了、目录互相包含这类错不该先在网盘上建出一堆空文件夹；
+// 建完带上转存文件夹再校验一次、一次存下，全成或全不成
+func (h *Handler) CreateMediaLibsBatch(c *gin.Context) {
+	var req struct {
+		Libs []mediaLibReq `json:"libs"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Libs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "没有要添加的媒体库"})
+		return
+	}
+	if len(req.Libs) > libBatchMax {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多添加 %d 个媒体库", libBatchMax)})
+		return
+	}
+	accounts := accountOptions()
+	cur := loadLibraries()
+	adds := make([]model.Library, len(req.Libs))
+	for i, r := range req.Libs {
+		r.applyTo(&adds[i])
+		if adds[i].Scrape == "" {
+			adds[i].Scrape = libScrapeManual
+		}
+		if err := checkMediaLibChange(nil, adds[i], accounts); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("「%s」：%v", adds[i].Name, err)})
+			return
+		}
+	}
+	combine := func(withStaging bool) []model.Library {
+		libs := append([]model.Library{}, cur...)
+		for i, l := range adds {
+			if !withStaging && strings.TrimSpace(req.Libs[i].StagingCid) == "" {
+				l.StagingCid, l.StagingPath = "", ""
+			}
+			l.Sort = len(libs) + 1
+			libs = append(libs, l)
+		}
+		return libs
+	}
+	if err := validateLibraries(combine(false)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	for i, r := range req.Libs {
+		p := strings.TrimSpace(r.StagingPath)
+		if strings.TrimSpace(r.StagingCid) != "" || strings.Trim(p, "/") == "" {
+			continue
+		}
+		cid, err := batchEnsureStaging(h, adds[i].Account, p)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("「%s」的转存文件夹 %s 建不出来：%v", adds[i].Name, p, err)})
+			return
+		}
+		adds[i].StagingCid, adds[i].StagingPath = cid, "/"+strings.Trim(p, "/")
+	}
+	if err := h.saveMediaLibs(combine(true)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	for _, l := range adds {
+		log.Printf("[媒体库] ✓ 新建媒体库「%s」（批量）：%s → %s", l.Name, firstNonEmpty(l.Path, l.Cid), l.Local)
+	}
+	c.JSON(http.StatusOK, h.mediaLibsNow())
+}
+
 // UpdateMediaLib PUT /media-libs/:id
 func (h *Handler) UpdateMediaLib(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -438,35 +504,6 @@ func (h *Handler) DeleteMediaLib(c *gin.Context) {
 		return
 	}
 	log.Printf("[媒体库] ✓ 删除媒体库「%s」（网盘与本地文件都没动）", gone.Name)
-	c.JSON(http.StatusOK, h.mediaLibsNow())
-}
-
-// MoveMediaLib POST /media-libs/:id/move {dir:-1|1} 调整顺序（第一个主号的库是「首个库」：老记录、老配置都认它）
-func (h *Handler) MoveMediaLib(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	var req struct {
-		Dir int `json:"dir"`
-	}
-	_ = c.ShouldBindJSON(&req)
-	libs := append([]model.Library{}, loadLibraries()...)
-	for i := range libs {
-		if libs[i].ID != uint(id) {
-			continue
-		}
-		j := i + req.Dir
-		if req.Dir == 0 || j < 0 || j >= len(libs) {
-			break
-		}
-		libs[i], libs[j] = libs[j], libs[i]
-		for k := range libs {
-			libs[k].Sort = k
-		}
-		if err := h.saveMediaLibs(libs); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		break
-	}
 	c.JSON(http.StatusOK, h.mediaLibsNow())
 }
 
