@@ -190,7 +190,7 @@ type subRunner struct {
 	prio     map[uint]subPriority // 一轮里每个订阅的资源优先级（priorityOf 缓存）
 	// washSub 正在给哪个订阅洗版（subwash.go）：这期间建的尝试记成洗版的，分享按集挑时只要比库里那份好的（washBeats）
 	washSub   uint
-	washBeats func(k epKey, name string) bool
+	washBeats func(k epKey, f washFile) bool
 	searched  map[uint]subSearchHit // 一轮里每个订阅只搜一次：补缺集与洗版共用
 	re0Left  int             // 今天还能自动解锁多少 RE0 积分，<0 = 不限
 	dianLeft int             // 癫影同上（两个站的积分各算各的）
@@ -1042,7 +1042,7 @@ func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, miss
 	opts := sharePickOpts{
 		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
 		HaveSha1: subLedgerHasSha1,
-		Compare:  r.priorityOf(sub).compare,
+		Compare:  r.priorityOf(sub).compareFiles,
 	}
 	if r.washSub == sub.ID {
 		opts.Beats = r.washBeats // 洗版：只要比库里那一集好的

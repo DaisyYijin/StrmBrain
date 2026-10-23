@@ -27,9 +27,9 @@ type sharePickOpts struct {
 	Remap    func(eps map[string]*ParsedName)
 	HaveSha1 func(sha1 string) bool // 库里已经有这一份（台账 sha1）
 	// Beats 洗版：这个视频补这一集是不是比库里那份好（电影的 k 是零值）。nil = 补缺集，不比
-	Beats func(k epKey, name string) bool
-	// Compare 两个文件名谁更好（subPriority.compare，和整理时洗版同一套）：>0 a 更好；nil 时只比体积
-	Compare func(a, b string) int
+	Beats func(k epKey, f washFile) bool
+	// Compare 两个文件谁更好（subPriority.compareFiles，和整理时洗版同一套，带体积）：>0 a 更好；nil 时只比体积
+	Compare func(a, b washFile) int
 	// Accept 资源条件（subCond.fileOK）：hasSub = 同目录有跟着它的字幕。nil = 不限
 	Accept func(e shareEntry, hasSub bool) (bool, string)
 	// MaxEps 剧集最多挑几集（订阅一轮的集数上限还剩多少），超了留集号靠前的；0 = 不限。
@@ -77,10 +77,12 @@ type shareVideo struct {
 	eps []epKey
 }
 
+func (v shareVideo) washFile() washFile { return washFile{Name: v.e.Name, Size: v.e.Size} }
+
 // better a 比 b 更值得要：画质好的优先（cmp 为 nil 不比），分不出就要大的
-func (a shareVideo) better(b shareVideo, cmp func(a, b string) int) bool {
+func (a shareVideo) better(b shareVideo, cmp func(a, b washFile) int) bool {
 	if cmp != nil {
-		if c := cmp(a.e.Name, b.e.Name); c != 0 {
+		if c := cmp(a.washFile(), b.washFile()); c != 0 {
 			return c > 0
 		}
 	}
@@ -137,7 +139,7 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 	var chosen []shareVideo
 	if o.MediaType == "movie" {
 		for _, v := range vids {
-			if o.Beats != nil && !o.Beats(epKey{}, v.e.Name) {
+			if o.Beats != nil && !o.Beats(epKey{}, v.washFile()) {
 				continue
 			}
 			if len(chosen) == 0 || v.better(chosen[0], o.Compare) {
@@ -183,7 +185,7 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 
 // wants 这个视频补这一集要不要：缺这一集，洗版时还要比库里那份好
 func (o sharePickOpts) wants(k epKey, v shareVideo) bool {
-	return o.Missing[k] && (o.Beats == nil || o.Beats(k, v.e.Name))
+	return o.Missing[k] && (o.Beats == nil || o.Beats(k, v.washFile()))
 }
 
 // pickEpisodeVideos 剧集按集挑：解析每个视频的季集 → 只要覆盖了缺集的 → 每集留最好的一份。

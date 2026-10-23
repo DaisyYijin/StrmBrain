@@ -9,6 +9,8 @@ package api
 //   - 「更好」和整理时洗版同一套（subPriority.compare = washCompare）。所以只有「跟随洗版策略」能洗，
 //     「基础」要整理的策略也没写规则；自定义不能洗：订阅觉得更好、整理觉得打平，换进来的被移进「已存在」。
 //     整理的策略还得是 replace，否则新版不会顶掉旧版。
+//   - 体积（2026-10-23）：规则写了 size_prefer 时，命中第 1 条也不算洗完（subPriority.settled），
+//     分享里的文件与库里那份带着体积比（compareFiles）；资源标题没有单个文件的体积，按标题筛时这条规则不下结论。
 //   - 库里那份有多好不能看库里的文件名：整理按模板改了名，模板没写画质的话名字里什么都看不出，
 //     任何资源都「更好」，每轮换一次。按整理记录里这个文件的原名（orgRecordFile.Orig）认，没有就用台账名，
 //     读过媒体信息的叠上读到的画质（probeJudgeName）；连分辨率都认不出的那一集不洗。
@@ -65,19 +67,19 @@ func (r *subRunner) washReady(sub *model.Subscription) (subPriority, string) {
 
 // subWashState 库里各集现有版本的画质（认画质用的名字）
 type subWashState struct {
-	Want    map[epKey]string // 没达标、认得出画质的集 → 现有版本的名字（洗版要换的）
+	Want    map[epKey]washFile // 没达标、认得出画质的集 → 现有版本（认画质用的名字 + 体积，洗版要换的）
 	Top     int              // 已达标的集数
 	Unknown int              // 认不出现有画质的集数（不洗）
 }
 
-// subExistingNames 库里每一集现有版本「认画质用的名字」：一集几份（分组洗版 / 共存）取最好的那份
-func subExistingNames(sub *model.Subscription, have subHave, prio subPriority) map[epKey]string {
+// subExistingNames 库里每一集现有版本「认画质用的名字」与体积：一集几份（分组洗版 / 共存）取最好的那份
+func subExistingNames(sub *model.Subscription, have subHave, prio subPriority) map[epKey]washFile {
 	db := model.DB
 	if db == nil {
 		return nil
 	}
 	orig := subOrigNames(sub)
-	out := map[epKey]string{}
+	out := map[epKey]washFile{}
 	for _, key := range have.TitleKeys {
 		for _, sf := range subTitleVideos(db, key) {
 			name := orig[sf.FileID]
@@ -91,9 +93,10 @@ func subExistingNames(sub *model.Subscription, have subHave, prio subPriority) m
 			if sub.MediaType == "tv" {
 				keys = ledgerVideoEpisodes(key, sf.RelPath)
 			}
+			f := washFile{Name: name, Size: sf.Size}
 			for _, k := range keys {
-				if cur, ok := out[k]; !ok || prio.compare(name, cur) > 0 {
-					out[k] = name
+				if cur, ok := out[k]; !ok || prio.compareFiles(f, cur) > 0 {
+					out[k] = f
 				}
 			}
 		}
@@ -121,19 +124,19 @@ func subOrigNames(sub *model.Subscription) map[string]string {
 }
 
 // planSubWash 哪些集要洗（纯函数）：在范围里、不在路上、认得出画质、没达标的
-func planSubWash(names map[epKey]string, inScope func(epKey) bool, inflight map[epKey]bool, prio subPriority) subWashState {
-	st := subWashState{Want: map[epKey]string{}}
-	for k, name := range names {
+func planSubWash(names map[epKey]washFile, inScope func(epKey) bool, inflight map[epKey]bool, prio subPriority) subWashState {
+	st := subWashState{Want: map[epKey]washFile{}}
+	for k, f := range names {
 		if !inScope(k) || inflight[k] {
 			continue
 		}
 		switch {
-		case prio.top(name):
+		case prio.settled(f):
 			st.Top++
-		case !washQualityKnown(name, prio):
+		case !washQualityKnown(f.Name, prio):
 			st.Unknown++
 		default:
-			st.Want[k] = name
+			st.Want[k] = f
 		}
 	}
 	return st
@@ -256,9 +259,9 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 	}
 
 	r.washSub = sub.ID
-	r.washBeats = func(k epKey, name string) bool {
+	r.washBeats = func(k epKey, f washFile) bool {
 		cur, ok := st.Want[k]
-		return ok && prio.compare(name, cur) > 0
+		return ok && prio.compareFiles(f, cur) > 0
 	}
 	defer func() { r.washSub, r.washBeats = 0, nil }()
 
@@ -295,13 +298,18 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 }
 
 // subWashTitleHopeless 资源标题明确写了画质，而且对要洗的每一集都不比库里的好。
-// 标题没写分辨率的不下结论（「剧名 全集」得列开看文件）
-func subWashTitleHopeless(title string, want map[epKey]string, prio subPriority) bool {
+// 标题没写分辨率的不下结论（「剧名 全集」得列开看文件）；和库里那份命中同一条、这条又写了体积偏好的
+// 也不下结论：标题上没有单个文件的体积，比不出来
+func subWashTitleHopeless(title string, want map[epKey]washFile, prio subPriority) bool {
 	if ParseResourceInfo(title).Pix == "" && washTier(title, prio.Rules) < 0 {
 		return false
 	}
+	tt := washTier(title, prio.Rules)
 	for _, cur := range want {
-		if prio.compare(title, cur) > 0 {
+		if prio.compare(title, cur.Name) > 0 {
+			return false
+		}
+		if tt >= 0 && tt == washTierOf(cur, prio.Rules) && prio.sizePreferAt(tt) {
 			return false
 		}
 	}
