@@ -1258,7 +1258,7 @@ func (h *Handler) TransferOwned(c *gin.Context) {
 		}
 		var rows []model.MediaLibrary
 		h.DB.Where("media_type = ? AND tmdb_id IN ?", kind, ids).Find(&rows)
-		for _, r := range rows {
+		for _, r := range mediaLibOwned(h.DB, rows) {
 			out[fmt.Sprintf("%s:%d", kind, r.TmdbID)] = gin.H{"title": r.Title, "category": r.Category, "at": r.CreatedAt.Unix()}
 		}
 	}

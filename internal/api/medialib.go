@@ -24,6 +24,7 @@ import (
 	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // mediaLibScanDepth 本地媒体树往下数几层。
@@ -87,6 +88,52 @@ func mediaLibDirAlive(localRoot string, libs []string, rel string) bool {
 		}
 	}
 	return false
+}
+
+// mediaLibOwned 「已入库」角标用：只留台账行里现在还真在库里的。
+//
+// MediaLibrary 只记「整理过」，片子后来被删、被移出媒体库、重新整理认成别的条目，
+// 这一行都还留着（见文件头），直接拿它标「已入库」会把早就不在的片标上
+// （现场：搜「蜘蛛侠」，库里只有超凡蜘蛛侠，2002 版也标了已入库）。
+// 所以再对一次 STRM 台账（SyncedFile，海报墙同一份）：零 115 请求、不读本地文件系统。
+// 台账 RelPath 前面多一段库目录（可能多级），TargetPath 没有，按后缀对。
+func mediaLibOwned(db *gorm.DB, rows []model.MediaLibrary) []model.MediaLibrary {
+	out := rows[:0:0]
+	for _, r := range rows {
+		if mediaLibRowLive(db, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func mediaLibRowLive(db *gorm.DB, r model.MediaLibrary) bool {
+	target := strings.Trim(strings.ReplaceAll(strings.TrimSpace(r.TargetPath), "\\", "/"), "/")
+	if target == "" {
+		return false // 没记落点的认不出在不在，不标总比标错好
+	}
+	live := func(where string, args ...any) bool {
+		var n int64
+		db.Model(&model.SyncedFile{}).
+			Where("kind = ? AND orphan_at IS NULL", "video").
+			Where(where, args...).Limit(1).Count(&n)
+		return n > 0
+	}
+	// 落点那个 STRM 本身还在（新旧两种写法都认）
+	for _, c := range strmRelCandidates(target) {
+		if live(`(rel_path = ? OR rel_path LIKE ? ESCAPE '\')`, c, "%/"+likeEscape(c)) {
+			return true
+		}
+	}
+	// 洗版换了版本、剧集删了这一集：标题目录下还有视频也算。
+	// 电影的标题目录可能就是分类目录（平铺片目），要目录名里带着片名才认，
+	// 否则分类目录里别的片会把它撑成「已入库」
+	dir := mediaLibTitleDir(target)
+	if dir == "" || (r.MediaType != "tv" && (r.Title == "" || !strings.Contains(path.Base(dir), r.Title))) {
+		return false
+	}
+	e := likeEscape(dir)
+	return live(`(rel_path LIKE ? ESCAPE '\' OR rel_path LIKE ? ESCAPE '\')`, e+"/%", "%/"+e+"/%")
 }
 
 // localTitleCount 数一个目录下有多少「部」影视。

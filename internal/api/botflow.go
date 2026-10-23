@@ -629,8 +629,8 @@ func botOwned(db *gorm.DB, movies []wecomTmdbHit) map[string]bool {
 	}
 	for kind, list := range ids {
 		var rows []model.MediaLibrary
-		db.Select("tmdb_id").Where("media_type = ? AND tmdb_id IN ?", kind, list).Find(&rows)
-		for _, r := range rows {
+		db.Where("media_type = ? AND tmdb_id IN ?", kind, list).Find(&rows)
+		for _, r := range mediaLibOwned(db, rows) {
 			out[fmt.Sprintf("%s:%d", kind, r.TmdbID)] = true
 		}
 	}
