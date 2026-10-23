@@ -51,13 +51,13 @@ func (h *Handler) botSubFind(key, keyword string, io botIO) botView {
 	return f.render()
 }
 
-// botSubDefaultForm 机器人订阅的默认值（与网页订阅弹窗一致）
-func botSubDefaultForm(tc *TmdbClient, hit wecomTmdbHit) subForm {
-	f := subForm{TmdbID: hit.ID, MediaType: hit.Type, Scope: subScopeAll, Follow: subFollowMissing, Wash: loadSubscribeCfg().WashDefault}
-	if hit.Type != "tv" || tc == nil {
+// subDefaultForm 一键订阅的默认值（机器人与找资源海报上的「订阅」共用，与网页订阅弹窗一致）
+func subDefaultForm(tc *TmdbClient, id int, kind string) subForm {
+	f := subForm{TmdbID: id, MediaType: kind, Scope: subScopeAll, Follow: subFollowMissing, Wash: loadSubscribeCfg().WashDefault}
+	if kind != "tv" || tc == nil {
 		return f
 	}
-	d, err := tc.detailOf("tv", hit.ID)
+	d, err := tc.detailOf("tv", id)
 	if err != nil || d == nil {
 		return f
 	}
@@ -77,7 +77,7 @@ func (h *Handler) botSubscribe(hit wecomTmdbHit) []string {
 		return []string{"订阅要先在 TMDB 上定下是哪一部（按关键词搜的结果不能订阅）。"}
 	}
 	tc, _ := loadTmdbClient()
-	sub, _, err := h.createSubscription(botSubDefaultForm(tc, hit), "bot")
+	sub, _, err := h.createSubscription(subDefaultForm(tc, hit.ID, hit.Type), "bot")
 	name := "《" + hit.Title + "》"
 	switch {
 	case errors.Is(err, errSubExists):

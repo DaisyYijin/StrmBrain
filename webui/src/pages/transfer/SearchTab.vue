@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
-import { ArrowLeft, BellPlus, BellRing, FolderInput, Search } from '@lucide/vue'
+import { ArrowLeft, BellPlus, BellRing, FolderInput, Search, SlidersHorizontal } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
@@ -212,10 +212,24 @@ const selOwned = computed(() => {
                 <template #icon><BellRing :size="14" /></template>
                 {{ subLabel(sub) }}
               </HButton>
-              <HButton v-else variant="secondary" size="sm" class="sub-btn" @click="subOpen = true">
-                <template #icon><BellPlus :size="14" /></template>
-                订阅
-              </HButton>
+              <template v-else>
+                <!-- 一键订阅按默认值；要改范围 / 资源条件再点旁边的「自定义」开弹窗 -->
+                <HButton
+                  variant="secondary"
+                  size="sm"
+                  class="sub-btn"
+                  :loading="subs.quickBusy.value.has(`${selected.cand.media_type}:${selected.cand.id}`)"
+                  :title="selected.cand.media_type === 'tv' ? '按默认设置补缺集，在播的多季剧只订最新一季' : '找到资源自动转存入库'"
+                  @click="subs.quickSubscribe(selected.cand.id, selected.cand.media_type)"
+                >
+                  <template #icon><BellPlus :size="14" /></template>
+                  订阅
+                </HButton>
+                <HButton variant="ghost" size="sm" title="自己选范围、资源条件后再订阅" @click="subOpen = true">
+                  <template #icon><SlidersHorizontal :size="14" /></template>
+                  自定义
+                </HButton>
+              </template>
             </template>
           </div>
           <p v-if="selected.cand?.overview" class="sel-overview">{{ selected.cand.overview }}</p>

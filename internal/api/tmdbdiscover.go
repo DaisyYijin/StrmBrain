@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync"
@@ -45,6 +46,71 @@ var tmdbDiscoverLists = []discoverList{
 	{key: "anime_jp", label: "日本动画", path: "/discover/tv", kind: "tv", params: map[string]string{
 		"with_origin_country": "JP", "with_genres": "16", "sort_by": "popularity.desc",
 	}},
+}
+
+// ---- 按条件筛选（list=filter）：电影 / 剧集 + 国家地区 + 题材，走 /discover/{movie|tv} 按热度排 ----
+
+// discoverOpt 筛选项的一个选项（value 原样进 TMDB 参数）
+type discoverOpt struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// tmdbDiscoverCountries 地区：按 with_origin_country 筛（制片国家，电影剧集都认）
+var tmdbDiscoverCountries = []discoverOpt{
+	{"CN", "中国大陆"}, {"HK", "中国香港"}, {"TW", "中国台湾"}, {"US", "美国"}, {"GB", "英国"},
+	{"JP", "日本"}, {"KR", "韩国"}, {"TH", "泰国"}, {"IN", "印度"}, {"FR", "法国"},
+	{"DE", "德国"}, {"ES", "西班牙"}, {"IT", "意大利"}, {"CA", "加拿大"}, {"AU", "澳大利亚"},
+	{"RU", "俄罗斯"},
+}
+
+// tmdbDiscoverGenres 题材：电影与剧集的 TMDB 类型表不一样（剧集的动作冒险、科幻奇幻是合在一起的），分开列。
+// 纪录片 / 新闻 / 脱口秀不列：榜单会丢掉 minor 条目（parseDiscoverPage），选了也是空的
+var tmdbDiscoverGenres = map[string][]discoverOpt{
+	"movie": {
+		{"28", "动作"}, {"12", "冒险"}, {"16", "动画"}, {"35", "喜剧"}, {"80", "犯罪"},
+		{"18", "剧情"}, {"10751", "家庭"}, {"14", "奇幻"}, {"36", "历史"}, {"27", "恐怖"},
+		{"10402", "音乐"}, {"9648", "悬疑"}, {"10749", "爱情"}, {"878", "科幻"}, {"53", "惊悚"},
+		{"10752", "战争"}, {"37", "西部"},
+	},
+	"tv": {
+		{"10759", "动作冒险"}, {"16", "动画"}, {"35", "喜剧"}, {"80", "犯罪"}, {"18", "剧情"},
+		{"10751", "家庭"}, {"10762", "儿童"}, {"9648", "悬疑"}, {"10764", "真人秀"},
+		{"10765", "科幻奇幻"}, {"10766", "肥皂剧"}, {"10768", "战争政治"}, {"37", "西部"},
+	},
+}
+
+func discoverOptOK(opts []discoverOpt, v string) bool {
+	for _, o := range opts {
+		if o.Value == v {
+			return true
+		}
+	}
+	return false
+}
+
+// discoverFilterList 把筛选条件拼成一个临时榜单；参数只认清单里有的，别的值一律拒收（也就不会拿用户输入去拼 TMDB 请求）
+func discoverFilterList(kind, country, genre string) (discoverList, error) {
+	if kind != "movie" && kind != "tv" {
+		return discoverList{}, errors.New("类型只能是 movie / tv")
+	}
+	if country != "" && !discoverOptOK(tmdbDiscoverCountries, country) {
+		return discoverList{}, errors.New("未知的地区: " + country)
+	}
+	if genre != "" && !discoverOptOK(tmdbDiscoverGenres[kind], genre) {
+		return discoverList{}, errors.New("未知的题材: " + genre)
+	}
+	params := map[string]string{"sort_by": "popularity.desc", "without_genres": "99,10763,10767"}
+	if country != "" {
+		params["with_origin_country"] = country
+	}
+	if genre != "" {
+		params["with_genres"] = genre
+	}
+	return discoverList{
+		key:  "filter:" + kind + ":" + country + ":" + genre,
+		path: "/discover/" + kind, kind: kind, params: params,
+	}, nil
 }
 
 // tmdbDiscoverMaxPage 最多翻几页：榜单越往后越冷门，翻到第十页（200 条）早就不是「热门」了
@@ -99,7 +165,8 @@ func parseDiscoverPage(body []byte, l discoverList) ([]manualCand, int, error) {
 }
 
 // TmdbDiscover GET /tmdb/discover?list=trending_day&page=1
-// 不带 list 时只返回榜单清单（前端页签）
+// list=filter 时按 kind / country / genre 筛选（discoverFilterList）。
+// 不带 list 时只返回榜单清单（前端页签）与筛选项
 func (h *Handler) TmdbDiscover(c *gin.Context) {
 	key := c.Query("list")
 	if key == "" {
@@ -107,11 +174,19 @@ func (h *Handler) TmdbDiscover(c *gin.Context) {
 		for _, l := range tmdbDiscoverLists {
 			lists = append(lists, gin.H{"key": l.key, "label": l.label})
 		}
-		c.JSON(http.StatusOK, gin.H{"lists": lists})
+		c.JSON(http.StatusOK, gin.H{"lists": lists, "countries": tmdbDiscoverCountries, "genres": tmdbDiscoverGenres})
 		return
 	}
 	var list *discoverList
-	for i := range tmdbDiscoverLists {
+	if key == "filter" {
+		l, err := discoverFilterList(c.Query("kind"), c.Query("country"), c.Query("genre"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		list, key = &l, l.key
+	}
+	for i := 0; list == nil && i < len(tmdbDiscoverLists); i++ {
 		if tmdbDiscoverLists[i].key == key {
 			list = &tmdbDiscoverLists[i]
 			break

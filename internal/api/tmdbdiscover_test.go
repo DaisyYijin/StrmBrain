@@ -27,3 +27,27 @@ func TestParseDiscoverPage(t *testing.T) {
 		t.Fatalf("意外结果: %+v", items)
 	}
 }
+
+func TestDiscoverFilterList(t *testing.T) {
+	l, err := discoverFilterList("tv", "KR", "18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.path != "/discover/tv" || l.kind != "tv" || l.params["with_origin_country"] != "KR" || l.params["with_genres"] != "18" {
+		t.Fatalf("参数不对: %+v", l)
+	}
+	if l.key != "filter:tv:KR:18" {
+		t.Fatalf("缓存键不对: %s", l.key)
+	}
+	// 只选类型：不带地区与题材
+	l, _ = discoverFilterList("movie", "", "")
+	if _, ok := l.params["with_origin_country"]; ok {
+		t.Fatal("没选地区不该带 with_origin_country")
+	}
+	// 剧集的题材表里没有电影的「爱情」，清单外的值一律拒收
+	for _, c := range [][3]string{{"tv", "", "10749"}, {"movie", "XX", ""}, {"person", "", ""}, {"movie", "CN&x=1", ""}} {
+		if _, err := discoverFilterList(c[0], c[1], c[2]); err == nil {
+			t.Fatalf("%v 应该被拒收", c)
+		}
+	}
+}

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
-import { Star } from '@lucide/vue'
+import { BellPlus, BellRing, Star } from '@lucide/vue'
 import PosterImage from '@/components/PosterImage.vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo } from '@/api/transfer'
+import { useSubscriptions } from '@/composables/subscriptions'
 
 /**
  * TMDB 选片，直接铺在页面上（原来是弹窗）。
@@ -21,6 +22,22 @@ defineProps<{
   noSkip?: boolean
 }>()
 const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
+
+// 海报右上角的「订阅」：不用点进去配弹窗，按默认值直接订；订过的点了打开订阅详情
+const subs = useSubscriptions()
+function subOf(it: TmdbCandidate) {
+  return subs.findSub(it.id, it.media_type)
+}
+function onSub(it: TmdbCandidate) {
+  const s = subOf(it)
+  if (s) subs.openDetail(s.id)
+  else void subs.quickSubscribe(it.id, it.media_type)
+}
+const busyOf = (it: TmdbCandidate) => subs.quickBusy.value.has(`${it.media_type}:${it.id}`)
+const SUB_TIP = {
+  movie: '订阅：找到资源自动转存入库',
+  tv: '订阅：按默认设置补缺集，在播的多季剧只订最新一季。要改范围到「订阅」里修改',
+}
 </script>
 
 <template>
@@ -29,30 +46,38 @@ const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
     <template v-else>
       <p v-if="hint" class="state">{{ hint }}</p>
       <div v-if="items.length" class="grid">
-        <button
-          v-for="it in items"
-          :key="`${it.media_type}-${it.id}`"
-          type="button"
-          class="cand"
-          :title="it.overview || it.title"
-          @click="emit('pick', it)"
-        >
-          <div class="poster-box">
-            <PosterImage
-              class="poster"
-              :src="it.poster ? resourcesApi.tmdbImageUrl(it.poster, 'w185') : null"
-              :alt="it.title"
-              :icon-size="22"
-            />
-            <span v-if="owned[`${it.media_type}:${it.id}`]" class="owned">已入库</span>
-          </div>
-          <div class="cand-title">{{ it.title }}</div>
-          <div class="cand-meta">
-            <MediaTypeChip :type="it.media_type" />
-            <span v-if="it.year">{{ it.year }}</span>
-            <span v-if="it.vote" class="vote"><Star :size="11" />{{ it.vote.toFixed(1) }}</span>
-          </div>
-        </button>
+        <div v-for="it in items" :key="`${it.media_type}-${it.id}`" class="cand">
+          <button type="button" class="cand-main" :title="it.overview || it.title" @click="emit('pick', it)">
+            <div class="poster-box">
+              <PosterImage
+                class="poster"
+                :src="it.poster ? resourcesApi.tmdbImageUrl(it.poster, 'w185') : null"
+                :alt="it.title"
+                :icon-size="22"
+              />
+              <span v-if="owned[`${it.media_type}:${it.id}`]" class="owned">已入库</span>
+            </div>
+            <div class="cand-title">{{ it.title }}</div>
+            <div class="cand-meta">
+              <MediaTypeChip :type="it.media_type" />
+              <span v-if="it.year">{{ it.year }}</span>
+              <span v-if="it.vote" class="vote"><Star :size="11" />{{ it.vote.toFixed(1) }}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="sub"
+            :class="{ on: subOf(it) }"
+            :disabled="busyOf(it)"
+            :title="subOf(it) ? '已订阅，点击查看' : SUB_TIP[it.media_type]"
+            :aria-label="subOf(it) ? `已订阅 ${it.title}` : `订阅 ${it.title}`"
+            @click="onSub(it)"
+          >
+            <HSpinner v-if="busyOf(it)" size="sm" />
+            <BellRing v-else-if="subOf(it)" :size="14" />
+            <BellPlus v-else :size="14" />
+          </button>
+        </div>
       </div>
     </template>
     <button v-if="!loading && !noSkip" type="button" class="skip" @click="emit('skip')">
@@ -83,21 +108,27 @@ const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
   gap: 14px 12px;
 }
 .cand {
-  all: unset;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  position: relative;
   min-width: 0;
-  padding: 6px;
   border-radius: var(--r-lg);
-  cursor: pointer;
   transition: background-color 0.15s;
 }
 .cand:hover {
   background: var(--default);
 }
-.cand:focus-visible {
+.cand-main {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+}
+.cand-main:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -119,6 +150,45 @@ const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
   line-height: 19px;
   background: var(--success);
   color: var(--success-foreground);
+}
+/* 订阅按钮压在海报右上角：订过的常亮，没订的桌面端悬停才出来（手机没有悬停，一直显示） */
+.sub {
+  all: unset;
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--background) 78%, transparent);
+  color: var(--foreground);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  transition:
+    opacity 0.15s,
+    background-color 0.15s;
+}
+.sub:hover,
+.sub.on {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.sub:disabled {
+  cursor: default;
+}
+.sub:focus-visible {
+  outline: 2px solid var(--accent);
+}
+@media (hover: hover) {
+  .sub:not(.on):not(:disabled) {
+    opacity: 0;
+  }
+  .cand:hover .sub,
+  .sub:focus-visible {
+    opacity: 1;
+  }
 }
 .cand-title {
   font-size: 13px;

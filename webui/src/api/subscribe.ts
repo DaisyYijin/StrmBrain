@@ -240,6 +240,13 @@ export const of = (tmdbId: number, type: string) =>
 export const detail = (id: number) => http.get<SubDetail>(`/subscriptions/${id}`)
 export const create = (f: SubForm) =>
   http.post<{ data: Subscription; message?: string; job_id?: number }>('/subscriptions', f)
+/** 一键订阅：按默认值订（补缺集；在播的多季剧只订最新一季），与机器人 /sub 同一套 */
+export const quickCreate = (tmdbId: number, type: 'movie' | 'tv') =>
+  http.post<{ data: Subscription; message?: string; job_id?: number }>('/subscriptions', {
+    tmdb_id: tmdbId,
+    media_type: type,
+    quick: true,
+  })
 export const update = (id: number, f: Partial<SubForm> & { state?: 'active' | 'paused' }) =>
   http.put<{ data: Subscription; message?: string }>(`/subscriptions/${id}`, f)
 export const remove = (id: number) => http.del<{ message?: string }>(`/subscriptions/${id}`)

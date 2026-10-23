@@ -21,9 +21,25 @@ export interface DiscoverList {
   key: string
   label: string
 }
-export const tmdbDiscoverLists = () => http.get<{ lists: DiscoverList[] }>('/tmdb/discover')
-export const tmdbDiscover = (list: string, page = 1) =>
-  http.get<{ data?: TmdbCandidate[]; has_more?: boolean }>('/tmdb/discover', { params: { list, page } })
+/** 筛选项（地区 / 题材），value 原样回传给后端 */
+export interface DiscoverOpt {
+  value: string
+  label: string
+}
+export const tmdbDiscoverLists = () =>
+  http.get<{ lists: DiscoverList[]; countries?: DiscoverOpt[]; genres?: Record<'movie' | 'tv', DiscoverOpt[]> }>(
+    '/tmdb/discover',
+  )
+/** 按条件筛选（list=filter）时带 kind / country / genre */
+export interface DiscoverFilter {
+  kind: 'movie' | 'tv'
+  country: string
+  genre: string
+}
+export const tmdbDiscover = (list: string, page = 1, filter?: DiscoverFilter) =>
+  http.get<{ data?: TmdbCandidate[]; has_more?: boolean }>('/tmdb/discover', {
+    params: filter ? { list, page, ...filter } : { list, page },
+  })
 
 export const tmdbImageUrl = (path: string, size = 'w154') =>
   `/api/tmdb/img?path=${encodeURIComponent(path)}&size=${size}`

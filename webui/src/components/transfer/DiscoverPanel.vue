@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
 import { resourcesApi, transferApi } from '@/api'
-import type { DiscoverList, TmdbCandidate } from '@/api/resources'
+import type { DiscoverFilter, DiscoverList, DiscoverOpt, TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo } from '@/api/transfer'
 
 /**
  * 找资源页没在搜东西时的趋势 / 热门榜单（TMDB）。点一部和搜索结果里点一部是同一回事：
  * 条目自带 TMDB 编号，直接进找资源。榜单清单由后端给（tmdbdiscover.go），这里不写死。
+ * 下面一行按 电影 / 剧集 + 地区 + 题材 筛选（list=filter），选项同样由后端给；
+ * 动了任何一项就换成筛选结果，点上面的榜单回到榜单。
  */
 const emit = defineEmits<{ pick: [TmdbCandidate] }>()
 
@@ -26,9 +29,36 @@ const hint = ref('')
 // 切页签很快时，晚回来的旧榜单别盖掉新的
 let seq = 0
 
+// ---- 筛选 ----
+const countries = ref<DiscoverOpt[]>([])
+const genres = ref<Record<'movie' | 'tv', DiscoverOpt[]>>({ movie: [], tv: [] })
+const filtering = ref(false)
+const filter = ref<DiscoverFilter>({ kind: 'tv', country: '', genre: '' })
+const KIND_OPTS = [
+  { label: '剧集', value: 'tv' as const },
+  { label: '电影', value: 'movie' as const },
+]
+const countryOpts = computed(() => [{ label: '全部地区', value: '' }, ...countries.value])
+const genreOpts = computed(() => [{ label: '全部题材', value: '' }, ...(genres.value[filter.value.kind] ?? [])])
+
+function setFilter(patch: Partial<DiscoverFilter>) {
+  const f = { ...filter.value, ...patch }
+  // 电影与剧集的题材表不一样（剧集是「动作冒险」「科幻奇幻」），换类型后对不上的题材清掉
+  if (f.genre && !genres.value[f.kind]?.some((g) => g.value === f.genre)) f.genre = ''
+  filter.value = f
+  filtering.value = true
+  void load()
+}
+function clearFilter() {
+  filter.value = { ...filter.value, country: '', genre: '' }
+  filtering.value = false
+  void load()
+}
+
 async function load(more = false) {
   const my = ++seq
-  const list = current.value
+  const list = filtering.value ? 'filter' : current.value
+  const f = filtering.value ? { ...filter.value } : undefined
   if (more) loadingMore.value = true
   else {
     loading.value = true
@@ -38,7 +68,7 @@ async function load(more = false) {
   }
   try {
     const p = more ? page.value + 1 : 1
-    const d = await resourcesApi.tmdbDiscover(list, p)
+    const d = await resourcesApi.tmdbDiscover(list, p, f)
     if (my !== seq) return
     const got = d.data ?? []
     // 榜单翻页期间排名会变，同一部可能在两页各出现一次
@@ -47,7 +77,7 @@ async function load(more = false) {
     items.value = [...items.value, ...fresh]
     page.value = p
     hasMore.value = !!d.has_more
-    if (!items.value.length) hint.value = '这个榜单暂时是空的'
+    if (!items.value.length) hint.value = f ? '没有符合条件的影片，换个条件试试' : '这个榜单暂时是空的'
     if (fresh.length) {
       transferApi
         .owned(fresh.map((c) => `${c.media_type}:${c.id}`))
@@ -66,6 +96,7 @@ async function load(more = false) {
 
 function switchTo(key: string) {
   current.value = key
+  filtering.value = false
   try {
     localStorage.setItem(LS_KEY, key)
   } catch {
@@ -76,7 +107,10 @@ function switchTo(key: string) {
 
 onMounted(async () => {
   try {
-    lists.value = (await resourcesApi.tmdbDiscoverLists()).lists ?? []
+    const d = await resourcesApi.tmdbDiscoverLists()
+    lists.value = d.lists ?? []
+    countries.value = d.countries ?? []
+    if (d.genres) genres.value = d.genres
   } catch (e) {
     hint.value = e instanceof Error ? e.message : '榜单读取失败'
     return
@@ -96,12 +130,37 @@ onMounted(async () => {
   <div class="discover">
     <HSegmented
       v-if="lists.length"
-      :model-value="current"
+      :model-value="filtering ? '' : current"
       size="sm"
       aria-label="榜单"
       :options="lists.map((l) => ({ label: l.label, value: l.key }))"
-      @update:model-value="(v) => v && v !== current && switchTo(v)"
+      @update:model-value="(v) => v && (filtering || v !== current) && switchTo(v)"
     />
+    <div v-if="countries.length" class="filters">
+      <HSegmented
+        :model-value="filtering ? filter.kind : ''"
+        size="sm"
+        aria-label="电影或剧集"
+        :options="KIND_OPTS"
+        @update:model-value="(v) => v && setFilter({ kind: v as 'movie' | 'tv' })"
+      />
+      <HSelect
+        :model-value="filter.country"
+        :options="countryOpts"
+        aria-label="地区"
+        class="f-sel"
+        @update:model-value="(v) => setFilter({ country: (v as string) ?? '' })"
+      />
+      <HSelect
+        :model-value="filter.genre"
+        :options="genreOpts"
+        aria-label="题材"
+        class="f-sel"
+        @update:model-value="(v) => setFilter({ genre: (v as string) ?? '' })"
+      />
+      <button v-if="filtering" type="button" class="clear" @click="clearFilter">清除筛选</button>
+      <span v-else class="f-hint">选一项按条件筛选</span>
+    </div>
     <CandidateGrid :items="items" :owned="owned" :loading="loading" :hint="hint" no-skip @pick="(c) => emit('pick', c)" />
     <div v-if="hasMore && !loading" class="more">
       <HButton variant="ghost" size="sm" :loading="loadingMore" @click="load(true)">加载更多</HButton>
@@ -114,6 +173,31 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.f-sel {
+  width: 132px;
+}
+.f-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.clear {
+  all: unset;
+  font-size: 12.5px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.clear:hover {
+  text-decoration: underline;
+}
+.clear:focus-visible {
+  outline: 2px solid var(--focus);
 }
 .more {
   display: flex;

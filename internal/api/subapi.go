@@ -41,6 +41,8 @@ type subForm struct {
 	Wash bool `json:"wash"`
 	// Subdir 转存到哪个转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir"`
+	// Quick 一键订阅（找资源海报上的「订阅」）：其余字段不看，一律按 subDefaultForm 的默认值
+	Quick bool `json:"quick"`
 }
 
 // applySubForm 校验表单并写进订阅；范围变了返回 true（要立刻重新检查）
@@ -270,6 +272,10 @@ func (h *Handler) CreateSubscription(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	if f.Quick {
+		tc, _ := loadTmdbClient()
+		f = subDefaultForm(tc, f.TmdbID, f.MediaType)
+	}
 	sub, jobID, err := h.createSubscription(f, "web")
 	switch {
 	case errors.Is(err, errSubExists):
@@ -279,7 +285,11 @@ func (h *Handler) CreateSubscription(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	resp := gin.H{"data": toSubDTO(sub, nil, map[uint]bool{sub.ID: jobID > 0}), "message": "已订阅，正在检查"}
+	msg := "已订阅，正在检查"
+	if f.Quick {
+		msg = "已订阅《" + sub.Title + "》（" + botSubScopeText(&sub) + "），正在检查"
+	}
+	resp := gin.H{"data": toSubDTO(sub, nil, map[uint]bool{sub.ID: jobID > 0}), "message": msg}
 	if jobID > 0 {
 		resp["job_id"] = jobID
 	}
