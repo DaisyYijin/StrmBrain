@@ -85,3 +85,32 @@ func libSyncStatOf(r fullLibResult, err error, start time.Time) libSyncStat {
 	s.Assets, s.Orphans = r.st.AssetsDownloaded, r.orphans
 	return s
 }
+
+// fullLastScanKey 上一次全量用的三组后缀（2026-10-23）：开始全量前的确认框拿这次的后缀跟它比，
+// 少了的单独标出来 —— 缩减后缀会让原先同步过的文件被判为失效 STRM
+const fullLastScanKey = "full_last_scan"
+
+type fullLastScan struct {
+	At       int64    `json:"at"`
+	VideoExt []string `json:"video_ext"`
+	ImageExt []string `json:"image_ext"`
+	DataExt  []string `json:"data_ext"`
+}
+
+// saveFullLastScan 至少一个库同步成功才记；只同步附加账号的那种补同步不算（用的是同一套后缀，但不代表用户点过）
+func (h *Handler) saveFullLastScan(p fullParams, stats map[string]libSyncStat) {
+	if h.Config == nil || p.AcctOnly {
+		return
+	}
+	ok := false
+	for _, st := range stats {
+		ok = ok || st.OK
+	}
+	if !ok {
+		return
+	}
+	b, _ := json.Marshal(fullLastScan{At: time.Now().Unix(), VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt})
+	if err := h.Config.SaveSetting(fullLastScanKey, string(b)); err != nil {
+		log.Printf("[同步] ○ 记录本次全量的后缀失败（只影响下次开跑前的提示）: %v", err)
+	}
+}

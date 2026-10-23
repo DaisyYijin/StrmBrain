@@ -561,7 +561,7 @@ const mockMediaLibsView = () => ({
       staging_cid: self ? '' : `s${l.cid}`, staging_path: self ? '' : `/转存/${l.name}`,
       scheme_id: self ? 0 : 1, scheme_name: self ? '' : '默认分类', depth: mockOpts[l.cid]?.depth ?? 1,
       scrape: mockScrapeOf(l.cid), local_locked: true, organize: !self,
-      last_sync: { at: Math.floor(Date.now() / 1000) - 3600 * (i + 1), ok: true, mode: 'fast', seconds: 42, videos: 800, created: 3, failed: 0 },
+      last_sync: { at: Math.floor(Date.now() / 1000) - 3600 * (i + 1), ok: true, mode: 'fast', seconds: 42, videos: 800, created: 3, failed: 0, assets: 12, orphans: i === 1 ? 4 : 0, complete: true },
       emby: { covered: true, partial: false, unmapped: false },
     }
   }),
@@ -765,12 +765,82 @@ const ROUTES: Record<string, Route> = {
     task_lock: { busy: true, holder: 'full', describe: '全量同步（已运行 84 秒）', running_sec: 84, waiting: ['自动整理'], waited_sec: 12 },
     stall: { rounds: 0, reason: '' },
   },
-  '/sync/deep-delete/records': {
-    data: [
-      { id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, created_at: '2026-09-23 21:04:12', message: '' },
-      { id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, created_at: '2026-09-22 18:40:05', message: '剧/季目录缺少台账布局证据，已拦截' },
+  '/sync/deep-delete/records': (q: URLSearchParams) => {
+    const all = [
+      {
+        id: 4, status: 'done', title: '某综艺 (2024)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 3, pan_dirs: 0,
+        created_at: '2026-09-24 09:12:40', message: '', media_type: 'tv', episodes: 'S2024E41',
+        rel_paths: ['剧集/综艺/某综艺 (2024)/Season 2024/某综艺 - S2024E41.strm', '剧集/综艺/某综艺 (2024)/Season 2024/某综艺 - S2024E41.nfo'],
+      },
+      {
+        id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, pan_dirs: 1,
+        created_at: '2026-09-23 21:04:12', message: '', media_type: 'movie', episodes: '',
+        rel_paths: ['电影/科幻电影/星际穿越 (2014)/星际穿越 (2014) - 2160p.strm'],
+      },
+      {
+        id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, pan_dirs: 0,
+        created_at: '2026-09-22 18:40:05', message: '剧/季目录缺少台账布局证据，已拦截', media_type: 'tv', episodes: 'S01', rel_paths: [],
+      },
+      {
+        id: 1, status: 'failed', title: '三体 (2023)', reason: 'manual_record', video_cnt: 3, asset_cnt: 9, pan_dirs: 0,
+        created_at: '2026-09-20 23:02:00', message: '115 删除接口返回「操作太频繁」，已删 1 个，剩 2 个没删', media_type: 'tv',
+        episodes: 'S01E01–E03', rel_paths: ['剧集/国产剧集/三体 (2023)/Season 01/三体 - S01E01.strm'],
+      },
+    ]
+    const st = q.get('status')
+    const data = all.filter((r) => !st || r.status === st)
+    return {
+      data, total: data.length, page: 1, size: 20,
+      stats30: { done: 2, rejected: 1, failed: 1, videos: 2, pan_dirs: 1 },
+      counts: { all: 4, done: 2, rejected: 1, failed: 1 },
+    }
+  },
+  '/sync/incr-events': (q: URLSearchParams) => {
+    const all = [
+      { id: 9, at: '2026-09-24T09:41:20+08:00', type: 'upload_file', is_dir: false, name: '转生成为史莱姆 S03E14.mkv', path: '/影视/动漫/关于我转生变成史莱姆这档事 (2018)/Season 03', size: 1_200_000_000, account: 0, status: 'applied', note: '' },
+      { id: 8, at: '2026-09-24T09:38:02+08:00', type: 'receive_files', is_dir: false, name: '小巷人家 (2024) S01E25.mp4', path: '/StrmStation/转存', size: 900_000_000, account: 0, status: 'applied', note: 'outside' },
+      { id: 7, at: '2026-09-24T09:37:40+08:00', type: 'move_file', is_dir: false, name: 'Dune.Part.Two.2024.2160p.WEB-DL.mkv', path: '/影视/电影/欧美电影/沙丘2 (2024)', size: 18_000_000_000, account: 0, status: 'applied', note: 'self' },
+      { id: 6, at: '2026-09-24T09:20:11+08:00', type: 'delete_file', is_dir: false, name: '某综艺 2024-09-18 加更版.mp4', path: '/影视/综艺/某综艺 (2024)/Season 2024', size: 0, account: 0, status: 'applied', note: '' },
+      { id: 5, at: '2026-09-24T08:58:30+08:00', type: 'file_rename', is_dir: false, name: '漫长的季节 S01E01.mkv', path: '/影视/剧集/国产剧集/漫长的季节 (2023)/Season 01', size: 0, account: 0, status: 'applied', note: '' },
+      { id: 4, at: '2026-09-24T08:40:00+08:00', type: 'upload_file', is_dir: false, name: 'Severance.S02E10.1080p.mkv', path: '', size: 2_100_000_000, account: 1, status: 'pending', note: '' },
+      { id: 3, at: '2026-09-24T08:39:00+08:00', type: 'new_folder', is_dir: true, name: 'Season 02', path: '/影视/剧集/欧美剧集/Severance (2022)', size: 0, account: 0, status: 'applied', note: 'self' },
+    ]
+    const GROUP: Record<string, string[]> = {
+      add: ['upload_file', 'upload_image_file', 'receive_files', 'copy_file', 'new_folder', 'copy_folder'],
+      del: ['delete_file'],
+      move: ['move_file', 'move_image_file', 'file_rename', 'folder_rename'],
+    }
+    const hide = q.get('hide_self') === '1'
+    const base = all.filter((e) => !(hide && e.note === 'self'))
+    const g = q.get('group') ?? 'all'
+    const data = base.filter((e) => g === 'all' || GROUP[g]?.includes(e.type))
+    const count = (k: string) => base.filter((e) => GROUP[k].includes(e.type)).length
+    return {
+      data, total: data.length, hidden: hide ? all.length - base.length : 0,
+      counts: { all: base.length, add: count('add'), del: count('del'), move: count('move') },
+    }
+  },
+  // 收到过别的事件、还没收到过删除事件：深度删除页提示检查 Emby 的 Webhook 有没有勾删除事件
+  '/emby/webhook-status': {
+    token_set: true, any: '2026-09-24T09:30:00+08:00', delete: '', test: '2026-09-20T12:00:00+08:00', reject_at: '', reject_why: '',
+  },
+  '/sync/incr-rounds': {
+    total: 2712, idle: 2703, since: '2026-09-23T10:02:00+08:00',
+    rounds: [
+      {
+        at: '2026-09-24T09:41:30+08:00',
+        summary: { round: 1873, events_pending: 1, strm_created: 1, deleted: 0, moved: 0, list_calls: 0, elapsed: '0.4s', consumed: true },
+      },
+      {
+        at: '2026-09-24T09:38:10+08:00',
+        summary: { round: 1866, events_pending: 4, strm_created: 1, deleted: 0, moved: 1, list_calls: 2, elapsed: '3.1s', consumed: true },
+      },
+      {
+        at: '2026-09-24T08:40:30+08:00',
+        summary: { round: 1748, events_pending: 2, strm_created: 0, deleted: 0, moved: 0, list_calls: 3, elapsed: '4.0s', consumed: false, not_consumed: '1 个网盘目录暂时读不到' },
+      },
+      { at: '2026-09-24T07:00:00+08:00', error: '拉取生活事件失败：115 返回 405' },
     ],
-    total: 2, page: 1, size: 20,
   },
 
   '/organize/records': { data: records, total: 86, page: 1, size: 20 },

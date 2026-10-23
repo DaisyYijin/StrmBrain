@@ -7,12 +7,11 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import { useSetting } from '@/composables/useSetting'
 
 // keep_ext 后端存的是字符串 'true'/'false' 而不是布尔（旧版遗留），
 // 这里保持原样，改成布尔会让老配置读出来是 undefined
-const { model, loading, saving, save, reset, changed } = useSetting('strm', {
+const { model, loading, saving, save, reset } = useSetting('strm', {
   domain: '',
   format: 'pick_code_name',
   keep_ext: 'true',
@@ -72,6 +71,27 @@ const example = computed(() => {
     </FieldRow>
 
     <FieldRow
+      label="STRM 直连格式"
+      tip="pick_code_name = 直链带原文件名（播放器显示友好）；pick_code = 仅文件 ID（最短）。"
+    >
+      <HSegmented v-model="model.format" :options="FORMAT_OPTIONS" aria-label="STRM 直连格式" />
+    </FieldRow>
+
+    <FieldRow
+      label="保留文件后缀"
+      tip="是 = 直链 ID 段带 .mkv 等后缀（播放器据 URL 识别容器格式）；否 = 纯 ID。"
+    >
+      <HSegmented v-model="model.keep_ext" :options="YES_NO" aria-label="保留文件后缀" />
+    </FieldRow>
+
+    <FieldRow
+      label="本地已存在时"
+      tip="本地已有同名 STRM：覆盖 = 重新生成（推荐）；跳过 = 只生成一次。"
+    >
+      <HSegmented v-model="model.exist" :options="EXIST_OPTIONS" aria-label="本地已存在时" />
+    </FieldRow>
+
+    <FieldRow
       v-if="example"
       label="STRM 直链示例"
       wide
@@ -79,32 +99,6 @@ const example = computed(() => {
     >
       <CopyBox :value="example" tone="primary" />
     </FieldRow>
-
-    <AdvancedSection id="strm-config" :changed="changed('format', 'keep_ext', 'exist')" hint="直链格式、后缀、已存在时怎么办，默认即可">
-      <FieldRow
-        label="STRM 直连格式"
-        :changed="changed('format')"
-        tip="pick_code_name = 直链带原文件名（播放器显示友好）；pick_code = 仅文件 ID（最短）。"
-      >
-        <HSegmented v-model="model.format" :options="FORMAT_OPTIONS" aria-label="STRM 直连格式" />
-      </FieldRow>
-
-      <FieldRow
-        label="保留文件后缀"
-        :changed="changed('keep_ext')"
-        tip="是 = 直链 ID 段带 .mkv 等后缀（播放器据 URL 识别容器格式）；否 = 纯 ID。"
-      >
-        <HSegmented v-model="model.keep_ext" :options="YES_NO" aria-label="保留文件后缀" />
-      </FieldRow>
-
-      <FieldRow
-        label="本地已存在时"
-        :changed="changed('exist')"
-        tip="本地已有同名 STRM：覆盖 = 重新生成（推荐）；跳过 = 只生成一次。"
-      >
-        <HSegmented v-model="model.exist" :options="EXIST_OPTIONS" aria-label="本地已存在时" />
-      </FieldRow>
-    </AdvancedSection>
 
     <FormActions>
       <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>

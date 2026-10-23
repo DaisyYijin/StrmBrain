@@ -1,6 +1,6 @@
-import { computed, onMounted, ref } from 'vue'
-import { syncApi } from '@/api'
-import type { FullSyncConfig, FullSyncMode } from '@/api/sync'
+import { computed, onMounted, ref, shallowRef } from 'vue'
+import { configApi, libraryApi, syncApi } from '@/api'
+import type { FullLastScan, FullSyncConfig, FullSyncMode } from '@/api/sync'
 import type { FullSetting } from './fullSetting'
 import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -11,8 +11,22 @@ import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
  * 页面顶部的状态总览要放这两个按钮（最常用的操作一眼看得到，不用翻到表单底部），
  * 全量页签又要知道快速模式可不可用 —— 所以抽出来由 SyncPage 持有一份，两处共用。
  */
+/**
+ * 「开始全量」确认框要摆出来的东西（components/strm/FullRunConfirm.vue）：扫哪几个库、三组后缀、
+ * 失效检测与刷新 Emby 开没开，以及比上一次全量少了哪些后缀。
+ * 2026-10-23 起扫描范围的设置排在页签下半截，新用户可能没看到就点了开始，所以开跑那一刻把范围写全
+ */
+export interface FullRunPlan {
+  cfg: FullSyncConfig
+  mode: FullSyncMode
+  libs: { name: string; path: string; account: string }[]
+  /** 上一次全量用的后缀；从没跑过为 null */
+  last: FullLastScan | null
+  resolve: (ok: boolean) => void
+}
+
 export function useStrmRuns(full: FullSetting) {
-  const { message, dialog } = useFeedback()
+  const { message } = useFeedback()
   const queue = useQueueStore()
 
   /**
@@ -33,6 +47,9 @@ export function useStrmRuns(full: FullSetting) {
 
   /** 不可用时强制回落，避免配置里残留 fast 却静默走标准模式 */
   const fullMode = computed<FullSyncMode>(() => (fastAvailable.value ? full.model.value.mode : 'normal'))
+
+  /** 正在等用户确认的全量；SyncPage 挂着的 FullRunConfirm 据此弹出 */
+  const fullPlan = shallowRef<FullRunPlan | null>(null)
 
   const runningFull = ref(false)
   const runningIncr = ref(false)
@@ -67,18 +84,30 @@ export function useStrmRuns(full: FullSetting) {
       message.warning('请至少保留一个视频文件后缀')
       return
     }
-    // 全量要扫整个媒体库、请求量大，无论从哪儿点、配置脏不脏，开跑前都要用户点头一次
+    // 全量要扫整个媒体库、请求量大，无论从哪儿点、配置脏不脏，开跑前都要用户点头一次；
+    // 确认框里把这次的扫描范围写全（库、后缀、失效检测），读不到库清单 / 上次后缀也照常弹，只是少几行
     const mode: FullSyncMode = fastAvailable.value ? src.mode : 'normal'
-    const ok = await dialog.confirm({
-      title: '开始全量同步？',
-      content:
-        mode === 'fast'
-          ? '将用快速模式扫描整个媒体库并生成 STRM。快速模式请求少，接口不可用时会自动降级为标准模式。'
-          : '将用标准模式逐个目录扫描整个媒体库并生成 STRM，库大时耗时较长、115 请求较多。',
-      actions: [
-        { label: '取消', value: false, variant: 'tertiary' },
-        { label: '开始', value: true, variant: 'primary' },
-      ],
+    const [libs, last] = await Promise.all([
+      libraryApi
+        .getMediaLibs()
+        .then((d) => d.libs.map((l) => ({ name: l.name, path: l.path, account: l.account ? l.account_name : '' })))
+        .catch(() => []),
+      configApi
+        .getSetting<FullLastScan>('full_last_scan', { at: 0, video_ext: [], image_ext: [], data_ext: [] })
+        .then((v) => (v.at ? v : null))
+        .catch(() => null),
+    ])
+    const ok = await new Promise<boolean>((resolve) => {
+      fullPlan.value = {
+        cfg: src,
+        mode,
+        libs,
+        last,
+        resolve: (v) => {
+          fullPlan.value = null
+          resolve(v)
+        },
+      }
     })
     if (!ok) return
     runningFull.value = true
@@ -121,7 +150,7 @@ export function useStrmRuns(full: FullSetting) {
     }
   }
 
-  return { fastAvailable, fastReason, fullMode, runningFull, runningIncr, busyFull, busyIncr, runFull, runIncr }
+  return { fastAvailable, fastReason, fullMode, runningFull, runningIncr, busyFull, busyIncr, fullPlan, runFull, runIncr }
 }
 
 export type StrmRuns = ReturnType<typeof useStrmRuns>

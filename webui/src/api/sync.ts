@@ -206,13 +206,31 @@ export interface DeepDeleteRecord {
   message: string
   rel_paths: string[]
   created_at: string
+  /** 删了哪几集：S02E05 / S02E01–E03 / S01；电影为空 */
+  episodes?: string
+  media_type?: 'movie' | 'tv' | string
+  /** 片目目录里还有海报时的缩略图查询串，拼成 /api/local/poster?… */
+  poster?: string
 }
 
-export const deepDeleteRecords = (page = 1, size = 20) =>
-  http.get<{ data: DeepDeleteRecord[]; total: number; page: number; size: number }>(
-    '/sync/deep-delete/records',
-    { params: { page, size }, timeoutMs: 15_000 },
-  )
+export type DeepDeleteStatus = 'done' | 'rejected' | 'failed'
+
+export interface DeepDeletePage {
+  data: DeepDeleteRecord[]
+  total: number
+  page: number
+  size: number
+  /** 近 30 天：各状态次数，已删的视频数与顺带清掉的网盘空目录数 */
+  stats30: { done: number; rejected: number; failed: number; videos: number; pan_dirs: number }
+  /** 各状态全部的条数（筛选按钮上的数字） */
+  counts: Partial<Record<DeepDeleteStatus | 'all', number>>
+}
+
+export const deepDeleteRecords = (page = 1, size = 20, status?: DeepDeleteStatus) =>
+  http.get<DeepDeletePage>('/sync/deep-delete/records', {
+    params: status ? { page, size, status } : { page, size },
+    timeoutMs: 15_000,
+  })
 
 /** 增量事件流状态：回答「为什么没同步」 */
 export interface IncrStatus {
@@ -256,3 +274,62 @@ export const incrProbe = () =>
 
 export const cronPreview = (cron: string) => http.post<{ next: string[] }>('/sync/cron-preview', { cron })
 
+
+/** 最近的增量事件（后端 increvents.go）：只读事件表，零 115 请求 */
+export interface IncrEvent {
+  id: number
+  at: string
+  /** 115 生活事件类型：upload_file / receive_files / move_file / file_rename / delete_file … */
+  type: string
+  is_dir: boolean
+  name: string
+  /** 所在目录：路径缓存里有才给 */
+  path?: string
+  size: number
+  /** 0 = 主号 */
+  account: number
+  status: 'pending' | 'applied' | string
+  /** self = 整理自己产生、已跳过；outside = 不涉及媒体库；空 = 照常处理 */
+  note: '' | 'self' | 'outside' | string
+}
+
+export type IncrEventGroup = 'all' | 'add' | 'del' | 'move'
+
+export const incrEvents = (params: { group: IncrEventGroup; hide_self: boolean; page: number; size: number }) =>
+  http.get<{ data: IncrEvent[]; total: number; counts: Record<IncrEventGroup, number>; hidden: number }>(
+    '/sync/incr-events',
+    { params: { ...params, hide_self: params.hide_self ? 1 : 0 }, timeoutMs: 15_000 },
+  )
+
+/** 最近有事的增量轮次（内存里，重启清空） */
+export interface IncrRound {
+  at: string
+  error?: string
+  summary?: IncrSummary
+}
+
+export const incrRounds = () =>
+  http.get<{ rounds: IncrRound[]; total: number; idle: number; since?: string }>('/sync/incr-rounds', { timeoutMs: 15_000 })
+
+/** Emby Webhook 收到过什么（后端 embywebhookseen.go）：Emby 查不到它的 Webhook 配置，只能看本站收到过什么 */
+export interface EmbyWebhookStatus {
+  /** 本站生成了 Webhook token 没有（到「系统配置 → EMBY 管理」打开一次就会生成） */
+  token_set: boolean
+  /** 最近一次收到任何事件 / 删除事件 / Emby 的测试事件（RFC3339，没有为空） */
+  any: string
+  delete: string
+  test: string
+  /** 最近一次因 token / 格式不对被拒 */
+  reject_at: string
+  reject_why: string
+}
+
+export const embyWebhookStatus = () => http.get<EmbyWebhookStatus>('/emby/webhook-status', { timeoutMs: 15_000 })
+
+/** 上一次全量用的三组后缀（setting full_last_scan，全量结束时写） */
+export interface FullLastScan {
+  at: number
+  video_ext: string[]
+  image_ext: string[]
+  data_ext: string[]
+}

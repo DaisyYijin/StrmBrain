@@ -6,6 +6,7 @@ import ConfigTab from './strm/ConfigTab.vue'
 import FullSyncTab from './strm/FullSyncTab.vue'
 import IncrSyncTab from './strm/IncrSyncTab.vue'
 import DeepDeleteTab from './strm/DeepDeleteTab.vue'
+import FullRunConfirm from '@/components/strm/FullRunConfirm.vue'
 import { STRM_TABS } from './strm/tabs'
 import { useFullSetting } from './strm/fullSetting'
 import { useDeepDelSetting } from './strm/deepDelSetting'
@@ -54,6 +55,9 @@ const TAB_ITEMS = STRM_TABS.map((t) => ({ value: t.key, label: t.label }))
       <!-- 深度删除自己的配置（setting「deepdel」），不共用 full -->
       <DeepDeleteTab v-else key="deepdel" :setting="deepdel" />
     </Transition>
+
+    <!-- 开始全量的确认框挂在页面上：哪个页签点的「开始」都用它（useStrmRuns 的 fullPlan） -->
+    <FullRunConfirm :plan="runs.fullPlan.value" />
   </div>
 </template>
 

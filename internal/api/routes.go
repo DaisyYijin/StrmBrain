@@ -235,6 +235,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 增量事件流状态与探针（回答「为什么没同步」：门禁/通道/游标/上一轮结果）
 		protected.GET("/sync/incr-status", h.IncrStatus)
 		protected.POST("/sync/incr-probe", h.IncrProbe)
+		protected.GET("/sync/incr-events", h.IncrEvents)
+		protected.GET("/sync/incr-rounds", h.IncrRounds)
 		// 快速模式是否可用（规则在后端，前端不自行按通道推断）
 		protected.GET("/sync/capabilities", h.SyncCapabilities)
 		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
@@ -243,6 +245,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/sync/adopt/preview", h.AdoptPreview) // 接管已有 STRM：只读预演（adopt.go）
 		// 深度删除（本地已删、网盘还在）：上一条的镜像，删的是网盘源文件。
 		protected.GET("/sync/deep-delete/records", h.ListDeepDeleteRecords)
+		protected.GET("/emby/webhook-status", h.EmbyWebhookStatus)
 
 		// Cron 未来运行时间预览（校验表达式是否正确）
 		protected.POST("/sync/cron-preview", func(c *gin.Context) {

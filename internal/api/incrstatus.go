@@ -42,6 +42,78 @@ func noteIncrRound(sum *incrSummary, err error) {
 	if err != nil {
 		lastRoundErr = err.Error()
 	}
+	roundHist.note(lastRoundAt, sum, lastRoundErr)
+}
+
+// ---- 最近轮次（状态页的「最近轮次」，2026-10-23）----
+//
+// 只在内存里留最近 incrRoundKeep 轮「有事」的：有事件、出错、没消费掉。
+// 30 秒一轮的空转一天两千多轮，全留着既占地方也没人看，只记个数。
+// 重启就清空：要查更早的翻日志里的 [同步#N]，不值得为它建表
+
+const incrRoundKeep = 50
+
+type incrRoundRow struct {
+	At    string       `json:"at"`
+	Error string       `json:"error,omitempty"`
+	Sum   *incrSummary `json:"summary,omitempty"`
+}
+
+type incrRoundHist struct {
+	mu    sync.Mutex
+	rows  []incrRoundRow // 新的在前
+	total int            // 进程启动以来一共几轮
+	idle  int            // 其中空转、没记下来的
+	since time.Time      // 第一轮的时间
+}
+
+var roundHist = &incrRoundHist{}
+
+// roundBusy 这一轮值不值得记：拉到了事件、出了错、或者没消费掉（在重放）
+func roundBusy(sum *incrSummary, errMsg string) bool {
+	if errMsg != "" || sum == nil {
+		return true
+	}
+	return sum.EventsPending > 0 || !sum.Consumed
+}
+
+func (r *incrRoundHist) note(at time.Time, sum *incrSummary, errMsg string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.total == 0 {
+		r.since = at
+	}
+	r.total++
+	if !roundBusy(sum, errMsg) {
+		r.idle++
+		return
+	}
+	row := incrRoundRow{At: at.Format(time.RFC3339), Error: errMsg}
+	if sum != nil {
+		cp := *sum
+		row.Sum = &cp
+	}
+	r.rows = append([]incrRoundRow{row}, r.rows...)
+	if len(r.rows) > incrRoundKeep {
+		r.rows = r.rows[:incrRoundKeep]
+	}
+}
+
+func (r *incrRoundHist) snapshot() ([]incrRoundRow, int, int, time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]incrRoundRow(nil), r.rows...), r.total, r.idle, r.since
+}
+
+// IncrRounds 最近有事的几轮增量
+// GET /sync/incr-rounds
+func (h *Handler) IncrRounds(c *gin.Context) {
+	rows, total, idle, since := roundHist.snapshot()
+	out := gin.H{"rounds": rows, "total": total, "idle": idle}
+	if !since.IsZero() {
+		out["since"] = since.Format(time.RFC3339)
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // IncrStatus 增量同步状态
