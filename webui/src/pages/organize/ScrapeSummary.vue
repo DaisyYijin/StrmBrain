@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRouter, type RouteLocationRaw } from 'vue-router'
 import { ArrowRight, ChevronRight } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
@@ -47,6 +47,8 @@ interface Item {
 interface Group {
   title: string
   tab: string
+  /** 改的地方不在影视刮削页时直接给地址（各库刮不刮在媒体库的库卡片上改） */
+  to?: RouteLocationRaw
   items: Item[]
 }
 
@@ -62,6 +64,7 @@ const groups = computed<Group[]>(() => {
   const libGroup: Group = {
     title: '各库刮不刮',
     tab: 'scrape',
+    to: { name: 'accounts', query: { tab: 'library' } },
     items: libs.value.map((l) => ({ label: l.name || `cid ${l.cid}`, on: l.scrape === 'auto', text: MODE_TEXT[l.scrape] })),
   }
   const scrapeGroups: Group[] = embyScrapes.value
@@ -121,7 +124,7 @@ const groups = computed<Group[]>(() => {
       <div v-for="g in groups" :key="g.title" class="group">
         <div class="group-head">
           <span class="group-title">{{ g.title }}</span>
-          <RouterLink :to="{ name: 'scrape', query: g.tab === 'scrape' ? {} : { tab: g.tab } }" class="group-link">
+          <RouterLink :to="g.to ?? { name: 'scrape', query: g.tab === 'scrape' ? {} : { tab: g.tab } }" class="group-link">
             修改<ChevronRight :size="13" />
           </RouterLink>
         </div>
