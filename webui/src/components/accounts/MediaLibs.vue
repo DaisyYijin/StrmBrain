@@ -102,6 +102,31 @@ function syncLine(s: LibSyncStat) {
   return `上次全量 ${when}（${durText(s.seconds)}）：${parts.join('，')}`
 }
 const syncTitle = (s: LibSyncStat) => fullTime(new Date(s.at * 1000).toISOString())
+// 「还没进 Emby 的目录」按分类建 Emby 库时动辄几十个：去掉共同的上级、只先列几个，其余折起来
+const MISS_FOLD = 8
+const missOpen = ref(new Set<number>())
+function toggleMiss(id: number) {
+  const next = new Set(missOpen.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  missOpen.value = next
+}
+function missingOf(l: MediaLib): { base: string; rest: string[] } {
+  const list = l.emby?.missing ?? []
+  if (list.length < 2) return { base: '', rest: list }
+  const split = list.map((m) => m.split('/'))
+  let n = 0
+  // 只取到上级目录为止：至少给每一项留最后一段
+  const maxN = Math.min(...split.map((p) => p.length - 1))
+  while (n < maxN && split.every((p) => p[n] === split[0][n])) n++
+  const base = split[0].slice(0, n).join('/')
+  if (!base) return { base: '', rest: list }
+  return { base, rest: split.map((p) => p.slice(n).join('/')) }
+}
+function missingShown(l: MediaLib) {
+  const rest = missingOf(l).rest
+  return missOpen.value.has(l.id) || rest.length <= MISS_FOLD ? rest : rest.slice(0, MISS_FOLD)
+}
 const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '只手动刮', off: '不刮（交给 Emby）' }
 </script>
 
@@ -158,7 +183,7 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
             <dd><code>{{ l.local_abs }}</code></dd>
             <dt>转存</dt>
             <dd>
-              <template v-if="l.organize"><FolderInput :size="13" /> {{ l.staging_path || `cid ${l.staging_cid}` }}</template>
+              <span v-if="l.organize" class="with-icon"><FolderInput :size="13" />{{ l.staging_path || `cid ${l.staging_cid}` }}</span>
               <span v-else class="muted">没设：只同步 STRM，本站不往里整理</span>
             </dd>
             <dt>分类</dt>
@@ -169,9 +194,20 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
               <dt>Emby</dt>
               <dd>
                 <span v-if="l.emby.covered">已在 Emby 里<template v-if="l.emby.suggest">（<code>{{ l.emby.suggest }}</code>）</template></span>
-                <span v-else-if="l.emby.partial && l.emby.missing?.length" class="warn">
-                  <TriangleAlert :size="13" />Emby 只覆盖了一部分，还没进 Emby 的目录：<template v-for="(m, i) in l.emby.missing" :key="m"><template v-if="i">、</template><code>{{ m }}</code></template>
-                </span>
+                <div v-else-if="l.emby.partial && l.emby.missing?.length" class="warn">
+                  <p class="warn-title">
+                    <TriangleAlert :size="13" />Emby 只覆盖了一部分：{{ l.emby.missing.length }} 个目录还没进 Emby<template v-if="missingOf(l).base">
+                      （都在 <code>{{ missingOf(l).base }}</code> 下）</template>
+                  </p>
+                  <ul class="miss">
+                    <li v-for="m in missingShown(l)" :key="m"><code>{{ m }}</code></li>
+                    <li v-if="missingOf(l).rest.length > MISS_FOLD">
+                      <button type="button" class="more" @click="toggleMiss(l.id)">
+                        {{ missOpen.has(l.id) ? '收起' : `还有 ${missingOf(l).rest.length - MISS_FOLD} 个` }}
+                      </button>
+                    </li>
+                  </ul>
+                </div>
                 <span v-else-if="l.emby.partial">Emby 覆盖了这个库下面的部分目录</span>
                 <span v-else-if="l.emby.unmapped" class="warn"><TriangleAlert :size="13" />路径映射换算不出这个库在 Emby 里的路径（设置 → Emby → 路径映射）</span>
                 <span v-else class="warn">
@@ -267,10 +303,44 @@ const SCRAPE_TEXT: Record<string, string> = { auto: '自动刮新片', manual: '
 }
 .warn {
   color: var(--warning);
-  display: inline-flex;
-  align-items: flex-start;
-  gap: 4px;
   font-size: 13px;
+}
+p.warn,
+.warn-title {
+  margin: 0;
+}
+.warn :deep(svg),
+.with-icon :deep(svg) {
+  display: inline-block;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+.with-icon {
+  display: inline;
+}
+.miss {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.miss code {
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: color-mix(in oklab, var(--warning) 12%, transparent);
+  white-space: nowrap;
+}
+.more {
+  all: unset;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--accent);
+}
+.more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .sync-line {
   margin: 8px 0 0;
