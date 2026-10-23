@@ -617,7 +617,7 @@ func planRedoWash(media *TmdbMedia, st *washStrategy, groups map[string][]orgRec
 			if g.Kind != "video" {
 				continue
 			}
-			plan := decideWash(media, g.Name, "", rel, st, lib, nil, onLog)
+			plan := decideWash(media, washFile{Name: g.Name, Size: g.Size}, "", rel, st, lib, nil, onLog)
 			if plan.decision != washReplaced {
 				continue
 			}

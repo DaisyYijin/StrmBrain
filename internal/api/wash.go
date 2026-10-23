@@ -34,6 +34,10 @@ type washRule struct {
 	// 丢弃未知字段，用户按说明写的 video_encode/audio_encode 从来没参与过比较
 	VideoEncode string `yaml:"video_encode" json:"video_encode"`
 	AudioEncode string `yaml:"audio_encode" json:"audio_encode"`
+	// 体积两项（2026-10-23，维护者要的「4K 优先留小体积」），口径见 washquality.go 文件头：
+	// ResourceSize 是命中条件（"<30G"、"5G-30G"，逗号分隔任一），SizePrefer 是命中同一条时先比体积（small / large）
+	ResourceSize string `yaml:"resource_size" json:"resource_size"`
+	SizePrefer   string `yaml:"size_prefer" json:"size_prefer"`
 }
 
 // washStrategy 一条完整洗版策略（UI 的 YAML 编辑器格式，与 CMS 对齐）
@@ -130,9 +134,14 @@ func containsCategory(list, cat string) bool {
 	return false
 }
 
-// ruleMatch 判断文件名是否满足规则条件（字段为"!"前缀表示排除）
-func ruleMatch(name string, r washRule) bool {
-	return matchField(name, r.ResourceTeam, extractTeam(name)) &&
+// ruleMatch 判断文件名是否满足规则条件（字段为"!"前缀表示排除）。只有名字、不知道体积，体积条件不看
+func ruleMatch(name string, r washRule) bool { return ruleMatchFile(washFile{Name: name}, r) }
+
+// ruleMatchFile 带体积的版本：体积条件只在知道体积时判（Size 0 = 不知道，同「没写的不算更差」）
+func ruleMatchFile(f washFile, r washRule) bool {
+	name := f.Name
+	return matchSize(f.Size, r.ResourceSize) &&
+		matchField(name, r.ResourceTeam, extractTeam(name)) &&
 		matchField(name, r.ResourcePix, extractPix(name)) &&
 		matchField(name, r.ResourceType, extractType(name)) &&
 		matchField(name, r.ResourceEffect, extractEffect(name)) &&
@@ -201,6 +210,9 @@ func washDecision(newName string, libraryNames []string, rules []washRule) bool 
 	c, _ := washCompare(newName, libraryNames[0], rules)
 	return c > 0
 }
+
+// ledgerWashFile 台账行的可比名字与体积
+func ledgerWashFile(sf model.SyncedFile) washFile { return washFile{Name: ledgerName(sf), Size: sf.Size} }
 
 // libraryFilesOf 从台账取某片目录下的现有文件（含大小，max/min_size 模式用）。
 // 台账 rel_path 带库名层（如 "俱乐部/电影/…"），而库内相对路径不带——必须拼上
@@ -438,14 +450,14 @@ type washPlan struct {
 // libName 是目标媒体库的目录名（台账前缀），与落盘同源（orgCtx.libName）。
 //
 // 整目录（一次几十上百集）走 processDir 里的批量路径，不要用这个入口。
-func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName, newSha1, targetDir, landing string, onLog func(string)) string {
+func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName string, newSize int64, newSha1, targetDir, landing string, onLog func(string)) string {
 	sc := newWashScanner(ops, cfg).inLib(libName)
 	sameFiles := sc.sameFile(newSha1)
 	st := matchWashStrategy(media.MediaType, classifyMediaFor(cfg, media))
 	if st == nil {
 		return washNoStrategy(newName, sameFiles, onLog).decision
 	}
-	plan := decideWash(media, newName, newSha1, targetDir, st, sc.libFiles(targetDir), sameFiles, onLog)
+	plan := decideWash(media, washFile{Name: newName, Size: newSize}, newSha1, targetDir, st, sc.libFiles(targetDir), sameFiles, onLog)
 	plan.landing = []string{landing}
 	if plan.decision != washReplaced {
 		return plan.decision
@@ -468,7 +480,7 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 }
 
 func runWashReplaceWithNotify(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, targetDir string, st *washStrategy, libFiles []model.SyncedFile, onLog func(string), notifyDeleted func(...string)) string {
-	plan := decideWash(media, newName, "", targetDir, st, libFiles, nil, onLog)
+	plan := decideWash(media, washFile{Name: newName}, "", targetDir, st, libFiles, nil, onLog)
 	if plan.decision != washReplaced {
 		return plan.decision
 	}
@@ -501,7 +513,9 @@ func washNoStrategy(newName string, sameFiles []model.SyncedFile, onLog func(str
 }
 
 // decideWash 纯判定：只读台账，不发任何 115 请求，也不动本地文件。
-func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washStrategy, libFiles, sameFiles []model.SyncedFile, onLog func(string)) washPlan {
+// nf 是新文件的可比名字与体积（体积 0 = 不知道，规则里的体积两项不看）
+func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *washStrategy, libFiles, sameFiles []model.SyncedFile, onLog func(string)) washPlan {
+	newName := nf.Name
 	plan := washPlan{decision: washSkip, newName: newName, targetDir: targetDir}
 	mode := st.Mode
 	if mode == "" {
@@ -552,8 +566,9 @@ func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washSt
 	}
 
 	// 没配优先级时按默认画质比（2026-10-20 前是一律新替旧）；全部打平不换
-	newWins := func(oldName string) bool {
-		return washDecision(newName, []string{oldName}, st.PriorityLevel)
+	newWins := func(old model.SyncedFile) bool {
+		c, _ := washCompareFiles(nf, ledgerWashFile(old), st.PriorityLevel)
+		return c > 0
 	}
 	if len(libFiles) == 0 {
 		return plan // 库内无该片的文件
@@ -612,14 +627,13 @@ func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washSt
 	// （此前拿台账查出来的第一行比，同一部片留过多版本时比谁纯看查询顺序）
 	best := cands[0]
 	for _, c := range cands[1:] {
-		if washDecision(ledgerName(c), []string{ledgerName(best)}, st.PriorityLevel) {
+		if c2, _ := washCompareFiles(ledgerWashFile(c), ledgerWashFile(best), st.PriorityLevel); c2 > 0 {
 			best = c
 		}
 	}
 	oldName := ledgerName(best)
-	// 全部打平时保守不替换、也不拿体积分胜负——
-	// 新文件在网盘移动前拿不到可靠大小，误删更优版本代价比保守大
-	if c, why := washCompare(newName, oldName, st.PriorityLevel); c <= 0 {
+	// 全部打平时保守不替换；体积只在规则写了 size_prefer 时比（见 washquality.go）
+	if c, why := washCompareFiles(nf, ledgerWashFile(best), st.PriorityLevel); c <= 0 {
 		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（%s），按已存在处理",
 			media.Title, shortLogName(newName), shortLogName(oldName), why))
 		plan.decision = washNotBetter
@@ -635,7 +649,7 @@ func decideWash(media *TmdbMedia, newName, newSha1, targetDir string, st *washSt
 	victims := make([]model.SyncedFile, 0, len(cands))
 	stems := make([]string, 0, len(cands))
 	for _, c := range cands {
-		if !newWins(ledgerName(c)) {
+		if !newWins(c) {
 			continue // 和新版平手或更优的版本不动
 		}
 		victims = append(victims, c)

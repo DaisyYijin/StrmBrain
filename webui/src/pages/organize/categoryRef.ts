@@ -227,8 +227,8 @@ export const WASH_MODES: [string, string][] = [
   ['coexist', '共存，两个版本都留着，新版照常入库'],
   ['skip', '跳过，库内已有就不再收新的'],
   ['replace', '新版更好才替换，全部打平不换（怎么比见下面「匹配规则」）'],
-  ['max_size', '按 replace 处理；体积比较尚未实现'],
-  ['min_size', '按 replace 处理；体积比较尚未实现'],
+  ['max_size', '按 replace 处理；要按体积挑，在优先级里写 size_prefer'],
+  ['min_size', '按 replace 处理；要按体积挑，在优先级里写 size_prefer'],
 ]
 
 export const WASH_STRATEGY_FIELDS: [string, string][] = [
@@ -247,6 +247,8 @@ export const WASH_FIELDS: [string, string][] = [
   ['video_encode', '视频编码（H265、x264、HEVC、AV1）'],
   ['audio_encode', '音频编码（TrueHD、DTS-HD、Atmos、AAC）'],
   ['resource_team', '发布组（WiKi、TnT、FRDS）'],
+  ['resource_size', '体积（<30G、>=5G、5G-30G，单位 T / G / M，不写按 G；逗号分隔命中任一）'],
+  ['size_prefer', '体积偏好（small 小的优先 / large 大的优先）：都命中这一条时先比体积，再比画质'],
 ]
 
 /** 优先级条目里真正被解析的键 */
@@ -257,6 +259,8 @@ export const WASH_LEVEL_FIELD_KEYS = [
   'video_encode',
   'audio_encode',
   'resource_team',
+  'resource_size',
+  'size_prefer',
 ] as const
 
 export const WASH_RULES: [string, string][] = [
@@ -267,7 +271,8 @@ export const WASH_RULES: [string, string][] = [
   ['同分时', '命中同一条（或都没命中）再按默认比法比；这条规则里写了的字段，最多按命中的那个值算，没写 DV 的规则里 DV 不占便宜'],
   ['多条件', '同一条优先级下多个条件为「且」关系'],
   ['多值', '逗号分隔：正值命中任一即算符合，! 前缀命中任一即排除；先后顺序不影响比较'],
-  ['判不出时', '全部打平 → 新版按「已存在」处理，不拿体积分胜负'],
+  ['体积', 'resource_size 是条件，和其他字段一样「且」；size_prefer 写在某一条上，两份都命中这一条时先比体积（相差不到 5% 算一样大，接着比画质）。不知道体积时（订阅挑资源、找资源排名只有标题）这两项都不看'],
+  ['判不出时', '全部打平 → 新版按「已存在」处理；没写 size_prefer 时不拿体积分胜负'],
   ['剧集', '只与同一集比较；库内没有这一集时直接入库，不做洗版'],
 ]
 
@@ -279,6 +284,8 @@ export const WASH_VALUE_OPTIONS: Record<string, string[]> = {
   video_encode: ['H265', 'H264', 'HEVC', 'x265', 'x264', 'AV1'],
   audio_encode: ['TrueHD', 'Atmos', 'DTS-HD', 'DTS', 'EAC3', 'AAC', 'FLAC'],
   resource_team: ['WiKi', 'FRDS', 'TnT', 'CMCT', 'HDS', 'MTeam'],
+  resource_size: ['<10G', '<20G', '<30G', '<50G', '>=5G', '5G-30G'],
+  size_prefer: ['small', 'large'],
 }
 
 const GENRE_NAME: Record<string, Record<string, string>> = {

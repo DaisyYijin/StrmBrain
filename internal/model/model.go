@@ -765,6 +765,8 @@ const DefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace�
 #   audio_encode: 音频编码（TrueHD, Atmos, DTS-HD, AAC）
 #   resource_effect: 特效（DV.HDR, HDR10+, 排除用!前缀如!DV）
 #   resource_team: 发布组（WiKi, TnT, FRDS）
+#   resource_size: 体积条件（<30G, >=5G, 5G-30G）
+#   size_prefer: small / large，两份都命中这一条时先比体积（4K 留小体积就写在 2160p 那条上）
 电影洗版策略:
   mode: replace
   media_type: movie

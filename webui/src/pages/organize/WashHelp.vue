@@ -26,6 +26,8 @@ import { WASH_FIELDS, WASH_MODES, WASH_RULES, WASH_STRATEGY_FIELDS } from './cat
         <strong>填了</strong>就是高级设置：先比命中第几条（越靠上分越高，没命中最低），
         命中同一条再按默认画质比；这条里写了的字段最多按命中的值算，比如只写了
         <code>resource_effect: "HDR10+,HDR"</code>，DV 的资源不会因为是 DV 胜过 HDR10+。
+        想在同一档里留体积小的（比如 4K 只要小体积），在那条上写 <code>size_prefer: small</code>：
+        两份都命中这一条时先比体积，相差不到 5% 再比画质；<code>resource_size: "&lt;30G"</code> 则是体积条件。
         <code>old_version_target: delete</code> 将旧版移入 115 回收站；替换后清理旧 STRM 并通知 Emby。
       </p>
     </section>

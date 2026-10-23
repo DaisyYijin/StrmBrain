@@ -40,7 +40,7 @@ func TestWashSameFileInTargetDir(t *testing.T) {
 	}
 	st := &washStrategy{Mode: "replace", Scope: "all", MediaType: "tv", OldVersionTarget: "delete"}
 	plan := decideWash(&TmdbMedia{MediaType: "tv", Title: "龙珠"},
-		"七龙珠.Dragon.Ball.S01E098.1080p.mkv", "AAA", "电视剧/日番/龙珠 (1986)/Season 1",
+		washFile{Name: "七龙珠.Dragon.Ball.S01E098.1080p.mkv"}, "AAA", "电视剧/日番/龙珠 (1986)/Season 1",
 		st, rows, rows, quiet)
 	if plan.decision != washSameFile || plan.sameAt != rows[0].RelPath {
 		t.Fatalf("同一份文件应报 washSameFile: %+v", plan)
@@ -65,7 +65,7 @@ func TestWashSameFileElsewhereStillReplaces(t *testing.T) {
 	}
 	st := &washStrategy{Mode: "replace", Scope: "all", MediaType: "tv", OldVersionTarget: "delete"}
 	plan := decideWash(&TmdbMedia{MediaType: "tv", Title: "龙珠"},
-		"七龙珠.Dragon.Ball.S01E098.1080p.mkv", "AAA", "电视剧/日番/龙珠 (1986)/Season 1",
+		washFile{Name: "七龙珠.Dragon.Ball.S01E098.1080p.mkv"}, "AAA", "电视剧/日番/龙珠 (1986)/Season 1",
 		st, nil, rows, quiet)
 	if plan.decision != washReplaced {
 		t.Fatalf("库内位置不规范的同一份文件应让位，得到 %s", plan.decision)

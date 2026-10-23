@@ -247,7 +247,7 @@ func planEpisodePicks(media *TmdbMedia, category string, t libFileTitle, files [
 			capture := func(s string) { lines = append(lines, s) }
 			var plan washPlan
 			if st != nil {
-				plan = decideWash(media, g.Name, orig.Sha1, rel, st, libFiles, same, capture)
+				plan = decideWash(media, washFile{Name: g.Name, Size: orig.Size}, orig.Sha1, rel, st, libFiles, same, capture)
 			} else {
 				plan = washNoStrategy(g.Name, same, capture)
 			}

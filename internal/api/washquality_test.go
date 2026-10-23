@@ -174,7 +174,7 @@ func TestDecideWashUserScenario(t *testing.T) {
 	st := &washStrategy{Mode: "replace", Scope: "all", MediaType: "tv", OldVersionTarget: "delete", PriorityLevel: userWashRules}
 	media := &TmdbMedia{MediaType: "tv", Title: "赛博朋克：边缘行者"}
 	var logs []string
-	plan := decideWash(media, "Cyberpunk.Edgerunners.S02E01.2022.Last.Chance.2160p.NF.WEB-DL.DDP5.1.DV.H.265-SalmonWeb.mkv",
+	plan := decideWash(media, washFile{Name: "Cyberpunk.Edgerunners.S02E01.2022.Last.Chance.2160p.NF.WEB-DL.DDP5.1.DV.H.265-SalmonWeb.mkv"},
 		"", strings.TrimSuffix(season, "/"), st, lib, nil, func(s string) { logs = append(logs, s) })
 	if plan.decision != washReplaced {
 		t.Fatalf("应判洗版，得到 %s；日志 %v", plan.decision, logs)
@@ -193,7 +193,7 @@ func TestDecideWashUserScenario(t *testing.T) {
 	// 反过来：库里是 2160p DV，新来 1080p，按已存在处理，日志说明卡在分辨率
 	lib[0].RelPath = season + "赛博朋克：边缘行者.S02E01.2160p.NF.WEB-DL.DV.H.265-SalmonWeb.strm"
 	logs = nil
-	plan = decideWash(media, "Cyberpunk.Edgerunners.S02E01.1080p.NF.WEB-DL.H.264-FLUX.mkv",
+	plan = decideWash(media, washFile{Name: "Cyberpunk.Edgerunners.S02E01.1080p.NF.WEB-DL.H.264-FLUX.mkv"},
 		"", strings.TrimSuffix(season, "/"), st, lib, nil, func(s string) { logs = append(logs, s) })
 	if plan.decision != washNotBetter {
 		t.Fatalf("1080p 不该顶掉 2160p，得到 %s", plan.decision)

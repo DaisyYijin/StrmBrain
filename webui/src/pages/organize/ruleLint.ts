@@ -435,7 +435,10 @@ export function lintWash(src: string): RuleIssue[] {
     }
     for (let i = 0; i < st.levels.length; i++) {
       const lv = st.levels[i]
-      const valid = lv.conds.filter(c => (WASH_LEVEL_FIELD_KEYS as readonly string[]).includes(c.key) && c.value.trim())
+      // size_prefer 是比法不是条件，只写了它的一条照样匹配所有版本
+      const valid = lv.conds.filter(
+        c => (WASH_LEVEL_FIELD_KEYS as readonly string[]).includes(c.key) && c.key !== 'size_prefer' && c.value.trim(),
+      )
       for (const c of lv.conds) {
         if (!(WASH_LEVEL_FIELD_KEYS as readonly string[]).includes(c.key)) {
           issues.push({
@@ -443,6 +446,20 @@ export function lintWash(src: string): RuleIssue[] {
             level: 'warn',
             text: `「${c.key}」不是优先级字段，保存后会被丢弃（可用：${WASH_LEVEL_FIELD_KEYS.join(' / ')}）`,
           })
+        }
+        const v = unquote(c.value)
+        if (c.key === 'size_prefer' && v && v !== 'small' && v !== 'large') {
+          issues.push({ line: c.line, level: 'warn', text: 'size_prefer 只认 small / large，其他值不比体积' })
+        }
+        if (c.key === 'resource_size' && v) {
+          const bad = v.split(',').map(s => s.trim()).filter(s => s && !SIZE_RANGE_RE.test(s))
+          if (bad.length) {
+            issues.push({
+              line: c.line,
+              level: 'warn',
+              text: `体积条件写法认不出：${bad.join('、')}（这几段永远命中不了）；写成 <30G、>=5G 或 5G-30G`,
+            })
+          }
         }
       }
       if (!valid.length) {
@@ -453,6 +470,10 @@ export function lintWash(src: string): RuleIssue[] {
   }
   return sortIssues(issues)
 }
+
+// 与后端 washquality.go 的 parseWashSizeRange 同口径：<30G / >=5G / 5G-30G / 5-30G（单位 T G M，不写按 G）
+const SIZE_NUM = String.raw`\d+(?:\.\d+)?\s*(?:[TGM]i?B?)?`
+const SIZE_RANGE_RE = new RegExp(String.raw`^(?:(?:<=|>=|<|>)\s*${SIZE_NUM}|${SIZE_NUM}\s*-\s*${SIZE_NUM})$`, 'i')
 
 // ---------------- 大纲 ----------------
 
@@ -562,6 +583,8 @@ const WASH_COND_LABEL: Record<string, string> = {
   video_encode: '视频编码',
   audio_encode: '音频编码',
   resource_team: '发布组',
+  resource_size: '体积',
+  size_prefer: '体积偏好',
 }
 
 const MODE_LABEL: Record<string, string> = {

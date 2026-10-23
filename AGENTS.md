@@ -386,7 +386,8 @@ git tag v26.10.9 && git push origin v26.10.9
       同分再按默认画质 分辨率 → 片源 → HDR → 视频编码 先后比（MediaSync115 `_score_video_file` 同序，不比体积）；没配规则只有后一层（原来是一律新替旧）。
       命中的那条里写了的字段最多按命中的值算（写 `HDR10+,HDR` 时 DV.HDR 按 HDR 算），逗号先后不参与；分辨率 / 片源 / 编码有一边没写不比这一项，HDR 没写算 SDR。
       全平不换（否则两份差不多的来回互顶、每次删一份网盘文件）。现场：规则写 `resource_pix: "2160p,1080p"`，库里 1080p WEB-DL 与新来的 2160p DV WEB-DL 同命中一条，原来平局不换。
-      日志里的理由（「都命中第 3 条规则，分辨率：2160p > 1080p」）也出自它，改比法时一起改。**订阅**（候选排序、分享里同一集几份挑哪份）2026-10-22 起走 `subPriority`（`subpriority.go`，就是 `washCompare`），**达标**（命中第 1 条规则）的排最前，都不达标先补集数再比画质（维护者定的；设计见 `docs/115-station-notes/SUB-WASH-PLAN.md`）；找资源页的排名与同集多份撞名（`resWashRank` / `washRankIn`）仍只看命中第几条。测试 `washquality_test.go` / `subpriority_test.go`。
+      日志里的理由（「都命中第 3 条规则，分辨率：2160p > 1080p」）也出自它，改比法时一起改。
+      **体积**（2026-10-23，维护者要的「4K 优先留小体积」）：规则可写 `resource_size`（命中条件 `<30G` / `5G-30G`）与 `size_prefer`（small / large：都命中这一条时**先比体积**再比默认画质，相差不到 5% 算一样大）。只有整理洗版知道体积（`washCompareFiles`，新文件取 115 列出的大小、库内取 `SyncedFile.Size`）；只有名字的地方（订阅挑资源、找资源排名、同集撞名）走 `washCompare`，体积两项不看。**订阅**（候选排序、分享里同一集几份挑哪份）2026-10-22 起走 `subPriority`（`subpriority.go`，就是 `washCompare`），**达标**（命中第 1 条规则）的排最前，都不达标先补集数再比画质（维护者定的；设计见 `docs/115-station-notes/SUB-WASH-PLAN.md`）；找资源页的排名与同集多份撞名（`resWashRank` / `washRankIn`）仍只看命中第几条。测试 `washquality_test.go` / `subpriority_test.go`。
     - **规则里一个词怎样算命中**（`matchField`，2026-10-22 起）走 `condTokenHit`：包含在解析出的归一值里，或在名字里单独出现（前后不挨字母数字）。原来是整名子串，`DV` 命中 `DVDRip`、`!TS` 排掉 `Ghosts`；订阅与整理同一套，别只改一边（两边判得不一样，订阅转进来的会被整理移进「已存在」）。
     - 测试：`washbatch_test.go`（批量、分组、去重、缓存、失效行）、
       `wash_regression_test.go` / `washflow_test.go` / `wash_recycle_test.go`。

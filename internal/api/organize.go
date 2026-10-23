@@ -2301,7 +2301,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		// 看到「未配置洗版策略」（现场：武林外传 80 集，每集两行、互相矛盾）
 		var plan washPlan
 		if st != nil {
-			plan = decideWash(media, judgeOf(vf.Name), vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), capture)
+			plan = decideWash(media, washFile{Name: judgeOf(vf.Name), Size: vf.Size}, vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), capture)
 		} else {
 			plan = washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), capture)
 		}
@@ -2997,7 +2997,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -3285,7 +3285,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)

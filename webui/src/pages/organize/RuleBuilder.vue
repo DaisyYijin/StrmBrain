@@ -197,11 +197,10 @@ const WASH_PRESETS: WashPreset[] = [
     levels: [{ resource_team: ['WiKi'] }, { resource_pix: ['2160p'] }, { resource_pix: ['1080p'] }],
   },
   {
-    label: '体积小优先',
+    label: '4K 留小体积',
     levels: [
-      { resource_type: ['WEB-DL'], video_encode: ['H265'] },
-      { resource_pix: ['1080p'], video_encode: ['H265'] },
-      { resource_pix: ['1080p'] },
+      { resource_pix: ['2160p'], size_prefer: ['small'] },
+      { resource_pix: ['1080p'], size_prefer: ['small'] },
     ],
   },
   {
@@ -371,7 +370,7 @@ watch(show, v => {
         <div class="levels">
           <div class="levels-head">
             <span>优先级阶梯</span>
-            <em>不填时按默认画质比（分辨率 → 片源 → HDR → 编码）；填写后命中越靠上的一级分越高，同级再按默认画质比。同一级条件是「且」，一个条件里多选是「或」</em>
+            <em>不填时按默认画质比（分辨率 → 片源 → HDR → 编码）；填写后命中越靠上的一级分越高，同级再按默认画质比（写了体积偏好的一级先比体积）。同一级条件是「且」，一个条件里多选是「或」</em>
           </div>
 
           <div v-for="(lv, i) in levels" :key="i" class="level">
