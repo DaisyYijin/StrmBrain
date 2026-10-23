@@ -74,6 +74,14 @@
 .popover.h-popover {
   transform-origin: var(--reka-popover-content-transform-origin);
 }
+/* 菜单 / 下拉 / 气泡一律毛玻璃（令牌在 main.css）；HeroUI 原本是实色 bg-overlay */
+.popover.h-popover,
+.select__popover.h-popover {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-hi), 0 0 0 1px var(--glass-border), var(--overlay-shadow);
+}
 .select__popover.h-popover {
   transform-origin: var(--reka-select-content-transform-origin);
   /* HeroUI 用 --trigger-width 撑最小宽度；Reka 给的是自己的变量名 */

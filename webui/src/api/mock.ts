@@ -571,6 +571,29 @@ const mockMediaLibsView = () => ({
   emby_configured: true,
 })
 
+/**
+ * 背景剧照（AppBackdrop.vue / 登录页）：假数据拦不住 <img>，所以图直接给 SVG data URI。
+ * 画面要有清楚的形状和对比，透过毛玻璃才看得出是被模糊过的
+ */
+function mockWall(hue: number, hue2: number): string {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'>
+<defs><linearGradient id='s' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='hsl(${hue} 70% 55%)'/><stop offset='1' stop-color='hsl(${hue2} 75% 22%)'/></linearGradient></defs>
+<rect width='1600' height='900' fill='url(#s)'/>
+<circle cx='1180' cy='260' r='150' fill='hsl(${hue + 30} 95% 70%)'/>
+<g fill='hsl(${hue2} 40% 12%)'>${Array.from({ length: 22 }, (_, i) => `<rect x='${i * 76}' y='${520 - ((i * 53) % 260)}' width='60' height='${380 + ((i * 53) % 260)}'/>`).join('')}</g>
+<g fill='hsl(${hue + 40} 100% 75%)'>${Array.from({ length: 60 }, (_, i) => `<rect x='${(i * 97) % 1600}' y='${560 + ((i * 41) % 300)}' width='10' height='14'/>`).join('')}</g>
+</svg>`
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+const MOCK_WALLS = [
+  [220, 260, '沙丘：第二部'],
+  [12, 330, '奥本海默'],
+  [170, 210, '三体'],
+].map(([h1, h2, title]) => {
+  const src = mockWall(h1 as number, h2 as number)
+  return { path: src, title: title as string, year: '2024', thumb: src }
+})
+
 /** 115 目录树（cid → 子目录）：目录选择器与批量添加用。媒体库 cid 与 mockLibs 对得上 */
 const MOCK_DIRS: Record<string, { cid: string; name: string }[]> = {
   '0': [{ cid: '10', name: '影视' }, { cid: '20', name: '最近接收' }, { cid: '2894561234', name: '媒体库' }],
@@ -632,6 +655,7 @@ const ROUTES: Record<string, Route> = {
     return { data: mockAccts }
   },
   '/media-libs': mockMediaLibsView,
+  '/auth/wallpapers': { items: MOCK_WALLS },
   '/media-libs/batch': (_q: URLSearchParams, init?: RequestInit) => {
     const { libs } = JSON.parse(String(init?.body ?? '{}')) as {
       libs: { name: string; account: number; cid: string; path: string; staging_path: string; scheme_id: number; depth: number; scrape: 'auto' | 'manual' | 'off' }[]

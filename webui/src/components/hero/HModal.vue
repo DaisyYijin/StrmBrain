@@ -92,6 +92,10 @@ const dialogStyle = computed(() => ({ maxWidth: props.width }))
 .h-modal-dialog {
   gap: 16px;
   max-height: calc(100dvh - 32px);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-hi), 0 0 0 1px var(--glass-border), var(--overlay-shadow);
 }
 .h-modal-header {
   gap: 4px;

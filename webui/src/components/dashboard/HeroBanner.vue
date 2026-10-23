@@ -289,6 +289,13 @@ const logoFailed = ref(new Set<string>())
     linear-gradient(to right, rgb(0 0 0 / 0.78) 0%, rgb(0 0 0 / 0.45) 42%, rgb(0 0 0 / 0.05) 75%),
     linear-gradient(to bottom, transparent 55%, rgb(0 0 0 / 0.4) 79%, var(--background) 100%);
 }
+/* 背后铺着剧照（AppBackdrop.vue）：横幅底边淡到透明，不然横幅下沿是一条实色、再往下突然变回剧照 */
+html.has-wall .hero-scrim {
+  background:
+    linear-gradient(to bottom, rgb(0 0 0 / 0.55) 0%, rgb(0 0 0 / 0) 26%),
+    linear-gradient(to right, rgb(0 0 0 / 0.78) 0%, rgb(0 0 0 / 0.45) 42%, rgb(0 0 0 / 0.05) 75%),
+    linear-gradient(to bottom, transparent 55%, rgb(0 0 0 / 0.3) 85%, transparent 100%);
+}
 
 /* ---- 前景 ---- */
 .hero-inner {

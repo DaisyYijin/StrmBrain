@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
 import AppSidebar from './AppSidebar.vue'
 import MobileTabBar from './MobileTabBar.vue'
+import AppBackdrop from './AppBackdrop.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import HDrawer from '@/components/hero/HDrawer.vue'
@@ -96,6 +97,8 @@ function onAccount(key: string) {
 
 <template>
   <div class="layout">
+    <!-- 背后的剧照（毛玻璃透出它）；负 z-index，要在 .layout 里、祖先都不开层叠上下文 -->
+    <AppBackdrop />
     <!-- 桌面端固定侧栏 -->
     <div class="sidebar-desktop" :class="{ 'is-pinned': pinned }">
       <AppSidebar :version="version" :docked="true" :pinned="pinned" @toggle-pin="togglePin" />
@@ -157,6 +160,10 @@ function onAccount(key: string) {
   min-height: 100%;
   background: var(--background);
 }
+/* 背后铺着剧照：页面底透明（AppBackdrop.vue） */
+html.has-wall .layout {
+  background: transparent;
+}
 
 /* 占位列：未固定时只占 72px，悬停展开的侧栏是绝对定位浮在内容上的；固定后占位列展开到完整宽度（见 AppSidebar） */
 .sidebar-desktop {
@@ -192,10 +199,10 @@ function onAccount(key: string) {
   height: var(--topbar-real);
   padding: 0 28px;
   box-sizing: border-box;
-  background: color-mix(in oklab, var(--background) 78%, transparent);
-  backdrop-filter: saturate(180%) blur(18px);
-  -webkit-backdrop-filter: saturate(180%) blur(18px);
-  border-bottom: 1px solid color-mix(in oklab, var(--separator) 70%, transparent);
+  background: var(--glass-bg-bar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--glass-border);
   transition:
     background-color 240ms ease,
     border-color 240ms ease;

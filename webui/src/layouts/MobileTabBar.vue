@@ -65,10 +65,11 @@ const awaiting = computed(() => recordStats.value.awaiting || 0)
   grid-template-columns: repeat(5, 1fr);
   height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   padding: 6px 8px env(safe-area-inset-bottom);
-  background: color-mix(in oklab, var(--surface) 86%, transparent);
-  backdrop-filter: saturate(180%) blur(16px);
-  -webkit-backdrop-filter: saturate(180%) blur(16px);
-  border-top: 1px solid var(--separator);
+  background: var(--glass-bg-bar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-top: 1px solid var(--glass-border);
+  box-shadow: var(--glass-hi);
 }
 
 .tab {

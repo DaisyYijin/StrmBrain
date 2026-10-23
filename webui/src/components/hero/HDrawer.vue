@@ -56,9 +56,11 @@ const open = defineModel<boolean>('show', { required: true })
   flex-direction: column;
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
-  background: var(--background);
+  background: var(--glass-bg-bar);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   border-radius: 0 28px 28px 0;
-  box-shadow: var(--overlay-shadow);
+  box-shadow: var(--glass-hi), var(--overlay-shadow);
   overflow: hidden;
   outline: none;
 }

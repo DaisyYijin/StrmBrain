@@ -220,6 +220,15 @@ git tag v26.10.9 && git push origin v26.10.9
   「电影」「剧集」标签一律用 `components/MediaTypeChip.vue`（专用色 `--media-movie` 紫 / `--media-tv` 蓝，在 `main.css`），
   别再拿 `HChip` 的 accent / warning 自己拼：暗色下琥珀橙和 warning 黄几乎分不出，还会被读成状态。
   压在海报背景图上的区域（总览横幅、横幅上方透明的顶栏）加全局类 `.on-dark`，前景一律浅色，是唯一允许写死浅色的地方。
+  **背景剧照 / 毛玻璃**（2026-10-23，参考 MoviePilot 玻璃主题）：`layouts/AppBackdrop.vue` 在整站背后固定铺一张剧照（复用登录页的 `/auth/wallpapers`，每分钟换一张），有图时挂 `html.has-wall`：
+  页面底与 `body` 透明，`.card` / 侧栏 / 顶栏 / 页签条 / 提示条半透明 + `backdrop-filter`，`--surface-secondary` / `tertiary` 改成前景色的淡淡一层（规则都在 `main.css`「背景剧照」一节）。
+  玻璃要背后有东西才看得见：原来只给浮层加模糊、页面底是实色，等于没有。主题菜单里「背景剧照」可关，「换一张背景」手动切下一张（`theme.wallSkip`，切完重新计时）；没剧照（没配 TMDB）或系统要求减少透明度时不挂 `has-wall`，全站照旧实色。
+  新加的「自己带底色、又不在卡片里」的块要在 `html.has-wall` 下补模糊，否则背后的画面清清楚楚压在字底下。
+  Vue scoped 样式里**别写 `:global(html.has-wall) .x`**：它编译成只剩 `html.has-wall`，`.x` 被丢掉；直接写 `html.has-wall .x`（作用域属性只加在最后一段）。
+  **毛玻璃**（2026-10-23）：顶栏、手机底栏、悬停浮出的侧栏、手机抽屉、菜单 / 下拉 / 气泡、弹窗、提示条用 `main.css` 的
+  `--glass-bg`（浮层）/ `--glass-bg-bar`（贴边的栏）+ `--glass-blur` + `--glass-border` / `--glass-hi`，别各写各的模糊值；
+  列表、卡片、表单不加（背后是纯色，看不出还耗性能）。系统要求减少透明度或不支持 `backdrop-filter` 时令牌自动退回实色。
+  液态玻璃（SVG 位移滤镜折射）比较过、没用：Safari / Firefox 出不来折射，压在海报上字也难读。
   侧栏桌面端是 72px 图标栏、悬停浮出、图钉固定（`AppSidebar.vue` 的 `docked` / `pinned`）：展开状态由脚本判定，
   **两种状态下布局必须一致、只动宽度与透明度**，否则展开动画第一帧会跳位。
 - **界面一律用 `webui/src/components/hero/`**（`HButton` / `HInput` / `HSelect` / `HModal` / `HTabs` …）：
