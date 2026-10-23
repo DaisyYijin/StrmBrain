@@ -2,13 +2,13 @@ name: Build Docker Image
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ['v*']
   pull_request:
-    branches: [master]
+    branches: [main]
 
 env:
-  IMAGE_NAME: 115-station
+  IMAGE_NAME: strmbrain
   # 是否把镜像推到 ghcr。false 时 docker job 只验证多架构构建能过，不产出可拉取的包。
   #
   # 上游 DaisyYijin/STRMhub 未附带 LICENSE，镜像内含其代码，同样适用该状况——

@@ -2,7 +2,7 @@ services:
   station:
     # 预构建镜像，多架构（amd64 / arm64）。
     # 想自己构建就把 image 换成 build: . 然后 docker compose up -d --build
-    image: ghcr.io/pancras-loe/115-station:latest
+    image: ghcr.io/daisyyijin/strmbrain:latest
     container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s   # 优雅退出窗口：SIGTERM 后程序需要 ~3 秒收尾（停 worker、冲刷通知）

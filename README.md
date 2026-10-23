@@ -124,13 +124,14 @@ flowchart LR
 ## 🚀 三分钟部署
 
 镜像发布在 GitHub Container Registry，支持 `linux/amd64` 与 `linux/arm64`。
+n详细部署说明(端口 / 目录 / MetaTube 配置 / 升级备份)见 [DEPLOY.md](DEPLOY.md)。
 
 新建一个目录，写入 `docker-compose.yml`（仓库根目录已附带一份）：
 
 ```yaml
 services:
   station:
-    image: ghcr.io/pancras-loe/115-station:latest
+    image: ghcr.io/daisyyijin/strmbrain:latest
     container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s    # 优雅退出窗口：SIGTERM 后程序需要 ~3 秒收尾
